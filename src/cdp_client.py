@@ -245,6 +245,7 @@ class CDPClient:
 
     async def navigate(self, url: str) -> dict:
         """Navigate to URL."""
+        await self._activate_current()
         result = await self._send_command("Page.navigate", {"url": url})
         return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url}
 
@@ -271,6 +272,22 @@ class CDPClient:
         """Alias for evaluate()."""
         return await self.evaluate(js_code)
 
+    # ─── Activate current tab ─────────────────────────────────────
+
+    async def _activate_current(self) -> None:
+        """Bring the currently connected tab to the foreground.
+
+        Sends ``Target.activateTarget`` so Chrome wakes the tab and the
+        user sees it being active.
+        """
+        if self._active_tab_id:
+            try:
+                await self._send_command("Target.activateTarget",
+                                         {"targetId": self._active_tab_id})
+                await asyncio.sleep(0.1)
+            except Exception:
+                pass  # Best-effort — tab might already be active
+
     # ─── Smart form fill ──────────────────────────────────────────
 
     async def smart_form_fill(self, fields: list[dict], timeout: int = 5) -> dict:
@@ -280,6 +297,7 @@ class CDPClient:
         The method finds each field by label, placeholder, name, or
         aria-label, types the value, and returns per-field results.
         """
+        await self._activate_current()
         js = r"""
 (function() {
   const fields = """ + json.dumps(fields) + r""";
@@ -388,6 +406,7 @@ class CDPClient:
 
         Polls every 200 ms. Returns the element's tag and text when found.
         """
+        await self._activate_current()
         js = f"""
 (async function() {{
   const deadline = Date.now() + {timeout * 1000};
@@ -428,6 +447,7 @@ class CDPClient:
         and ``[role=button]`` elements whose text matches. Clicks the
         first match using real CDP mouse events.
         """
+        await self._activate_current()
         js = f"""
 (function() {{
   const target = {json.dumps(text)};
@@ -509,6 +529,7 @@ class CDPClient:
 
     async def click(self, selector: str) -> dict:
         """Click element by CSS selector via real CDP mouse events."""
+        await self._activate_current()
         js = (
             f"(function() {{"
             f"  const el = document.querySelector({json.dumps(selector)});"
@@ -534,7 +555,8 @@ class CDPClient:
         return {"status": "ok", "selector": selector, "position": {"x": x, "y": y}}
 
     async def type_text(self, selector: str, text: str) -> dict:
-        """Type text into element by CSS selector."""
+        """Type text into an element found by CSS selector."""
+        await self._activate_current()
         js = (
             f"(function() {{"
             f"  const el = document.querySelector({json.dumps(selector)});"
@@ -1142,9 +1164,11 @@ class CDPClient:
 
         Pass tab_id=None to scan the currently active tab.
         """
-        # Step 1: Switch to the tab if specified
+        # Step 1: Activate + switch to the tab if specified
+        await self._activate_current()
         if tab_id and tab_id != self._active_tab_id:
             await self.switch_tab(tab_id)
+        await self._activate_current()  # Re-activate after switch
 
         # Step 2: Run deep scan JS
         js = r"""
