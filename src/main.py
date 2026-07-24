@@ -23,7 +23,6 @@ from pydantic import BaseModel
 # ---------------------------------------------------------------------------
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
-from auth import rate_limiter
 from cdp_client import CDPClient
 
 # Paths excluded from auth and rate-limiting middleware
@@ -160,18 +159,6 @@ class NewTabRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Auth middleware — Bearer token check
 # ---------------------------------------------------------------------------
-
-
-@app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    """Rate-limit requests per IP (100 req/min), excluding public paths."""
-    path = request.url.path
-    if path not in PUBLIC_PATHS and not path.startswith(("/docs", "/openapi.json", "/redoc")):
-        client_ip = request.client.host if request.client else "unknown"
-        if not rate_limiter.is_allowed(client_ip):
-            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded (100 req/min)"})
-    response = await call_next(request)
-    return response
 
 
 @app.middleware("http")
