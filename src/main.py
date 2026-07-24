@@ -6,6 +6,7 @@ for browser automation. Serves a GUI dashboard and streams
 real-time status updates over WebSocket.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -204,6 +205,33 @@ class WaitRequest(BaseModel):
 class ClickTextRequest(BaseModel):
     text: str
     timeout: int = 5
+    container_selector: str | None = None
+
+
+# ─── New: Page analysis models ──────────────────────────────
+
+
+class WaitTextRequest(BaseModel):
+    text: str
+    timeout: int = 10
+    present: bool = True
+
+
+class WaitNavigationRequest(BaseModel):
+    timeout: int = 10
+
+
+class AnalyzePageRequest(BaseModel):
+    """Empty — /page/analyze takes no args. Exists for consistency."""
+
+
+class WorkflowStep(BaseModel):
+    action: str
+    params: dict = {}
+
+
+class WorkflowRequest(BaseModel):
+    steps: list[WorkflowStep]
 
 
 # ---------------------------------------------------------------------------
@@ -424,9 +452,56 @@ async def click_by_text(body: ClickTextRequest):
 
     Searches a/button/span elements whose text matches.
     No CSS selector needed — just the text you see on screen.
+
+    Optional ``container_selector`` restricts search to a specific
+    container (e.g. "#accept-modal" to click inside a modal).
     """
     return await run_op("click_text", client.click_by_text,
-                        body.text, body.timeout)
+                        body.text, body.timeout, body.container_selector)
+
+
+# ─── New: Page analysis & wait endpoints ──────────────────────
+
+
+@app.post("/page/analyze")
+async def page_analyze():
+    """Analyze the current page and return structured information.
+
+    Returns a comprehensive snapshot of the page state in one call:
+    - URL, title, visible buttons (with position, disabled, in_modal)
+    - Open modals (with buttons, tabs, unread indicators)
+    - Form fields (with labels, values, types)
+    - Alert/success/error messages
+    - Visible text preview
+
+    Replaces 3-4 separate eval() calls.
+    """
+    return await run_op("page_analyze", client.analyze_page)
+
+
+@app.post("/wait/text")
+async def wait_text(body: WaitTextRequest):
+    """Wait until *text* appears (or disappears) from the page.
+
+    Polls every 300ms. Unlike /wait (CSS selector based), this watches
+    the visible text content of the page body.
+
+    Set ``present=false`` to wait for text to disappear.
+    """
+    return await run_op("wait_text", client.wait_for_text,
+                        body.text, body.timeout, body.present)
+
+
+@app.post("/wait/navigation")
+async def wait_navigation(body: WaitNavigationRequest | None = None):
+    """Wait until the page URL changes (SPA navigation).
+
+    Stores the current URL, then polls until it changes.
+    Returns the new URL and title when detected.
+    Useful after clicking a link that triggers SPA routing.
+    """
+    timeout = body.timeout if body else 10
+    return await run_op("wait_navigation", client.wait_for_navigation, timeout)
 
 
 @app.post("/screenshot")
@@ -895,6 +970,38 @@ async def websocket_endpoint(ws: WebSocket):
                                 r = await client.evaluate(step.get("js", ""))
                             elif step_action == "click":
                                 r = await client.click(step.get("selector", ""))
+                            elif step_action == "click_text":
+                                r = await client.click_by_text(
+                                    step.get("text", ""),
+                                    step.get("timeout", 5),
+                                    step.get("container_selector", None),
+                                )
+                            elif step_action == "wait":
+                                await asyncio.sleep(step.get("ms", 1000) / 1000)
+                                r = {"status": "ok", "waited_ms": step.get("ms", 1000)}
+                            elif step_action == "wait_for_element":
+                                r = await client.wait_for_element(
+                                    step.get("selector", ""),
+                                    step.get("timeout", 10),
+                                    step.get("visible", True),
+                                )
+                            elif step_action == "wait_text":
+                                r = await client.wait_for_text(
+                                    step.get("text", ""),
+                                    step.get("timeout", 10),
+                                    step.get("present", True),
+                                )
+                            elif step_action == "wait_for_navigation":
+                                r = await client.wait_for_navigation(
+                                    step.get("timeout", 10),
+                                )
+                            elif step_action == "analyze_page":
+                                r = await client.analyze_page()
+                            elif step_action == "form_fill":
+                                r = await client.smart_form_fill(
+                                    step.get("fields", []),
+                                    step.get("timeout", 5),
+                                )
                             elif step_action == "screenshot":
                                 r = await client.screenshot(quality=step.get("quality", 0))
                             elif step_action == "get_text":

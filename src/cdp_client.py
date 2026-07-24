@@ -440,14 +440,22 @@ class CDPClient:
 
     # ─── Click by text ────────────────────────────────────────────
 
-    async def click_by_text(self, text: str, timeout: int = 5) -> dict:
+    async def click_by_text(self, text: str, timeout: int = 5,
+                            container_selector: str | None = None) -> dict:
         """Click an element by its visible text content.
 
         Searches all visible ``a``, ``button``, ``input[type=submit]``,
         and ``[role=button]`` elements whose text matches. Clicks the
         first match using real CDP mouse events.
+
+        If *container_selector* is given, restricts search to elements
+        inside that CSS selector (e.g. "accept-modal" to only search
+        within a modal).
         """
         await self._activate_current()
+        container_js = ""
+        if container_selector:
+            container_js = f"const container = document.querySelector({json.dumps(container_selector)}); if (!container) return JSON.stringify({{status: 'error', error: 'container not found: {json.dumps(container_selector)}'}});"
         js = f"""
 (function() {{
   const target = {json.dumps(text)};
@@ -457,11 +465,14 @@ class CDPClient:
   function findVisible() {{
     const deadline = Date.now() + {timeout * 1000};
     while (Date.now() < deadline) {{
+      // Use container root if specified
+      const root = {('document' if not container_selector else 'container')};
+      
       // Priority 1: exact match on interactive elements
-      const interactive = document.querySelectorAll(
+      const interactive = root.querySelectorAll(
         "a, button, input[type=submit], input[type=button], [role=button]"
       );
-      let best = null, bestMatch = 0; // 0=none, 1=includes, 2=exact
+      let best = null, bestMatch = 0;
       for (let el of interactive) {{
         if (el.offsetParent === null) continue;
         const txt = (el.textContent || "").toLowerCase().trim();
@@ -472,7 +483,7 @@ class CDPClient:
       if (best && bestMatch >= 1) return best;
 
       // Priority 2: exact match on any element (fallback)
-      const all = document.querySelectorAll("[onclick], span, div");
+      const all = root.querySelectorAll("[onclick], span, div");
       for (let el of all) {{
         if (el.offsetParent === null) continue;
         const txt = (el.textContent || "").toLowerCase().trim();
@@ -811,10 +822,12 @@ class CDPClient:
         """
         Execute a batch of operations sequentially.
 
-        Each step: {"action": "navigate"|"click"|"type"|"eval"|"screenshot"|"wait"|...,
-                     "params": {...}}
+        Each step: {"action": "...", "params": {...}}
 
-        Returns list of results.
+        Supported actions: navigate, click, type, eval, screenshot,
+        full_page_screenshot, element_screenshot, wait, wait_for_element,
+        wait_text, wait_for_navigation, scroll, get_text, pdf,
+        click_text, form_fill, analyze_page, close.
         """
         results = []
         for i, step in enumerate(steps):
@@ -835,16 +848,48 @@ class CDPClient:
                     res = await self.full_page_screenshot(params.get("quality", 70))
                 elif action == "element_screenshot":
                     res = await self.element_screenshot(params["selector"], params.get("quality", 80))
-                elif action == "wait":
+                elif action in ("wait", "sleep"):
                     await asyncio.sleep(params.get("ms", 1000) / 1000)
                     res = {"status": "ok", "waited_ms": params.get("ms", 1000)}
+                elif action == "wait_for_element":
+                    res = await self.wait_for_element(
+                        params["selector"],
+                        params.get("timeout", 10),
+                        params.get("visible", True),
+                    )
+                elif action == "wait_text":
+                    res = await self.wait_for_text(
+                        params["text"],
+                        params.get("timeout", 10),
+                        params.get("present", True),
+                    )
+                elif action == "wait_for_navigation":
+                    res = await self.wait_for_navigation(
+                        params.get("timeout", 10),
+                    )
                 elif action == "scroll":
                     await self._scroll_by(params.get("x", 0), params.get("y", 0))
                     res = {"status": "ok", "x": params.get("x", 0), "y": params.get("y", 0)}
+                elif action == "click_text":
+                    res = await self.click_by_text(
+                        params["text"],
+                        params.get("timeout", 5),
+                        params.get("container_selector", None),
+                    )
+                elif action == "form_fill":
+                    res = await self.smart_form_fill(
+                        params["fields"],
+                        params.get("timeout", 5),
+                    )
+                elif action == "analyze_page":
+                    res = await self.analyze_page()
                 elif action == "get_text":
                     res = await self.get_page_text()
                 elif action == "pdf":
                     res = await self.pdf(params)
+                elif action == "close":
+                    await self.close()
+                    res = {"status": "ok", "action": "close"}
                 else:
                     res = {"status": "error", "error": f"Unknown action: {action}"}
             except Exception as e:
@@ -1150,6 +1195,219 @@ class CDPClient:
             results.extend(batch_results)
 
         return results
+
+    # ─── Page analysis: comprehensive page state ─────────────────
+    async def analyze_page(self) -> dict:
+        """Analyze the current page and return structured information.
+
+        Returns URL, title, visible buttons (tag, text, position, disabled, in_modal),
+        open modals (with buttons, tabs, state), form fields, and visible text.
+
+        Replaces 3-4 separate eval calls with one comprehensive response.
+        """
+        await self._activate_current()
+        js = r"""
+(function() {
+  const result = {};
+
+  // Metadata
+  result.url = window.location.href;
+  result.title = document.title;
+
+  // Visible buttons
+  result.buttons = [];
+  const interactive = document.querySelectorAll(
+    "a, button, input[type=submit], input[type=button], [role=button]"
+  );
+  interactive.forEach(function(el) {
+    if (el.offsetParent === null) return;
+    const txt = (el.textContent || "").trim();
+    if (!txt && !el.getAttribute("aria-label")) return;
+    const r = el.getBoundingClientRect();
+    const inModal = el.closest("[class*=modal], [class*=popup], [role=dialog]") !== null;
+    result.buttons.push({
+      tag: el.tagName,
+      text: txt.substring(0, 100) || (el.getAttribute("aria-label") || "").substring(0, 100),
+      x: Math.round(r.x + r.width/2),
+      y: Math.round(r.y + r.height/2),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      disabled: el.disabled === true,
+      in_modal: inModal,
+    });
+  });
+
+  // Open modals
+  result.modals = [];
+  const modalEls = document.querySelectorAll(
+    "[class*=modal][class*=in], [class*=modal].show, [role=dialog]:not([hidden])"
+  );
+  modalEls.forEach(function(m) {
+    if (m.offsetParent === null && !m.classList.contains("in") && !m.classList.contains("show")) return;
+    var info = {
+      id: m.id || "",
+      cls: m.className.substring(0, 80),
+      buttons: [],
+      tabs: [],
+    };
+    // Buttons inside modal
+    m.querySelectorAll("button, a[role=button], input[type=submit]").forEach(function(b) {
+      if (b.offsetParent === null) return;
+      var bt = (b.textContent || "").trim() || (b.getAttribute("aria-label") || "");
+      if (bt) info.buttons.push({text: bt.substring(0, 80), disabled: b.disabled === true});
+    });
+    // Tabs inside modal (tab-unread indicators)
+    m.querySelectorAll("li").forEach(function(li) {
+      var sp = li.querySelectorAll("span");
+      if (sp.length >= 2) {
+        info.tabs.push({
+          name: (sp[0].textContent || "").trim(),
+          has_unread: (sp[1].textContent || "").trim().length > 0,
+        });
+      }
+    });
+    info.modal_text = (m.textContent || "").trim().substring(0, 500);
+    result.modals.push(info);
+  });
+
+  // Form fields
+  result.form_fields = [];
+  document.querySelectorAll("input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select").forEach(function(el) {
+    if (el.offsetParent === null) return;
+    var label = "";
+    var id = el.id;
+    if (id) {
+      var lbl = document.querySelector("label[for='" + CSS.escape(id) + "']");
+      if (lbl) label = (lbl.textContent || "").trim();
+    }
+    if (!label && el.parentElement) {
+      var pl = el.parentElement.querySelector("label");
+      if (pl) label = (pl.textContent || "").trim();
+    }
+    if (!label) label = el.getAttribute("placeholder") || el.getAttribute("aria-label") || el.name || "";
+    result.form_fields.push({
+      tag: el.tagName,
+      type: el.type || "",
+      name: el.name || "",
+      label: label.substring(0, 80),
+      value: (el.value || "").substring(0, 80),
+      placeholder: (el.placeholder || "").substring(0, 40),
+    });
+  });
+
+  // Alert / success / error messages
+  result.alerts = [];
+  document.querySelectorAll(
+    ".alert, .alert-success, .alert-danger, .alert-error, .alert-info, .alert-warning, [class*=message], [class*=toast], [class*=notification]"
+  ).forEach(function(a) {
+    if (a.offsetParent === null) return;
+    var t = (a.textContent || "").trim().substring(0, 300);
+    if (t) result.alerts.push(t);
+  });
+
+  // Text summary
+  result.text_preview = (document.body ? document.body.innerText.substring(0, 2000) : "");
+  result.text_length = document.body ? (document.body.innerText || "").length : 0;
+
+  return JSON.stringify(result);
+})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed", "raw": str(raw)[:200]}
+        return {"status": "ok", "page": data}
+
+    # ─── Wait for text content ────────────────────────────────────
+    async def wait_for_text(self, text: str, timeout: int = 10,
+                            present: bool = True) -> dict:
+        """Wait until *text* appears (or disappears) from the page.
+
+        Polls every 300ms. Unlike wait_for_element (CSS selector based),
+        this watches the visible text content of the page body.
+        Use for SPAs where content updates without DOM element changes.
+        """
+        await self._activate_current()
+        js = f"""
+(async function() {{
+  const target = {json.dumps(text)};
+  const low = target.toLowerCase().trim();
+  const present = {str(present).lower()};
+  const deadline = Date.now() + {timeout * 1000};
+  const poll = 300;
+
+  while (Date.now() < deadline) {{
+    const bodyText = (document.body ? document.body.innerText || "" : "").toLowerCase().trim();
+    const found = bodyText.includes(low) || document.title.toLowerCase().includes(low);
+
+    if (present && found) {{
+      return JSON.stringify({{status: "ok", text: target.substring(0, 100), found: true}});
+    }}
+
+    if (!present && !found) {{
+      return JSON.stringify({{status: "ok", text: target.substring(0, 100), disappeared: true}});
+    }}
+
+    await new Promise(r => setTimeout(r, poll));
+  }}
+
+  const msg = present
+    ? "text not found after " + {timeout} + "s: " + target.substring(0, 50)
+    : "text still present after " + {timeout} + "s: " + target.substring(0, 50);
+  return JSON.stringify({{status: "error", error: msg}});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed"}
+        return {"status": "ok", "text": text, "timeout": timeout, "result": data}
+
+    # ─── Wait for navigation (URL change) ─────────────────────────
+    async def wait_for_navigation(self, timeout: int = 10) -> dict:
+        """Wait until the page URL changes (SPA navigation).
+
+        Stores the current URL on first call, then polls until it changes.
+        Returns the new URL when detected.
+        """
+        await self._activate_current()
+        current = await self.evaluate("window.location.href")
+        old_url = current.get("result", "") or ""
+
+        js = f"""
+(async function() {{
+  const oldUrl = {json.dumps(old_url)};
+  const deadline = Date.now() + {timeout * 1000};
+  const poll = 200;
+
+  while (Date.now() < deadline) {{
+    const newUrl = window.location.href;
+    const newTitle = document.title;
+    if (newUrl !== oldUrl) {{
+      return JSON.stringify({{
+        status: "ok",
+        old_url: oldUrl,
+        new_url: newUrl,
+        title: newTitle,
+      }});
+    }}
+    await new Promise(r => setTimeout(r, poll));
+  }}
+
+  return JSON.stringify({{status: "error", error: "URL did not change after " + {timeout} + "s"}});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed"}
+        return {"status": "ok", "timeout": timeout, "result": data}
 
     # ─── Deep scan: extract all sub-tabs + iframes ────────────────
 
