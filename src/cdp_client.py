@@ -434,28 +434,34 @@ class CDPClient:
   const low = target.toLowerCase().trim();
   const deadline = Date.now() + {timeout * 1000};
 
-  function findVisible(priority) {{
-    // Priority 1: exact match on interactive elements
-    const interactive = document.querySelectorAll(
-      "a, button, input[type=submit], input[type=button], [role=button]"
-    );
-    for (let el of interactive) {{
-      if (el.offsetParent === null) continue;
-      const txt = (el.textContent || "").toLowerCase().trim();
-      if (txt === low || txt.includes(low)) return el;
-    }}
+  function findVisible() {{
+    const deadline = Date.now() + {timeout * 1000};
+    while (Date.now() < deadline) {{
+      // Priority 1: exact match on interactive elements
+      const interactive = document.querySelectorAll(
+        "a, button, input[type=submit], input[type=button], [role=button]"
+      );
+      let best = null, bestMatch = 0; // 0=none, 1=includes, 2=exact
+      for (let el of interactive) {{
+        if (el.offsetParent === null) continue;
+        const txt = (el.textContent || "").toLowerCase().trim();
+        if (txt === low) {{ best = el; bestMatch = 2; break; }}
+        if (txt.includes(low) && bestMatch < 2) {{ best = el; bestMatch = 1; }}
+      }}
+      if (best && bestMatch >= 2) return best;
+      if (best && bestMatch >= 1) return best;
 
-    // Priority 2: exact match on any element (fallback)
-    const all = document.querySelectorAll("[onclick], span, div");
-    for (let el of all) {{
-      if (el.offsetParent === null) continue;
-      const txt = (el.textContent || "").toLowerCase().trim();
-      if (txt === low) {{
-        // Make sure it's not just a text node inside an interactive element
-        let p = el.parentElement;
-        if (p && ["A", "BUTTON"].includes(p.tagName) &&
-            p.textContent.toLowerCase().trim() === low) return p;
-        if (el.children.length < 3) return el;
+      // Priority 2: exact match on any element (fallback)
+      const all = document.querySelectorAll("[onclick], span, div");
+      for (let el of all) {{
+        if (el.offsetParent === null) continue;
+        const txt = (el.textContent || "").toLowerCase().trim();
+        if (txt === low) {{
+          let p = el.parentElement;
+          if (p && ["A", "BUTTON"].includes(p.tagName) &&
+              p.textContent.toLowerCase().trim() === low) return p;
+          if (el.children.length < 3) return el;
+        }}
       }}
     }}
     return null;
