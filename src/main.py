@@ -12,9 +12,9 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -31,6 +31,7 @@ logger = logging.getLogger("browser-helper")
 # ---------------------------------------------------------------------------
 PORT = int(os.environ.get("PORT", "8000"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
+API_TOKEN = os.environ.get("API_TOKEN", "")
 
 # ---------------------------------------------------------------------------
 # FastAPI application
@@ -73,6 +74,9 @@ state: dict[str, Any] = {
     "cdp_url": None,
 }
 
+# Start time for uptime calculation in health endpoint
+start_time = time.monotonic()
+
 
 # ---------------------------------------------------------------------------
 # Pydantic request models
@@ -95,8 +99,88 @@ class ConnectRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Pydantic request models — new endpoints
+# ---------------------------------------------------------------------------
+class FullScreenshotRequest(BaseModel):
+    quality: int = 70
+
+
+class ElementScreenshotRequest(BaseModel):
+    selector: str
+    quality: int = 80
+
+
+class PDFRequest(BaseModel):
+    options: dict = {}
+
+
+class SetCookieRequest(BaseModel):
+    name: str
+    value: str
+    domain: Optional[str] = None
+    path: Optional[str] = None
+    secure: bool = False
+    httpOnly: bool = False
+
+
+class DOMQueryRequest(BaseModel):
+    selector: str
+    attribute: Optional[str] = None
+
+
+class DOMClickAllRequest(BaseModel):
+    selector: str
+
+
+class ScriptRequest(BaseModel):
+    steps: list[dict]
+
+
+class SessionRestoreRequest(BaseModel):
+    session: dict
+
+
+class NewTabRequest(BaseModel):
+    url: str = "about:blank"
+
+
+# ---------------------------------------------------------------------------
+# Auth middleware — Bearer token check
+# ---------------------------------------------------------------------------
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Require Bearer token on all endpoints except /, /ws, and OpenAPI docs."""
+    if API_TOKEN:
+        path = request.url.path
+        # Skip auth for root, WebSocket, and OpenAPI documentation paths
+        if path not in ("/", "/ws") and not path.startswith(("/docs", "/openapi.json", "/redoc")):
+            auth_header = request.headers.get("Authorization", "")
+            token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
+            if token != API_TOKEN:
+                return JSONResponse(status_code=401, content={"detail": "Invalid or missing API token"})
+    response = await call_next(request)
+    return response
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _get_memory_mb() -> float:
+    """Get current RSS memory usage in MB from /proc/self/status."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return int(parts[1]) / 1024
+    except Exception:
+        pass
+    return 0.0
+
 
 def log_operation(
     operation: str,
@@ -289,6 +373,246 @@ async def disconnect():
         log_operation("disconnect", "error", elapsed, str(exc))
         await broadcast_state()
         return {"status": "error", "operation": "disconnect", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: screenshots & PDF
+# ---------------------------------------------------------------------------
+
+
+@app.post("/full_screenshot")
+async def full_screenshot(body: Optional[FullScreenshotRequest] = None):
+    """
+    Capture a full-page screenshot.
+
+    Captures the entire scrollable page, not just the viewport.
+    Optional body: {"quality": 70} (default 70).
+    """
+    quality = body.quality if body else 70
+    return await run_op("full_screenshot", client.full_page_screenshot, quality)
+
+
+@app.post("/element_screenshot")
+async def element_screenshot(body: ElementScreenshotRequest):
+    """
+    Capture a screenshot of a specific DOM element.
+
+    Body: {"selector": "css-selector", "quality": 80}
+    """
+    return await run_op("element_screenshot", client.element_screenshot, body.selector, body.quality)
+
+
+@app.post("/pdf")
+async def pdf_export(body: Optional[PDFRequest] = None):
+    """
+    Generate a PDF of the current page.
+
+    Optional body: {"options": {...}} with PDF options (landscape, printBackground,
+    paperWidth, paperHeight, marginTop, marginBottom, marginLeft, marginRight, scale).
+    """
+    options = body.options if body else {}
+    return await run_op("pdf", client.pdf, options)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: cookies
+# ---------------------------------------------------------------------------
+
+
+@app.get("/cookies")
+async def get_cookies():
+    """Get all browser cookies."""
+    return await run_op("get_cookies", client.get_cookies)
+
+
+@app.post("/set_cookie")
+async def set_cookie(body: SetCookieRequest):
+    """
+    Set a browser cookie.
+
+    Body: {"name": "...", "value": "...", "domain": "...", "path": "/",
+           "secure": false, "httpOnly": false}
+    """
+    kwargs: dict[str, Any] = {"secure": body.secure, "httpOnly": body.httpOnly}
+    if body.domain is not None:
+        kwargs["domain"] = body.domain
+    if body.path is not None:
+        kwargs["path"] = body.path
+    return await run_op("set_cookie", client.set_cookie, body.name, body.value, **kwargs)
+
+
+@app.post("/clear_cookies")
+async def clear_cookies():
+    """Clear all browser cookies."""
+    return await run_op("clear_cookies", client.clear_cookies)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: DOM query
+# ---------------------------------------------------------------------------
+
+
+@app.post("/dom_query")
+async def dom_query(body: DOMQueryRequest):
+    """
+    Query DOM elements by CSS selector.
+
+    Body: {"selector": "css-selector", "attribute": "href"} (attribute optional).
+    Returns text content of each match, or a specific attribute if given.
+    """
+    return await run_op("dom_query", client.dom_query, body.selector, body.attribute)
+
+
+@app.post("/dom_click_all")
+async def dom_click_all(body: DOMClickAllRequest):
+    """
+    Click ALL elements matching a selector (e.g. all 'Load more' buttons).
+
+    Body: {"selector": "css-selector"}
+    """
+    return await run_op("dom_click_all", client.dom_click_all, body.selector)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: batch script
+# ---------------------------------------------------------------------------
+
+
+@app.post("/script")
+async def execute_script(body: ScriptRequest):
+    """
+    Execute a batch of operations sequentially.
+
+    Body: {"steps": [{"action": "navigate", "params": {"url": "..."}}, ...]}
+
+    Supported actions: navigate, click, type, eval, screenshot,
+    full_page_screenshot, element_screenshot, wait, scroll, get_text, pdf.
+    """
+    return await run_op("execute_script", client.execute_script, body.steps)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: network monitoring
+# ---------------------------------------------------------------------------
+
+
+@app.post("/network/start")
+async def network_start():
+    """Start tracking network requests."""
+    return await run_op("network_start", client.start_network_monitoring)
+
+
+@app.post("/network/stop")
+async def network_stop():
+    """Stop tracking network requests."""
+    return await run_op("network_stop", client.stop_network_monitoring)
+
+
+@app.get("/network/log")
+async def network_log():
+    """Get collected network request/response log."""
+    return await run_op("network_log", client.get_network_log)
+
+
+@app.post("/network/clear")
+async def network_clear():
+    """Clear the network request log."""
+    return await run_op("network_clear", client.clear_network_log)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: session management
+# ---------------------------------------------------------------------------
+
+
+@app.post("/session/save")
+async def session_save():
+    """
+    Save the current browser session (cookies + localStorage + sessionStorage).
+
+    Returns a session object that can be restored later via /session/restore.
+    """
+    return await run_op("session_save", client.session_save)
+
+
+@app.post("/session/restore")
+async def session_restore(body: SessionRestoreRequest):
+    """
+    Restore a previously saved browser session.
+
+    Body: {"session": {...}} where session is the value returned by /session/save.
+    """
+    return await run_op("session_restore", client.session_restore, body.session)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: health
+# ---------------------------------------------------------------------------
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint.
+
+    Returns uptime, memory usage, connection status, and operation count.
+    Does not require CDP connection.
+    """
+    uptime_secs = time.monotonic() - start_time
+    memory_mb = _get_memory_mb()
+    return {
+        "status": "ok",
+        "uptime_seconds": round(uptime_secs, 2),
+        "memory_mb": memory_mb,
+        "connected": client.is_connected,
+        "tabs_count": client.tabs_count,
+        "operation_count": len(operation_log),
+    }
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: tab management
+# ---------------------------------------------------------------------------
+
+
+@app.post("/tab/new")
+async def tab_new(body: NewTabRequest):
+    """Open a new browser tab to the specified URL (default: about:blank)."""
+    return await run_op("open_new_tab", client.open_new_tab, body.url)
+
+
+@app.post("/tab/close/{tab_id}")
+async def tab_close(tab_id: str):
+    """Close a browser tab by its target ID."""
+    return await run_op("close_tab", client.close_tab, tab_id)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: JavaScript toggle
+# ---------------------------------------------------------------------------
+
+
+@app.post("/javascript/disable")
+async def javascript_disable():
+    """Disable JavaScript execution on the current page."""
+    return await run_op("disable_javascript", client.disable_javascript)
+
+
+@app.post("/javascript/enable")
+async def javascript_enable():
+    """Re-enable JavaScript execution on the current page."""
+    return await run_op("enable_javascript", client.enable_javascript)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — new: performance metrics
+# ---------------------------------------------------------------------------
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get page performance metrics (timing, memory, etc.)."""
+    return await run_op("get_performance_metrics", client.get_performance_metrics)
 
 
 # ---------------------------------------------------------------------------

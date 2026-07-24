@@ -4,125 +4,1087 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Browser Helper Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
-  h1 { font-size: 1.5rem; margin-bottom: 1rem; color: #38bdf8; }
-  .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-  .card h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; }
-  .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 12px; }
-  .stat { text-align: center; }
-  .stat .value { font-size: 1.8rem; font-weight: 700; }
-  .stat .label { font-size: .75rem; color: #64748b; }
-  .connected { color: #22c55e; }
-  .disconnected { color: #ef4444; }
-  .log-entry { padding: 6px 0; border-bottom: 1px solid #334155; font-size: .85rem; display: flex; gap: 8px; }
-  .log-entry:last-child { border-bottom: none; }
-  .log-time { color: #64748b; white-space: nowrap; }
-  .log-op { color: #38bdf8; font-weight: 600; }
-  .log-status { font-weight: 600; }
-  .log-status.success { color: #22c55e; }
-  .log-status.error { color: #ef4444; }
-  .ws-status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-  .ws-status.connected { background: #22c55e; }
-  .ws-status.disconnected { background: #ef4444; }
-  .endpoints { display: grid; grid-template-columns: repeat(auto-fill,minmax(200px,1fr)); gap: 6px; }
-  .endpoints code { font-size: .8rem; background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #a78bfa; }
+/* ── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: #0b1120;
+  color: #e2e8f0;
+  padding: 16px;
+  min-height: 100vh;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #1e293b; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+/* ── Layout ────────────────────────────────────────────────── */
+.dashboard-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px; padding: 0 4px;
+}
+.dashboard-header h1 {
+  font-size: 1.35rem; font-weight: 700;
+  color: #38bdf8; letter-spacing: -0.02em;
+}
+.dashboard-header h1 i { margin-right: 8px; color: #60a5fa; }
+.header-meta { font-size: .8rem; color: #64748b; display: flex; align-items: center; gap: 16px; }
+.header-meta .ws-indicator { display: flex; align-items: center; gap: 6px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
+/* ── Cards ─────────────────────────────────────────────────── */
+.card {
+  background: #1a2332;
+  border: 1px solid #2a3a4e;
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.card.full-width { grid-column: 1 / -1; }
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  background: #1f2b3d;
+  border-bottom: 1px solid #2a3a4e;
+  cursor: default;
+}
+.card-header h2 {
+  font-size: .8rem; font-weight: 700;
+  color: #94a3b8; text-transform: uppercase; letter-spacing: .06em;
+}
+.card-header h2 i { margin-right: 7px; color: #60a5fa; font-size: .75rem; }
+.card-header .badge {
+  font-size: .7rem; background: #2a3a4e; color: #94a3b8;
+  padding: 1px 8px; border-radius: 10px; font-weight: 600;
+}
+.card-body { padding: 12px 14px; flex: 1; overflow-y: auto; max-height: 400px; }
+.card-body.no-scroll { overflow: visible; max-height: none; }
+
+/* ── Status Dots ───────────────────────────────────────────── */
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.dot.green { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,.4); }
+.dot.red { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,.4); }
+.dot.yellow { background: #eab308; box-shadow: 0 0 6px rgba(234,179,8,.4); }
+.dot.gray { background: #475569; }
+
+/* ── Status Grid ───────────────────────────────────────────── */
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 10px;
+}
+.stat {
+  text-align: center; padding: 6px 0;
+}
+.stat .value { font-size: 1.6rem; font-weight: 700; line-height: 1.3; }
+.stat .value.green { color: #22c55e; }
+.stat .value.red { color: #ef4444; }
+.stat .label { font-size: .68rem; color: #64748b; text-transform: uppercase; letter-spacing: .05em; }
+
+/* ── Tables ────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+thead th {
+  text-align: left; padding: 6px 8px;
+  color: #64748b; font-weight: 600; font-size: .7rem;
+  text-transform: uppercase; letter-spacing: .04em;
+  border-bottom: 1px solid #2a3a4e;
+  white-space: nowrap;
+}
+tbody td { padding: 5px 8px; border-bottom: 1px solid #1e293b; white-space: nowrap; }
+tbody tr:hover { background: rgba(56,189,248,.04); }
+tbody tr:last-child td { border-bottom: none; }
+td .op-status { font-weight: 600; font-size: .7rem; padding: 1px 6px; border-radius: 4px; }
+.op-status.success { background: rgba(34,197,94,.15); color: #4ade80; }
+.op-status.error { background: rgba(239,68,68,.15); color: #f87171; }
+.op-status.pending { background: rgba(234,179,8,.15); color: #facc15; }
+
+/* ── Buttons ───────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px; border: 1px solid #2a3a4e; border-radius: 6px;
+  background: #1f2b3d; color: #cbd5e1;
+  font-size: .78rem; font-weight: 500;
+  cursor: pointer; transition: all .15s;
+  white-space: nowrap;
+}
+.btn:hover { background: #2a3a4e; border-color: #3b4f66; color: #f1f5f9; }
+.btn:active { transform: scale(.97); }
+.btn.primary { background: #0369a1; border-color: #0e7490; color: #fff; }
+.btn.primary:hover { background: #0e7490; }
+.btn.success { background: #15803d; border-color: #16a34a; color: #fff; }
+.btn.success:hover { background: #16a34a; }
+.btn.danger { background: #991b1b; border-color: #b91c1c; color: #fff; }
+.btn.danger:hover { background: #b91c1c; }
+.btn.warning { background: #92400e; border-color: #a16207; color: #fff; }
+.btn.warning:hover { background: #a16207; }
+.btn.sm { padding: 3px 8px; font-size: .7rem; }
+.btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+.btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Action Bar ────────────────────────────────────────────── */
+.action-bar { display: flex; flex-wrap: wrap; gap: 6px; }
+.action-bar .btn { flex: 0 0 auto; }
+
+/* ── Inputs & Textareas ────────────────────────────────────── */
+input, textarea, select {
+  background: #0f172a; border: 1px solid #2a3a4e; border-radius: 6px;
+  color: #e2e8f0; padding: 6px 10px; font-size: .8rem; font-family: inherit;
+  transition: border-color .15s;
+}
+input:focus, textarea:focus, select:focus { outline: none; border-color: #38bdf8; }
+textarea { width: 100%; resize: vertical; min-height: 70px; font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; }
+input[type="text"] { width: 100%; }
+
+/* ── Screenshot ────────────────────────────────────────────── */
+.screenshot-area {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.screenshot-area img {
+  max-width: 100%; max-height: 300px; border-radius: 6px;
+  border: 1px solid #2a3a4e; cursor: pointer;
+  transition: opacity .2s;
+}
+.screenshot-area img:hover { opacity: .9; }
+.screenshot-area .screenshot-placeholder {
+  width: 100%; height: 140px;
+  display: flex; align-items: center; justify-content: center;
+  background: #0f172a; border: 1px dashed #2a3a4e; border-radius: 6px;
+  color: #475569; font-size: .8rem;
+}
+
+/* ── Tabs List ─────────────────────────────────────────────── */
+.tab-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 8px; border-radius: 5px; margin-bottom: 3px;
+  background: #0f172a; border: 1px solid #1e293b;
+  font-size: .78rem;
+}
+.tab-item.active { border-color: #0369a1; background: #0c1d30; }
+.tab-item .tab-url {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0; color: #94a3b8;
+}
+.tab-item .tab-id { color: #64748b; font-size: .68rem; margin-right: 8px; font-family: monospace; }
+.tab-item .tab-actions { display: flex; gap: 3px; flex-shrink: 0; }
+
+/* ── Console ───────────────────────────────────────────────── */
+.console-output {
+  background: #0a0f1a; border: 1px solid #1e293b; border-radius: 6px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: .75rem; line-height: 1.5;
+  height: 140px; overflow-y: auto; padding: 8px;
+  white-space: pre-wrap; word-break: break-all;
+}
+.console-output .line { padding: 1px 0; }
+.console-output .line.log { color: #94a3b8; }
+.console-output .line.warn { color: #facc15; }
+.console-output .line.error { color: #f87171; }
+.console-output .line.info { color: #60a5fa; }
+.console-output .line.result { color: #4ade80; }
+
+.console-input-row {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+.console-input-row input { flex: 1; }
+.console-input-row .btn { flex-shrink: 0; }
+
+/* ── Script Runner ─────────────────────────────────────────── */
+.script-result {
+  background: #0f172a; border: 1px solid #1e293b; border-radius: 5px;
+  padding: 8px; font-family: monospace; font-size: .75rem;
+  margin-top: 6px; max-height: 160px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+.script-result .step { border-bottom: 1px solid #1e293b; padding: 4px 0; }
+.script-result .step:last-child { border-bottom: none; }
+.script-result .step-num { color: #64748b; margin-right: 6px; }
+.script-result .step-ok { color: #4ade80; }
+.script-result .step-err { color: #f87171; }
+
+/* ── Network Log ───────────────────────────────────────────── */
+.network-table { font-size: .75rem; }
+.network-table td { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.network-table .method { font-weight: 600; font-family: monospace; }
+.network-table .method.GET { color: #22c55e; }
+.network-table .method.POST { color: #60a5fa; }
+.network-table .method.PUT { color: #facc15; }
+.network-table .method.DELETE { color: #f87171; }
+.network-table .status-code { font-family: monospace; font-weight: 600; }
+.network-table .status-code.ok { color: #22c55e; }
+.network-table .status-code.redirect { color: #facc15; }
+.network-table .status-code.client-error { color: #fb923c; }
+.network-table .status-code.server-error { color: #f87171; }
+
+/* ── Cookie Table ──────────────────────────────────────────── */
+.cookie-table td {
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Session ───────────────────────────────────────────────── */
+.session-row {
+  display: flex; gap: 8px; align-items: center;
+  padding: 6px 0;
+}
+.session-row textarea { flex: 1; min-height: 60px; }
+
+/* ── Loading Spinner ───────────────────────────────────────── */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #2a3a4e; border-top-color: #38bdf8; border-radius: 50%; animation: spin .6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Toast notifications ───────────────────────────────────── */
+.toast-container {
+  position: fixed; top: 16px; right: 16px; z-index: 9999;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.toast {
+  padding: 10px 16px; border-radius: 8px; font-size: .8rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  animation: slideIn .2s ease-out;
+  max-width: 380px;
+}
+.toast.info { background: #0369a1; color: #fff; border-left: 3px solid #38bdf8; }
+.toast.success { background: #15803d; color: #fff; border-left: 3px solid #4ade80; }
+.toast.error { background: #991b1b; color: #fff; border-left: 3px solid #f87171; }
+.toast.warning { background: #92400e; color: #fff; border-left: 3px solid #facc15; }
+@keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+
+/* ── Empty state ───────────────────────────────────────────── */
+.empty-state { padding: 16px; text-align: center; color: #475569; font-size: .8rem; }
+
+/* ── Responsive tweaks ─────────────────────────────────────── */
+@media (max-width: 600px) {
+  .dashboard-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .card-body { max-height: 260px; }
+}
 </style>
 </head>
 <body>
-  <h1>🔧 Browser Helper Dashboard</h1>
+<div class="toast-container" id="toast-container"></div>
 
+<!-- ═══════════════ HEADER ═══════════════ -->
+<header class="dashboard-header">
+  <h1><i class="fas fa-globe"></i> Browser Helper Dashboard</h1>
+  <div class="header-meta">
+    <span class="ws-indicator">
+      <span class="dot red" id="ws-dot"></span>
+      <span id="ws-label">Disconnected</span>
+    </span>
+    <span id="uptime-label"></span>
+  </div>
+</header>
+
+<!-- ═══════════════ GRID ═══════════════ -->
+<div class="grid">
+
+  <!-- ── Connection Panel ── -->
   <div class="card">
-    <h2>Connection Status</h2>
-    <div class="status-grid">
-      <div class="stat">
-        <div class="value" id="status-indicator" class="disconnected">—</div>
-        <div class="label">Status</div>
+    <div class="card-header">
+      <h2><i class="fas fa-plug"></i> Connection</h2>
+    </div>
+    <div class="card-body no-scroll">
+      <div class="status-grid">
+        <div class="stat">
+          <div class="value gray" id="status-indicator">—</div>
+          <div class="label">CDP Status</div>
+        </div>
+        <div class="stat">
+          <div class="value" id="tabs-count">0</div>
+          <div class="label">Tabs</div>
+        </div>
+        <div class="stat">
+          <div class="value" id="last-op">—</div>
+          <div class="label">Last Op</div>
+        </div>
+        <div class="stat">
+          <div class="value" id="op-count" style="font-size:1.2rem">0</div>
+          <div class="label">Ops Logged</div>
+        </div>
       </div>
-      <div class="stat">
-        <div class="value" id="tabs-count">0</div>
-        <div class="label">Tabs</div>
-      </div>
-      <div class="stat">
-        <div class="value" id="last-op">—</div>
-        <div class="label">Last Operation</div>
-      </div>
-      <div class="stat">
-        <div class="value" id="ws-indicator"><span class="ws-status disconnected"></span></div>
-        <div class="label">WebSocket</div>
+      <div class="btn-group" style="margin-top:10px">
+        <button class="btn primary" onclick="apiPost('/connect')"><i class="fas fa-link"></i> Connect</button>
+        <button class="btn danger" onclick="apiPost('/disconnect')"><i class="fas fa-unlink"></i> Disconnect</button>
+        <button class="btn" onclick="apiGet('/status')"><i class="fas fa-sync"></i> Status</button>
       </div>
     </div>
   </div>
 
+  <!-- ── Action Buttons Bar ── -->
   <div class="card">
-    <h2>Available Endpoints</h2>
-    <div class="endpoints">
-      <div><code>GET  /</code> — Dashboard</div>
-      <div><code>GET  /status</code> — Status</div>
-      <div><code>POST /connect</code> — Connect</div>
-      <div><code>POST /navigate?url=</code> — Navigate</div>
-      <div><code>POST /eval</code> — Eval JS</div>
-      <div><code>POST /click</code> — Click</div>
-      <div><code>POST /type</code> — Type</div>
-      <div><code>POST /screenshot</code> — Screenshot</div>
-      <div><code>GET  /tabs</code> — List Tabs</div>
-      <div><code>POST /switch_tab/{id}</code> — Switch Tab</div>
-      <div><code>POST /get_text</code> — Get Text</div>
-      <div><code>POST /disconnect</code> — Disconnect</div>
-      <div><code>WS   /ws</code> — Status Stream</div>
+    <div class="card-header">
+      <h2><i class="fas fa-bolt"></i> Quick Actions</h2>
+    </div>
+    <div class="card-body no-scroll">
+      <div class="action-bar">
+        <button class="btn" onclick="apiPost('/screenshot')" title="Screenshot"><i class="fas fa-camera"></i> Screenshot</button>
+        <button class="btn" onclick="apiPost('/full_screenshot')" title="Full Page Screenshot"><i class="fas fa-image"></i> Full Page</button>
+        <button class="btn" onclick="apiPost('/pdf')" title="Export PDF"><i class="fas fa-file-pdf"></i> PDF Export</button>
+        <button class="btn" onclick="apiPost('/get_text')" title="Get Page Text"><i class="fas fa-font"></i> Get Text</button>
+        <button class="btn" onclick="apiGet('/cookies')" title="Get Cookies"><i class="fas fa-cookie-bite"></i> Get Cookies</button>
+        <button class="btn warning" onclick="apiPost('/javascript/disable')" title="Disable JavaScript"><i class="fas fa-ban"></i> Disable JS</button>
+        <button class="btn success" onclick="apiPost('/javascript/enable')" title="Enable JavaScript"><i class="fas fa-check-circle"></i> Enable JS</button>
+        <button class="btn" onclick="scrollToBottom()" title="Scroll to Bottom of Page"><i class="fas fa-arrow-down"></i> Scroll Down</button>
+      </div>
     </div>
   </div>
 
+  <!-- ── Screenshot Preview ── -->
   <div class="card">
-    <h2>Operation Log</h2>
-    <div id="log-container">No operations yet.</div>
+    <div class="card-header">
+      <h2><i class="fas fa-camera-retro"></i> Screenshot Preview</h2>
+      <span>
+        <button class="btn sm" onclick="apiPost('/screenshot')"><i class="fas fa-camera"></i> Capture</button>
+        <button class="btn sm" onclick="apiPost('/full_screenshot')"><i class="fas fa-images"></i> Full Page</button>
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="screenshot-area">
+        <div id="screenshot-placeholder" class="screenshot-placeholder">
+          <span><i class="fas fa-camera" style="margin-right:6px"></i> No screenshot yet</span>
+        </div>
+        <img id="screenshot-img" style="display:none" onclick="openScreenshot()" />
+      </div>
+    </div>
   </div>
 
+  <!-- ── Operation Log ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fas fa-list"></i> Operation Log</h2>
+      <button class="btn sm" onclick="clearLog()"><i class="fas fa-trash"></i> Clear</button>
+    </div>
+    <div class="card-body" id="log-body" style="max-height:340px">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:32px">#</th>
+              <th style="width:80px">Time</th>
+              <th>Operation</th>
+              <th style="width:70px">Status</th>
+              <th style="width:70px">Duration</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="log-table-body">
+            <tr><td colspan="6" style="text-align:center;color:#475569;padding:20px">No operations yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tabs Panel ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fas fa-window-restore"></i> Tabs</h2>
+      <span>
+        <button class="btn sm" onclick="refreshTabs()"><i class="fas fa-sync"></i></button>
+        <button class="btn sm primary" onclick="promptNewTab()"><i class="fas fa-plus"></i> New</button>
+      </span>
+    </div>
+    <div class="card-body" id="tabs-body" style="max-height:280px">
+      <div class="empty-state" id="tabs-empty">No tabs loaded. Connect first.</div>
+      <div id="tabs-list"></div>
+    </div>
+  </div>
+
+  <!-- ── Network Log ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fas fa-network-wired"></i> Network Log</h2>
+      <span>
+        <button class="btn sm success" onclick="apiPost('/network/start')"><i class="fas fa-play"></i> Start</button>
+        <button class="btn sm warning" onclick="apiPost('/network/stop')"><i class="fas fa-stop"></i> Stop</button>
+        <button class="btn sm danger" onclick="clearNetworkLog()"><i class="fas fa-trash"></i> Clear</button>
+      </span>
+    </div>
+    <div class="card-body" id="network-body" style="max-height:280px">
+      <div class="table-wrap">
+        <table class="network-table">
+          <thead>
+            <tr>
+              <th style="width:56px">Method</th>
+              <th>URL</th>
+              <th style="width:52px">Status</th>
+              <th style="width:40px">Type</th>
+              <th style="width:56px">Size</th>
+            </tr>
+          </thead>
+          <tbody id="network-table-body">
+            <tr><td colspan="5" style="text-align:center;color:#475569;padding:20px">No requests captured.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Cookie Viewer ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fas fa-cookie-bite"></i> Cookies</h2>
+      <button class="btn sm danger" onclick="clearCookies()"><i class="fas fa-trash"></i> Clear All</button>
+    </div>
+    <div class="card-body" id="cookie-body" style="max-height:240px">
+      <div class="table-wrap">
+        <table class="cookie-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Value</th>
+              <th>Domain</th>
+              <th style="width:56px">Path</th>
+              <th style="width:44px">Secure</th>
+            </tr>
+          </thead>
+          <tbody id="cookie-table-body">
+            <tr><td colspan="5" style="text-align:center;color:#475569;padding:20px">No cookies.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Script Runner ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fas fa-play-circle"></i> Script Runner</h2>
+      <button class="btn sm primary" onclick="runScript()"><i class="fas fa-play"></i> Run</button>
+    </div>
+    <div class="card-body">
+      <textarea id="script-area" placeholder='[{"action":"navigate","url":"https://example.com"},{"action":"screenshot"},{"action":"get_text"}]' spellcheck="false"></textarea>
+      <div class="script-result" id="script-result" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- ── Session Manager ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fas fa-save"></i> Session Manager</h2>
+      <span>
+        <button class="btn sm" onclick="saveSession()"><i class="fas fa-save"></i> Save</button>
+        <button class="btn sm primary" onclick="restoreSession()"><i class="fas fa-upload"></i> Restore</button>
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="session-row">
+        <textarea id="session-data" placeholder='Paste session JSON here...' spellcheck="false"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── JS Console ── -->
+  <div class="card full-width">
+    <div class="card-header">
+      <h2><i class="fas fa-terminal"></i> JS Console</h2>
+      <span>
+        <button class="btn sm" onclick="clearConsole()"><i class="fas fa-trash"></i> Clear</button>
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="console-output" id="console-output">
+        <div class="line info">— Console ready. Type JS and press Enter or click Eval.</div>
+      </div>
+      <div class="console-input-row">
+        <input type="text" id="console-input" placeholder="document.title" spellcheck="false"
+               onkeydown="if(event.key==='Enter')evalConsole()" />
+        <button class="btn primary" onclick="evalConsole()"><i class="fas fa-chevron-right"></i> Eval</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /.grid -->
+
+<!-- ═══════════════ JAVASCRIPT ═══════════════ -->
 <script>
-const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const wsUrl = `${protocol}//${location.host}/ws`;
-let ws = null;
+// ============================================================
+//  STATE & CONFIG
+// ============================================================
+const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
 
-function connectWs() {
-  ws = new WebSocket(wsUrl);
+let ws = null;
+let wsReconnectTimer = null;
+let currentState = {
+  connected: false,
+  tabs_count: 0,
+  last_operation: null,
+  last_operation_time: null,
+  cdp_url: null,
+};
+
+// Client-side operation log (mirrors server log + local ops)
+let operationLog = [];
+let logCounter = 0;
+
+// Network log (client-side storage)
+let networkRequests = [];
+
+// Interval for periodic status refresh
+let statusInterval = null;
+
+// ============================================================
+//  HELPERS
+// ============================================================
+function $(sel) { return document.querySelector(sel); }
+function $$(sel) { return document.querySelectorAll(sel); }
+
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = msg;
+  c.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, 3500);
+}
+
+async function apiGet(path) {
+  try {
+    const resp = await fetch(path);
+    const data = await resp.json();
+    if (data.status === 'error') {
+      toast(`<i class="fas fa-exclamation-triangle"></i> ${data.error || 'Request failed'}`, 'error');
+    }
+    return data;
+  } catch (e) {
+    toast(`<i class="fas fa-exclamation-triangle"></i> GET ${path}: ${e.message}`, 'error');
+    return null;
+  }
+}
+
+async function apiPost(path, body) {
+  try {
+    const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const resp = await fetch(path, opts);
+    // Capture screenshot responses (base64 image)
+    if (path === '/screenshot' || path === '/full_screenshot' || path === '/element_screenshot') {
+      const data = await resp.json();
+      if (data.status === 'ok' && data.result && data.result.data) {
+        displayScreenshot(data.result.data);
+      } else if (data.status === 'ok' && data.result && typeof data.result === 'string') {
+        displayScreenshot(data.result);
+      }
+      return data;
+    }
+    const data = await resp.json();
+    if (data.status === 'error') {
+      toast(`<i class="fas fa-exclamation-triangle"></i> ${data.error || 'Request failed'}`, 'error');
+    } else if (path === '/get_text' && data.result) {
+      toast(`<i class="fas fa-font"></i> Page text captured`, 'success');
+    } else if (path === '/pdf' && data.result && data.result.data) {
+      downloadPDF(data.result.data);
+    }
+    return data;
+  } catch (e) {
+    toast(`<i class="fas fa-exclamation-triangle"></i> POST ${path}: ${e.message}`, 'error');
+    return null;
+  }
+}
+
+function displayScreenshot(base64Data) {
+  const placeholder = document.getElementById('screenshot-placeholder');
+  const img = document.getElementById('screenshot-img');
+  placeholder.style.display = 'none';
+  img.style.display = 'block';
+  img.src = `data:image/jpeg;base64,${base64Data}`;
+}
+
+function openScreenshot() {
+  const img = document.getElementById('screenshot-img');
+  if (img.style.display !== 'none' && img.src) {
+    window.open(img.src, '_blank');
+  }
+}
+
+function downloadPDF(base64Data) {
+  const a = document.createElement('a');
+  a.href = `data:application/pdf;base64,${base64Data}`;
+  a.download = `page_${Date.now()}.pdf`;
+  a.click();
+  toast('<i class="fas fa-file-pdf"></i> PDF downloaded', 'success');
+}
+
+function scrollToBottom() {
+  apiPost('/eval', { js: 'window.scrollTo(0, document.body.scrollHeight)' });
+}
+
+// ============================================================
+//  OPERATION LOG
+// ============================================================
+function addLogEntry(entry) {
+  logCounter++;
+  entry._id = logCounter;
+  operationLog.unshift(entry);
+  if (operationLog.length > 100) operationLog.pop();
+  renderLogTable();
+}
+
+function clearLog() {
+  operationLog = [];
+  logCounter = 0;
+  renderLogTable();
+}
+
+function renderLogTable() {
+  const tbody = document.getElementById('log-table-body');
+  if (operationLog.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#475569;padding:20px">No operations yet.</td></tr>';
+    document.getElementById('op-count').textContent = '0';
+    return;
+  }
+  tbody.innerHTML = operationLog.map(e => {
+    const time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '—';
+    const status = e.status || 'pending';
+    const dur = e.duration_ms != null ? `${parseFloat(e.duration_ms).toFixed(0)}ms` : '—';
+    return `<tr>
+      <td style="color:#475569">${e._id || '—'}</td>
+      <td style="color:#64748b">${time}</td>
+      <td style="color:#38bdf8;font-weight:600">${escHtml(String(e.operation || '—'))}</td>
+      <td><span class="op-status ${status}">${status}</span></td>
+      <td style="color:#94a3b8">${dur}</td>
+      <td style="color:#64748b;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escHtml(String(e.details || ''))}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('op-count').textContent = operationLog.length;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ============================================================
+//  TABS
+// ============================================================
+async function refreshTabs() {
+  const data = await apiGet('/tabs');
+  if (data && data.status === 'ok') {
+    renderTabs(data.result || []);
+  }
+}
+
+function renderTabs(tabs) {
+  const container = document.getElementById('tabs-list');
+  const empty = document.getElementById('tabs-empty');
+  if (!tabs || tabs.length === 0) {
+    container.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  container.innerHTML = tabs.map(t => {
+    const id = t.id || t.tabId || t.targetId || '?';
+    const url = t.url || t.title || 'about:blank';
+    const isActive = t.active || false;
+    return `<div class="tab-item ${isActive ? 'active' : ''}">
+      <span class="tab-id">${escHtml(String(id).slice(0,8))}</span>
+      <span class="tab-url" title="${escHtml(url)}">${escHtml(url)}</span>
+      <span class="tab-actions">
+        <button class="btn sm primary" onclick="switchTab('${id}')" title="Switch to tab"><i class="fas fa-arrow-right"></i></button>
+        <button class="btn sm danger" onclick="closeTab('${id}')" title="Close tab"><i class="fas fa-times"></i></button>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+async function switchTab(tabId) {
+  const data = await apiPost(`/switch_tab/${tabId}`);
+  if (data && data.status === 'ok') toast(`Switched to tab ${tabId.slice(0,8)}`, 'success');
+}
+
+async function closeTab(tabId) {
+  const data = await apiPost(`/tab/close/${tabId}`);
+  if (data && data.status === 'ok') {
+    toast(`Tab ${tabId.slice(0,8)} closed`, 'success');
+    refreshTabs();
+  }
+}
+
+function promptNewTab() {
+  const url = prompt('Enter URL to open in new tab:', 'https://example.com');
+  if (url) apiPost('/tab/new', { url });
+}
+
+// ============================================================
+//  NETWORK LOG
+// ============================================================
+async function refreshNetworkLog() {
+  const data = await apiGet('/network/log');
+  if (data && data.status === 'ok') {
+    networkRequests = data.result || [];
+    renderNetworkLog();
+  }
+}
+
+function renderNetworkLog() {
+  const tbody = document.getElementById('network-table-body');
+  if (networkRequests.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#475569;padding:20px">No requests captured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = networkRequests.map(r => {
+    const method = r.method || 'GET';
+    const url = r.url || r.documentURL || '—';
+    const status = r.status || r.statusCode || 0;
+    const type = r.type || r.resourceType || 'other';
+    const size = r.size != null ? formatBytes(r.size) : (r.transferSize ? formatBytes(r.transferSize) : '—');
+
+    let statusClass = '';
+    if (status >= 200 && status < 300) statusClass = 'ok';
+    else if (status >= 300 && status < 400) statusClass = 'redirect';
+    else if (status >= 400 && status < 500) statusClass = 'client-error';
+    else if (status >= 500) statusClass = 'server-error';
+
+    return `<tr>
+      <td><span class="method ${method}">${method}</span></td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(url)}">${escHtml(shortUrl(url))}</td>
+      <td><span class="status-code ${statusClass}">${status}</span></td>
+      <td style="color:#94a3b8">${escHtml(type)}</td>
+      <td style="color:#94a3b8">${size}</td>
+    </tr>`;
+  }).join('');
+}
+
+function shortUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.pathname + u.search + (u.hash || '');
+  } catch { return url.length > 80 ? url.slice(0,80) + '…' : url; }
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '—';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1048576) return `${(bytes/1024).toFixed(1)}KB`;
+  return `${(bytes/1048576).toFixed(1)}MB`;
+}
+
+function clearNetworkLog() {
+  apiPost('/network/clear');
+  networkRequests = [];
+  renderNetworkLog();
+}
+
+// ============================================================
+//  COOKIES
+// ============================================================
+async function refreshCookies() {
+  const tbody = document.getElementById('cookie-table-body');
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px"><span class="spinner"></span> Loading...</td></tr>';
+  const data = await apiGet('/cookies');
+  if (data && data.status === 'ok') {
+    const cookies = data.result || data.cookies || [];
+    renderCookies(cookies);
+  } else {
+    // If endpoint not available
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#475569;padding:20px">Cookie endpoint unavailable.</td></tr>';
+  }
+}
+
+function renderCookies(cookies) {
+  const tbody = document.getElementById('cookie-table-body');
+  if (!cookies || cookies.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#475569;padding:20px">No cookies found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = cookies.map(c => {
+    const name = c.name || '—';
+    const value = c.value || '';
+    const domain = c.domain || '—';
+    const path = c.path || '/';
+    const secure = c.secure ? '<i class="fas fa-lock" style="color:#22c55e" title="Secure"></i>' : '—';
+    return `<tr>
+      <td style="font-weight:600;color:#e2e8f0">${escHtml(name)}</td>
+      <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;color:#94a3b8" title="${escHtml(value)}">${escHtml(shortVal(value))}</td>
+      <td style="color:#64748b">${escHtml(domain)}</td>
+      <td style="color:#64748b">${escHtml(path)}</td>
+      <td>${secure}</td>
+    </tr>`;
+  }).join('');
+}
+
+function shortVal(v) {
+  if (!v) return '';
+  return v.length > 32 ? v.slice(0,32) + '…' : v;
+}
+
+function clearCookies() {
+  if (!confirm('Clear all cookies?')) return;
+  apiPost('/clear_cookies').then(() => {
+    toast('Cookies cleared', 'success');
+    refreshCookies();
+  });
+}
+
+// ============================================================
+//  SCRIPT RUNNER
+// ============================================================
+async function runScript() {
+  const area = document.getElementById('script-area');
+  const resultDiv = document.getElementById('script-result');
+  let steps;
+  try {
+    steps = JSON.parse(area.value);
+    if (!Array.isArray(steps)) throw new Error('Must be a JSON array');
+  } catch (e) {
+    toast(`<i class="fas fa-exclamation-triangle"></i> Invalid JSON: ${e.message}`, 'error');
+    return;
+  }
+
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = '<div class="spinner"></div> Running...';
+
+  const data = await apiPost('/script', { steps });
+  if (data) {
+    if (data.status === 'ok' && data.result) {
+      const results = data.result.results || data.result.steps || (Array.isArray(data.result) ? data.result : [data.result]);
+      resultDiv.innerHTML = results.map((r, i) => {
+        const ok = r.status === 'success' || r.success;
+        return `<div class="step">
+          <span class="step-num">#${i+1}</span>
+          <span class="${ok ? 'step-ok' : 'step-err'}"><i class="fas fa-${ok ? 'check-circle' : 'times-circle'}"></i> ${r.operation || r.action || 'step'}</span>
+          <span style="color:#64748b">${ok ? '' : (r.error || r.details || '')}</span>
+        </div>`;
+      }).join('');
+    } else {
+      resultDiv.innerHTML = `<div class="step"><span class="step-err"><i class="fas fa-times-circle"></i> ${data.error || 'Script failed'}</span></div>`;
+    }
+  } else {
+    resultDiv.innerHTML = '<div class="step"><span class="step-err"><i class="fas fa-times-circle"></i> Request failed</span></div>';
+  }
+}
+
+// ============================================================
+//  SESSION MANAGER
+// ============================================================
+async function saveSession() {
+  const data = await apiPost('/session/save');
+  if (data && data.status === 'ok') {
+    const sessionStr = JSON.stringify(data.result || data.session || data, null, 2);
+    document.getElementById('session-data').value = sessionStr;
+    toast('<i class="fas fa-save"></i> Session saved', 'success');
+  }
+}
+
+async function restoreSession() {
+  const area = document.getElementById('session-data');
+  let sessionData;
+  try {
+    sessionData = JSON.parse(area.value);
+  } catch (e) {
+    toast(`<i class="fas fa-exclamation-triangle"></i> Invalid session JSON: ${e.message}`, 'error');
+    return;
+  }
+  const data = await apiPost('/session/restore', { session: sessionData });
+  if (data && data.status === 'ok') {
+    toast('<i class="fas fa-upload"></i> Session restored', 'success');
+  }
+}
+
+// ============================================================
+//  JS CONSOLE
+// ============================================================
+async function evalConsole() {
+  const input = document.getElementById('console-input');
+  const js = input.value.trim();
+  if (!js) return;
+  appendConsole(`> ${js}`, 'log');
+  input.value = '';
+  const data = await apiPost('/eval', { js });
+  if (data && data.status === 'ok') {
+    const result = data.result;
+    if (result && result.result !== undefined) {
+      appendConsole(formatConsoleValue(result.result), 'result');
+    } else if (result && result.value !== undefined) {
+      appendConsole(formatConsoleValue(result.value), 'result');
+    } else {
+      appendConsole(formatConsoleValue(result), 'result');
+    }
+  } else if (data) {
+    appendConsole(`Error: ${data.error || 'Unknown error'}`, 'error');
+  } else {
+    appendConsole('Request failed', 'error');
+  }
+}
+
+function appendConsole(text, type = 'log') {
+  const output = document.getElementById('console-output');
+  const line = document.createElement('div');
+  line.className = `line ${type}`;
+  line.textContent = text;
+  output.appendChild(line);
+  output.scrollTop = output.scrollHeight;
+}
+
+function clearConsole() {
+  const output = document.getElementById('console-output');
+  output.innerHTML = '<div class="line info">— Console cleared.</div>';
+}
+
+function formatConsoleValue(val) {
+  if (val === null || val === undefined) return String(val);
+  if (typeof val === 'object') {
+    try { return JSON.stringify(val, null, 2); } catch { return String(val); }
+  }
+  return String(val);
+}
+
+// ============================================================
+//  WEBSOCKET
+// ============================================================
+function connectWS() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  try { ws = new WebSocket(WS_URL); } catch (e) {
+    setWSDot(false);
+    scheduleReconnect();
+    return;
+  }
+
   ws.onopen = () => {
-    document.querySelector('#ws-indicator').innerHTML = '<span class="ws-status connected"></span> Connected';
+    setWSDot(true);
+    clearTimeout(wsReconnectTimer);
+    toast('<i class="fas fa-plug"></i> WebSocket connected', 'success');
   };
+
   ws.onclose = () => {
-    document.querySelector('#ws-indicator').innerHTML = '<span class="ws-status disconnected"></span> Disconnected';
-    setTimeout(connectWs, 3000);
+    setWSDot(false);
+    scheduleReconnect();
   };
+
+  ws.onerror = () => {
+    setWSDot(false);
+  };
+
   ws.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    if (data.type === 'state_update' || data.type === 'hello') {
-      const s = data.state;
-      const indicator = document.querySelector('#status-indicator');
-      if (s.connected) {
-        indicator.textContent = 'Connected';
-        indicator.className = 'value connected';
-      } else {
-        indicator.textContent = 'Disconnected';
-        indicator.className = 'value disconnected';
-      }
-      document.querySelector('#tabs-count').textContent = s.tabs_count;
-      document.querySelector('#last-op').textContent = s.last_operation || '—';
-      if (data.recent_log && data.recent_log.length > 0) {
-        const container = document.querySelector('#log-container');
-        container.innerHTML = data.recent_log.map(e => `
-          <div class="log-entry">
-            <span class="log-time">${new Date(e.timestamp).toLocaleTimeString()}</span>
-            <span class="log-op">${e.operation}</span>
-            <span class="log-status ${e.status}">${e.status}</span>
-            <span>${e.duration_ms}ms</span>
-            <span style="color:#94a3b8">${e.details || ''}</span>
-          </div>
-        `).join('');
-      }
+    try {
+      const msg = JSON.parse(e.data);
+      handleWSMessage(msg);
+    } catch (err) {
+      console.error('WS parse error:', err);
     }
   };
 }
-connectWs();
+
+function setWSDot(connected) {
+  const dot = document.getElementById('ws-dot');
+  const label = document.getElementById('ws-label');
+  if (connected) {
+    dot.className = 'dot green';
+    label.textContent = 'Connected';
+  } else {
+    dot.className = 'dot red';
+    label.textContent = 'Disconnected';
+  }
+}
+
+function scheduleReconnect() {
+  if (wsReconnectTimer) return;
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    connectWS();
+  }, 3000);
+}
+
+function handleWSMessage(msg) {
+  switch (msg.type) {
+    case 'hello':
+    case 'state_update':
+      if (msg.state) {
+        updateState(msg.state);
+      }
+      if (msg.recent_log && msg.recent_log.length > 0) {
+        msg.recent_log.forEach(e => addLogEntry(e));
+      }
+      // Refresh tabs on state update (tabs count may have changed)
+      if (msg.state && msg.state.tabs_count !== undefined) {
+        // Only fetch if we suspect a change
+      }
+      break;
+    case 'pong':
+      break;
+    default:
+      break;
+  }
+}
+
+function updateState(s) {
+  if (s === undefined) return;
+  currentState = { ...currentState, ...s };
+
+  // Connection indicator
+  const indicator = document.getElementById('status-indicator');
+  if (s.connected) {
+    indicator.textContent = 'Connected';
+    indicator.className = 'value green';
+  } else {
+    indicator.textContent = 'Disconnected';
+    indicator.className = 'value red';
+  }
+
+  if (s.tabs_count !== undefined) {
+    document.getElementById('tabs-count').textContent = s.tabs_count;
+  }
+  if (s.last_operation !== undefined) {
+    document.getElementById('last-op').textContent = s.last_operation || '—';
+  }
+}
+
+// ============================================================
+//  PERIODIC REFRESH
+// ============================================================
+function startPeriodicRefresh() {
+  stopPeriodicRefresh();
+  // Refresh tabs and network log every 5 seconds
+  statusInterval = setInterval(() => {
+    if (currentState.connected) {
+      refreshTabs();
+    }
+  }, 5000);
+}
+
+function stopPeriodicRefresh() {
+  if (statusInterval) {
+    clearInterval(statusInterval);
+    statusInterval = null;
+  }
+}
+
+// ============================================================
+//  INIT
+// ============================================================
+function init() {
+  connectWS();
+  startPeriodicRefresh();
+
+  // Initial data loads
+  apiGet('/status').then(data => {
+    if (data) updateState(data);
+  });
+
+  // Keyboard shortcut: focus console with Ctrl+`
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === '`') {
+      e.preventDefault();
+      document.getElementById('console-input').focus();
+    }
+  });
+}
+
+// Run on page load
+document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>

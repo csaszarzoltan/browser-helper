@@ -1,0 +1,31 @@
+# =============================================================================
+# docker-compose.yml — Browser Helper Proxy
+#
+# The proxy runs in a single container and connects to a Chrome instance
+# running on the **host** via CDP over WebSocket.
+#
+# Network modes:
+#   host   — works on Linux; the container sees localhost as the host's
+#            loopback, so `http://127.0.0.1:9555` reaches the host Chrome
+#            directly.  This is the simplest setup.
+#
+#   bridge — on Windows / macOS the host is reachable via
+#            `host.docker.internal`.  Override CHROME_CDP_URL if needed.
+#            Assumes Chrome is on the default CDP port 9555.
+# =============================================================================
+
+services:
+  browser-helper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: browser-helper
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      # Override CHROME_CDP_URL to point at your Chrome instance when not
+      # using --network host, e.g.:
+      #   CHROME_CDP_URL=http://host.docker.internal:9555
+    # network_mode: host       # uncomment for Linux host-Chrome access
+    restart: unless-stopped
