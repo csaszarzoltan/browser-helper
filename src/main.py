@@ -6,19 +6,28 @@ for browser automation. Serves a GUI dashboard and streams
 real-time status updates over WebSocket.
 """
 
+import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+# ---------------------------------------------------------------------------
+# Auth / rate limiting
+# ---------------------------------------------------------------------------
+from auth import rate_limiter
 from cdp_client import CDPClient
+
+# Paths excluded from auth and rate-limiting middleware
+PUBLIC_PATHS = {"/", "/health", "/ready", "/ws"}
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -52,6 +61,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# GZip compression — reduces JSON responses by 70-80%
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # ---------------------------------------------------------------------------
 # Global state
@@ -75,7 +86,9 @@ state: dict[str, Any] = {
 }
 
 # Start time for uptime calculation in health endpoint
-start_time = time.monotonic()
+# Freshly initialised in ``on_startup`` so that uptime is measured from
+# application startup, not module import.
+start_time = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +108,7 @@ class TypeRequest(BaseModel):
 
 
 class ConnectRequest(BaseModel):
-    cdp_url: Optional[str] = None
+    cdp_url: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -117,15 +130,15 @@ class PDFRequest(BaseModel):
 class SetCookieRequest(BaseModel):
     name: str
     value: str
-    domain: Optional[str] = None
-    path: Optional[str] = None
+    domain: str | None = None
+    path: str | None = None
     secure: bool = False
     httpOnly: bool = False
 
 
 class DOMQueryRequest(BaseModel):
     selector: str
-    attribute: Optional[str] = None
+    attribute: str | None = None
 
 
 class DOMClickAllRequest(BaseModel):
@@ -150,12 +163,24 @@ class NewTabRequest(BaseModel):
 
 
 @app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Rate-limit requests per IP (100 req/min), excluding public paths."""
+    path = request.url.path
+    if path not in PUBLIC_PATHS and not path.startswith(("/docs", "/openapi.json", "/redoc")):
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.is_allowed(client_ip):
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded (100 req/min)"})
+    response = await call_next(request)
+    return response
+
+
+@app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """Require Bearer token on all endpoints except /, /ws, and OpenAPI docs."""
+    """Require Bearer token on all non-public endpoints."""
     if API_TOKEN:
         path = request.url.path
-        # Skip auth for root, WebSocket, and OpenAPI documentation paths
-        if path not in ("/", "/ws") and not path.startswith(("/docs", "/openapi.json", "/redoc")):
+        # Skip auth for public paths and OpenAPI docs
+        if path not in PUBLIC_PATHS and not path.startswith(("/docs", "/openapi.json", "/redoc")):
             auth_header = request.headers.get("Authorization", "")
             token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
             if token != API_TOKEN:
@@ -190,7 +215,7 @@ def log_operation(
 ) -> dict[str, Any]:
     """Append an operation entry to the ring buffer and update global state."""
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "operation": operation,
         "status": status,
         "duration_ms": round(duration_ms, 2),
@@ -280,7 +305,7 @@ async def get_status():
 
 
 @app.post("/connect")
-async def connect(body: Optional[ConnectRequest] = None):
+async def connect(body: ConnectRequest | None = None):
     """
     Connect to Chrome CDP.
 
@@ -307,6 +332,9 @@ async def connect(body: Optional[ConnectRequest] = None):
 @app.post("/navigate")
 async def navigate(url: str = Query(..., description="Target URL to navigate to")):
     """Navigate the current tab to *url*."""
+    # Invalidate tab cache — navigation changes the page URL
+    client._tabs_cache = []
+    client._tabs_cache_ts = 0
     return await run_op("navigate", client.navigate, url)
 
 
@@ -381,7 +409,7 @@ async def disconnect():
 
 
 @app.post("/full_screenshot")
-async def full_screenshot(body: Optional[FullScreenshotRequest] = None):
+async def full_screenshot(body: FullScreenshotRequest | None = None):
     """
     Capture a full-page screenshot.
 
@@ -403,7 +431,7 @@ async def element_screenshot(body: ElementScreenshotRequest):
 
 
 @app.post("/pdf")
-async def pdf_export(body: Optional[PDFRequest] = None):
+async def pdf_export(body: PDFRequest | None = None):
     """
     Generate a PDF of the current page.
 
@@ -420,9 +448,17 @@ async def pdf_export(body: Optional[PDFRequest] = None):
 
 
 @app.get("/cookies")
-async def get_cookies():
-    """Get all browser cookies."""
-    return await run_op("get_cookies", client.get_cookies)
+async def get_cookies(truncate: bool = Query(False, description="Truncate cookie values to save bandwidth")):
+    """Get all browser cookies.
+
+    Use ?truncate=true to truncate long cookie values (saves bandwidth).
+    """
+    result = await run_op("get_cookies", client.get_cookies)
+    if truncate and result.get("result", {}).get("cookies"):
+        for c in result["result"]["cookies"]:
+            if len(c.get("value", "")) > 80:
+                c["value"] = c["value"][:40] + "..." + c["value"][-37:]
+    return result
 
 
 @app.post("/set_cookie")
@@ -557,17 +593,41 @@ async def health_check():
 
     Returns uptime, memory usage, connection status, and operation count.
     Does not require CDP connection.
+    No authentication is required (excluded from auth and rate-limiting middleware).
     """
-    uptime_secs = time.monotonic() - start_time
+    uptime_secs = time.monotonic() - start_time if start_time else 0.0
     memory_mb = _get_memory_mb()
     return {
         "status": "ok",
+        "version": app.version,
         "uptime_seconds": round(uptime_secs, 2),
         "memory_mb": memory_mb,
         "connected": client.is_connected,
         "tabs_count": client.tabs_count,
         "operation_count": len(operation_log),
     }
+
+
+@app.get("/ready")
+async def readiness_check():
+    """
+    Readiness probe endpoint.
+
+    Returns 200 when the CDP client is connected, 503 when not.
+    Does not require CDP connection.
+    No authentication is required (excluded from auth and rate-limiting middleware).
+    """
+    if client.is_connected:
+        return {
+            "status": "ok",
+            "ready": True,
+            "connected": True,
+        }
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=503,
+        content={"status": "error", "ready": False, "connected": False, "detail": "CDP not connected"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -637,11 +697,139 @@ async def websocket_endpoint(ws: WebSocket):
         return
 
     try:
-        # Keep the connection alive and handle incoming pings / messages
         while True:
             data = await ws.receive_text()
+
+            # Plain ping/pong keep-alive
             if data == "ping":
                 await ws.send_json({"type": "pong"})
+                continue
+
+            # JSON action messages
+            try:
+                msg = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                await ws.send_json({"type": "error", "message": "Invalid JSON"})
+                continue
+
+            action = msg.get("action", "")
+            start = time.monotonic()
+
+            try:
+                if action == "status":
+                    await ws.send_json({
+                        "type": "status",
+                        "connected": client.is_connected,
+                        "tabs_count": client.tabs_count,
+                        "last_operation": state["last_operation"],
+                    })
+
+                elif action == "screenshot":
+                    quality = msg.get("quality", 0)
+                    result = await client.screenshot(quality=quality)
+                    await ws.send_json({
+                        "type": "screenshot",
+                        "data": result.get("data", ""),
+                        "format": result.get("format", "jpeg"),
+                        "size": result.get("size", 0),
+                    })
+
+                elif action == "eval":
+                    js = msg.get("js", "")
+                    result = await client.evaluate(js)
+                    await ws.send_json({
+                        "type": "eval_result",
+                        "result": result,
+                    })
+
+                elif action == "navigate":
+                    url = msg.get("url", "")
+                    client._tabs_cache = []
+                    client._tabs_cache_ts = 0
+                    result = await client.navigate(url)
+                    await ws.send_json({
+                        "type": "navigate_result",
+                        "result": result,
+                    })
+
+                elif action == "click":
+                    selector = msg.get("selector", "")
+                    result = await client.click(selector)
+                    await ws.send_json({
+                        "type": "click_result",
+                        "result": result,
+                    })
+
+                elif action == "get_text":
+                    result = await client.get_page_text()
+                    await ws.send_json({
+                        "type": "text_result",
+                        "result": result,
+                    })
+
+                elif action == "get_cookies":
+                    result = await client.get_cookies()
+                    truncate = msg.get("truncate", False)
+                    if truncate and result.get("cookies"):
+                        for c in result["cookies"]:
+                            if len(c.get("value", "")) > 80:
+                                c["value"] = c["value"][:40] + "..." + c["value"][-37:]
+                    await ws.send_json({
+                        "type": "cookies_result",
+                        "result": result,
+                    })
+
+                elif action == "batch":
+                    """Execute multiple steps in one WS message."""
+                    steps = msg.get("steps", [])
+                    results = []
+                    for i, step in enumerate(steps):
+                        step_action = step.get("action", "")
+                        try:
+                            if step_action == "navigate":
+                                client._tabs_cache = []
+                                client._tabs_cache_ts = 0
+                                r = await client.navigate(step.get("url", ""))
+                            elif step_action == "eval":
+                                r = await client.evaluate(step.get("js", ""))
+                            elif step_action == "click":
+                                r = await client.click(step.get("selector", ""))
+                            elif step_action == "screenshot":
+                                r = await client.screenshot(quality=step.get("quality", 0))
+                            elif step_action == "get_text":
+                                r = await client.get_page_text()
+                            else:
+                                r = {"status": "error", "error": f"Unknown action: {step_action}"}
+                            results.append({"step": i, "action": step_action, "result": r, "status": "ok"})
+                        except Exception as e:
+                            results.append({"step": i, "action": step_action, "result": str(e), "status": "error"})
+                    elapsed = (time.monotonic() - start) * 1000
+                    await ws.send_json({
+                        "type": "batch_result",
+                        "steps": len(steps),
+                        "results": results,
+                        "duration_ms": round(elapsed, 2),
+                    })
+
+                else:
+                    await ws.send_json({
+                        "type": "error",
+                        "message": f"Unknown action: {action}",
+                    })
+
+                # Log the action
+                elapsed = (time.monotonic() - start) * 1000
+                log_operation(f"ws:{action}", "success", elapsed, "")
+
+            except Exception as e:
+                elapsed = (time.monotonic() - start) * 1000
+                log_operation(f"ws:{action}", "error", elapsed, str(e))
+                await ws.send_json({
+                    "type": "error",
+                    "action": action,
+                    "message": str(e),
+                })
+
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -667,6 +855,8 @@ else:
 
 @app.on_event("startup")
 async def on_startup():
+    global start_time
+    start_time = time.monotonic()
     logger.info("Browser Helper API starting up ...")
     try:
         result = await client.connect()

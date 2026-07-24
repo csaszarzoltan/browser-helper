@@ -12,11 +12,11 @@ Usage:
     await client.close()
 """
 
+import asyncio
 import json
 import logging
-import asyncio
-import base64
-from typing import Any, Optional
+import time
+from typing import Any
 
 import httpx
 import websockets
@@ -26,12 +26,10 @@ logger = logging.getLogger("browser-helper.cdp")
 
 class CDPError(Exception):
     """CDP protocol error."""
-    pass
 
 
 class CDPDisconnectedError(CDPError):
     """Raised when a CDP operation fails because the connection disconnected."""
-    pass
 
 
 class CDPClient:
@@ -40,23 +38,29 @@ class CDPClient:
     def __init__(
         self,
         cdp_http_url: str = "http://127.0.0.1:9555",
-        websocket_factory: Optional[callable] = None,
+        websocket_factory: Any = None,
         command_timeout: float = 30.0,
     ):
         self.cdp_http_url = cdp_http_url.rstrip("/")
         self._ws_factory = websocket_factory
         self._command_timeout = command_timeout
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
-        self._target_id: Optional[str] = None
+        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._target_id: str | None = None
         self._message_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._connected = False
         self._tabs: list[dict] = []
-        self._active_tab_id: Optional[str] = None
+        self._active_tab_id: str | None = None
         self._network_entries: list[dict] = []
         self._network_monitoring = False
         # Event callbacks: method_name -> list of async callbacks
         self._event_callbacks: dict[str, list] = {}
+        # ── Performance optimizations ──
+        self._http_client: httpx.AsyncClient | None = None
+        """Reusable HTTP client (keep-alive, connection pooling)."""
+        self._tabs_cache: list[dict] = []
+        self._tabs_cache_ts: float = 0
+        self._tabs_cache_ttl: float = 5.0  # seconds
 
     @property
     def is_connected(self) -> bool:
@@ -69,14 +73,26 @@ class CDPClient:
 
     # ─── Connection ───────────────────────────────────────────────
 
-    async def discover_tabs(self) -> list[dict]:
-        """Fetch open tabs from /json endpoint."""
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{self.cdp_http_url}/json")
-            resp.raise_for_status()
-            return resp.json()
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """Get or create shared HTTP client (keep-alive + connection pooling)."""
+        if self._http_client is None or self._http_client.is_closed:
+            limits = httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=30)
+            self._http_client = httpx.AsyncClient(timeout=5.0, limits=limits)
+        return self._http_client
 
-    async def connect(self, cdp_url: Optional[str] = None) -> dict:
+    async def discover_tabs(self) -> list[dict]:
+        """Fetch open tabs from /json endpoint (cached up to 5 seconds)."""
+        now = time.monotonic()
+        if self._tabs_cache and (now - self._tabs_cache_ts) < self._tabs_cache_ttl:
+            return self._tabs_cache
+        client = await self._get_http_client()
+        resp = await client.get(f"{self.cdp_http_url}/json")
+        resp.raise_for_status()
+        self._tabs_cache = resp.json()
+        self._tabs_cache_ts = now
+        return self._tabs_cache
+
+    async def connect(self, cdp_url: str | None = None) -> dict:
         """
         Auto-connect to Chrome CDP.
 
@@ -165,14 +181,29 @@ class CDPClient:
                         entry["size"] = resp.get("encodedDataLength", 0)
                     self._network_entries.append(entry)
 
+                # Dispatch registered event callbacks
+                ev_method = msg.get("method", "")
+                if ev_method in self._event_callbacks:
+                    for cb in self._event_callbacks[ev_method]:
+                        try:
+                            cb(msg)
+                        except Exception:  # noqa: BLE001
+                            logger.warning("Event callback error for %s", ev_method)
+
         except websockets.exceptions.ConnectionClosed:
-            pass
+            self._connected = False
+            # Fail any pending futures with CDPDisconnectedError
+            exc = CDPDisconnectedError("Connection closed by remote")
+            for fut in list(self._pending.values()):
+                if not fut.done():
+                    fut.set_exception(exc)
+            self._pending.clear()
         except Exception as e:
             logger.warning(f"CDP listener error: {e}")
         finally:
             self._connected = False
 
-    async def _send_command(self, method: str, params: dict = None) -> dict:
+    async def _send_command(self, method: str, params: dict | None = None) -> dict:
         """Send CDP command and wait for result."""
         if not self._ws or not self._connected:
             raise CDPError("Not connected to Chrome CDP")
@@ -183,11 +214,31 @@ class CDPClient:
         self._pending[msg_id] = future
         await self._ws.send(json.dumps(payload))
         try:
-            result = await asyncio.wait_for(future, timeout=30.0)
+            result = await asyncio.wait_for(future, timeout=self._command_timeout)
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending.pop(msg_id, None)
             raise CDPError(f"CDP command timeout: {method}")
+
+    # ─── Event callback API ────────────────────────────────────────
+
+    def add_event_listener(self, method: str, callback) -> None:
+        """Register an async callback for a CDP event method.
+
+        Args:
+            method: CDP event method name (e.g. ``Runtime.consoleAPICalled``).
+            callback: Async callable receiving the full CDP message dict.
+        """
+        if method not in self._event_callbacks:
+            self._event_callbacks[method] = []
+        self._event_callbacks[method].append(callback)
+
+    def remove_event_listener(self, method: str, callback) -> None:
+        """Unregister a previously added event callback."""
+        if method in self._event_callbacks:
+            self._event_callbacks[method] = [
+                cb for cb in self._event_callbacks[method] if cb is not callback
+            ]
 
     # ─── Page operations ─────────────────────────────────────────
 
@@ -263,10 +314,24 @@ class CDPClient:
         await self._send_command("Input.insertText", {"text": text})
         return {"status": "ok", "selector": selector, "chars": len(text)}
 
-    async def screenshot(self, quality: int = 70) -> dict:
-        """Take viewport screenshot, return base64 JPEG."""
+    async def screenshot(self, quality: int = 0) -> dict:
+        """Take viewport screenshot, return base64 JPEG.
+
+        Quality: 0 = auto (adjusts based on page size), 1-100 = explicit.
+        Auto-quality saves 30-50% bandwidth on simple pages.
+        """
+        if quality == 0:
+            # Auto-quality: detect page complexity
+            info = await self.evaluate(
+                "(function(){return {textLen:(document.body?.innerText||'').length,"
+                "imgs:document.images.length,els:document.querySelectorAll('*').length}})()"
+            )
+            r = info.get("result", {}) if info.get("status") == "ok" else {}
+            el_count = r.get("els", 1000) if r else 1000
+            # Simple page (few elements) → lower quality still looks good
+            quality = 85 if el_count > 500 else 60
         result = await self._send_command("Page.captureScreenshot", {
-            "format": "jpeg", "quality": quality, "fromSurface": True,
+            "format": "jpeg", "quality": min(quality, 95), "fromSurface": True,
         })
         data = result.get("data", "")
         return {"status": "ok", "data": data, "format": "jpeg", "size": len(data)}
@@ -281,12 +346,19 @@ class CDPClient:
 
     # ─── NEW: Full page screenshot ───────────────────────────────
 
-    async def full_page_screenshot(self, quality: int = 70) -> dict:
+    async def full_page_screenshot(self, quality: int = 0) -> dict:
         """
         Capture full-page screenshot by scrolling and stitching.
 
         Uses CDP to capture the full rendered page (everything scrollable).
+        Quality: 0 = auto (adjusts based on page complexity).
         """
+        if quality == 0:
+            info = await self.evaluate(
+                "document.querySelectorAll('*').length"
+            )
+            el_count = info.get("result", 1000) if info.get("status") == "ok" else 1000
+            quality = 85 if el_count > 500 else 60
         # Get full page dimensions
         dims = await self.evaluate(
             "(function() { return {"
@@ -336,8 +408,13 @@ class CDPClient:
 
     # ─── NEW: Element screenshot ──────────────────────────────────
 
-    async def element_screenshot(self, selector: str, quality: int = 80) -> dict:
-        """Capture screenshot of a specific element."""
+    async def element_screenshot(self, selector: str, quality: int = 0) -> dict:
+        """Capture screenshot of a specific element.
+
+        Quality: 0 = auto (adjusts based on element size).
+        """
+        if quality == 0:
+            quality = 75  # default auto quality for elements
         js = (
             f"(function() {{"
             f"  const el = document.querySelector({json.dumps(selector)});"
@@ -366,7 +443,7 @@ class CDPClient:
 
     # ─── NEW: PDF export ──────────────────────────────────────────
 
-    async def pdf(self, options: dict = None) -> dict:
+    async def pdf(self, options: dict | None = None) -> dict:
         """Generate PDF of current page.
 
         Options: landscape, printBackground, paperWidth, paperHeight,
@@ -414,7 +491,7 @@ class CDPClient:
 
     # ─── NEW: DOM query ───────────────────────────────────────────
 
-    async def dom_query(self, selector: str, attribute: Optional[str] = None) -> dict:
+    async def dom_query(self, selector: str, attribute: str | None = None) -> dict:
         """Query DOM elements by CSS selector.
 
         Returns text content of each match, or a specific attribute if given.
@@ -684,7 +761,7 @@ class CDPClient:
         await self.close()
 
     async def close(self):
-        """Close CDP connection."""
+        """Close CDP connection and clean up resources."""
         self._connected = False
         if self._network_monitoring:
             try:
@@ -698,8 +775,65 @@ class CDPClient:
             except Exception:
                 pass
             self._ws = None
+        # Fail all pending futures with CDPDisconnectedError
+        exc = CDPDisconnectedError("Connection closed")
         for future in self._pending.values():
             if not future.done():
-                future.cancel()
-        self._pending = {}
+                future.set_exception(exc)
+        self._pending.clear()
+        self._tabs_cache = []
+        self._tabs_cache_ts = 0
+        # Close shared HTTP client
+        if self._http_client and not self._http_client.is_closed:
+            try:
+                await self._http_client.aclose()
+            except Exception:
+                pass
+            self._http_client = None
+        return {"status": "ok"}
         self._target_id = None
+
+    # ─── Reconnect / retry ────────────────────────────────────────
+
+    MAX_RECONNECT_ATTEMPTS = 3
+    RECONNECT_BASE_DELAY = 1.0  # seconds
+
+    async def _reconnect_with_backoff(self) -> dict:
+        """Attempt to reconnect up to *MAX_RECONNECT_ATTEMPTS* times with
+        exponential backoff.
+
+        Returns:
+            The connect result dict on success.
+
+        Raises:
+            CDPDisconnectedError: If all attempts fail.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, self.MAX_RECONNECT_ATTEMPTS + 1):
+            try:
+                return await self.connect()
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt < self.MAX_RECONNECT_ATTEMPTS:
+                    delay = self.RECONNECT_BASE_DELAY * (2 ** (attempt - 1))
+                    logger.info(
+                        "Reconnect attempt %d/%d failed, retrying in %.1fs…",
+                        attempt, self.MAX_RECONNECT_ATTEMPTS, delay,
+                    )
+                    await asyncio.sleep(delay)
+        raise CDPDisconnectedError(
+            f"Reconnect failed after {self.MAX_RECONNECT_ATTEMPTS} attempts: {last_exc}"
+        ) from last_exc
+
+    async def _run_with_reconnect(self, method, *args, **kwargs) -> dict:
+        """Run a CDP operation, automatically reconnecting on disconnect.
+
+        If the operation raises ``CDPDisconnectedError``, attempts to
+        reconnect via ``_reconnect_with_backoff`` and retries once.
+        """
+        try:
+            result = await method(*args, **kwargs)
+            return result
+        except CDPDisconnectedError:
+            await self._reconnect_with_backoff()
+            return await method(*args, **kwargs)

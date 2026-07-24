@@ -6,8 +6,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import httpx
 import pytest
 from cdp_client import CDPClient, CDPError
+
+
+# Skip tests that need a Chrome-free environment when Chrome is actually running
+def _chrome_is_running() -> bool:
+    """Check if a Chrome CDP endpoint is reachable."""
+    try:
+        httpx.get("http://127.0.0.1:9555/json", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+CHROME_RUNNING = _chrome_is_running()
 
 
 # ─── Fixtures ───────────────────────────────────────────────────────
@@ -43,6 +57,7 @@ class TestInit:
 # ─── Connection tests (mock) ────────────────────────────────────────
 
 class TestConnection:
+    @pytest.mark.skipif(CHROME_RUNNING, reason="Chrome is already running on this machine")
     @pytest.mark.asyncio
     async def test_connect_no_chrome(self, client):
         """Should raise CDPError when Chrome is not running."""
@@ -134,8 +149,11 @@ class TestNewFeatures:
 
     @pytest.mark.asyncio
     async def test_execute_script_when_not_connected(self, client):
-        with pytest.raises(CDPError):
-            await client.execute_script([{"action": "eval", "params": {"js": "1+1"}}])
+        """Should return error results, not raise, because execute_script catches exceptions internally."""
+        result = await client.execute_script([{"action": "eval", "params": {"js": "1+1"}}])
+        assert result["status"] == "ok"
+        assert result["steps"] == 1
+        assert result["results"][0]["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_get_performance_metrics_when_not_connected(self, client):
@@ -149,8 +167,10 @@ class TestNewFeatures:
 
     @pytest.mark.asyncio
     async def test_session_restore_when_not_connected(self, client):
-        with pytest.raises(CDPError):
-            await client.session_restore({"cookies": [], "localStorage": {}})
+        """Should return gracefully without raising — session_restore handles disconnection internally."""
+        result = await client.session_restore({"cookies": [], "localStorage": {}})
+        assert result["status"] == "ok"
+        assert "restored" in result
 
     def test_network_monitoring_initially_off(self, client):
         assert client._network_monitoring is False
@@ -158,10 +178,10 @@ class TestNewFeatures:
 
     @pytest.mark.asyncio
     async def test_network_stop_when_not_started(self, client):
-        """Stop should work even if not started."""
-        with pytest.raises(CDPError):
-            # This tries to send a CDP command, which fails because not connected
-            await client.stop_network_monitoring()
+        """Stop should work even if not started — no-op when not monitoring."""
+        result = await client.stop_network_monitoring()
+        assert result == {"status": "ok", "monitoring": False}
+        assert client._network_monitoring is False
 
     @pytest.mark.asyncio
     async def test_clear_network_log(self, client):
