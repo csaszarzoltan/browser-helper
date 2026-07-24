@@ -1035,6 +1035,40 @@ class CDPClient:
     select = document.querySelector(target);
   }}
 
+  if (!select) {{
+    // Search inside same-origin iframes
+    const iframes = document.querySelectorAll("iframe");
+    for (let ifr of iframes) {{
+      let doc = null;
+      try {{ doc = ifr.contentDocument || ifr.contentWindow?.document; }} catch(e) {{}}
+      if (!doc) continue;
+      if (by === "label") {{
+        const labels = doc.querySelectorAll("label");
+        const low2 = target.toLowerCase().trim();
+        for (let lbl of labels) {{
+          const t = (lbl.textContent || "").toLowerCase().trim();
+          if (t === low2 || t.includes(low2)) {{
+            const inputId = lbl.getAttribute("for");
+            if (inputId) {{
+              const el = doc.getElementById(inputId);
+              if (el && el.tagName === "SELECT") {{ select = el; break; }}
+            }}
+            const parent = lbl.closest(".form-group, .field, div");
+            if (parent) {{
+              const sel = parent.querySelector("select");
+              if (sel) {{ select = sel; break; }}
+            }}
+          }}
+        }}
+      }} else if (by === "name") {{
+        select = doc.querySelector("select[name=" + JSON.stringify(target) + "]");
+      }} else if (by === "selector") {{
+        select = doc.querySelector(target);
+      }}
+      if (select) break;
+    }}
+  }}
+
   if (!select) return JSON.stringify({{"status": "error", "error": "select not found: " + target}});
 
   // Find and select the option
