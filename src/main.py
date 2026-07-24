@@ -31,6 +31,8 @@ from pydantic import BaseModel
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
 from cdp_client import CDPClient
+from settings_manager import SettingsManager
+from chrome_manager import ChromeManager
 
 # Paths excluded from auth and rate-limiting middleware
 PUBLIC_PATHS = {"/", "/health", "/ready", "/ws"}
@@ -105,6 +107,10 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 # ---------------------------------------------------------------------------
 client = CDPClient()
 
+# Settings and Chrome process manager
+settings_mgr = SettingsManager()
+chrome_mgr = ChromeManager(settings_mgr)
+
 # Operation log: list of dicts, max 100 entries
 # Each entry: {timestamp, operation, status, duration_ms, details}
 operation_log: list[dict[str, Any]] = []
@@ -176,6 +182,25 @@ class SetCookieRequest(BaseModel):
 class DOMQueryRequest(BaseModel):
     selector: str
     attribute: str | None = None
+
+
+# ─── Settings & Chrome management models ────────────────────────
+
+
+class SettingsRequest(BaseModel):
+    chrome_profile_dir: str | None = None
+    chrome_debug_port: int | None = None
+    chrome_path: str | None = None
+
+
+class LaunchRequest(BaseModel):
+    profile_dir: str | None = None
+    port: int | None = None
+    chrome_path: str | None = None
+
+
+class StopRequest(BaseModel):
+    pid: int | None = None
 
 
 class DOMClickAllRequest(BaseModel):
@@ -559,6 +584,75 @@ async def page_diff(body: dict | None = None):
     """
     prev = (body or {}).get("previous_snapshot")
     return await run_op("page_diff", client.page_diff, prev)
+
+
+# ─── Settings & Chrome management ──────────────────────────────
+
+
+@app.get("/settings")
+async def get_settings():
+    """Return all saved settings (profile dir, debug port, Chrome path)."""
+    return {
+        "status": "ok",
+        "settings": settings_mgr.get_all(),
+    }
+
+
+@app.post("/settings")
+async def update_settings(body: SettingsRequest):
+    """Update one or more settings (profile dir, debug port, Chrome path).
+
+    Example: {"chrome_profile_dir": "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data\\Profile 1", "chrome_debug_port": 9555}
+    """
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        return {"status": "ok", "message": "Nothing to update", "settings": settings_mgr.get_all()}
+    settings_mgr.update(updates)
+    logger.info("Settings updated: %s", updates)
+    return {"status": "ok", "message": "Settings saved", "updated": updates, "settings": settings_mgr.get_all()}
+
+
+@app.post("/browser/launch")
+async def browser_launch(body: LaunchRequest | None = None):
+    """Launch Chrome with remote debugging.
+
+    Uses saved settings for profile dir, port, and Chrome path.
+    You can override any of them per-request.
+
+    If the configured port is busy (not Chrome), auto-increments
+    up to +10 and saves the working port for next time.
+
+    Returns the actual port, PID, and CDP URLs for connecting.
+    """
+    kwargs = {}
+    if body:
+        if body.profile_dir is not None:
+            kwargs["profile_dir"] = body.profile_dir
+        if body.port is not None:
+            kwargs["port"] = body.port
+        if body.chrome_path is not None:
+            kwargs["chrome_path"] = body.chrome_path
+    result = await chrome_mgr.launch(**kwargs)
+    return {"status": "ok" if result.get("status") == "ok" else "error",
+            "operation": "browser_launch",
+            "result": result}
+
+
+@app.post("/browser/stop")
+async def browser_stop(body: StopRequest | None = None):
+    """Stop Chrome (kill the managed process)."""
+    kwargs = {}
+    if body and body.pid is not None:
+        kwargs["pid"] = body.pid
+    result = await chrome_mgr.stop(**kwargs)
+    return {"status": "ok", "operation": "browser_stop", "result": result}
+
+
+@app.get("/browser/status")
+async def browser_status():
+    """Check if Chrome is running (port check, no CDP call)."""
+    result = chrome_mgr.status()
+    return {"status": "ok", "operation": "browser_status", "result": result}
 
 
 @app.post("/screenshot")
