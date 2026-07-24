@@ -290,6 +290,19 @@ class FindElementRequest(BaseModel):
     tag: str | None = None
 
 
+# ─── New: Form select / iframe / page outline models ─────────
+
+
+class FormSelectRequest(BaseModel):
+    by: str  # "label", "name", "selector"
+    text_or_value: str
+    option_value: str | None = None
+
+
+class IframeRequest(BaseModel):
+    index: int = 0
+
+
 # ─── New: Page analysis models ──────────────────────────────
 
 
@@ -687,6 +700,62 @@ async def find_element(body: FindElementRequest):
     """
     return await run_op("find_element", client.find_element_by_text,
                         body.text, body.tag)
+
+
+# ─── New: Form select / iframe / page outline ──────────────────
+
+
+@app.post("/form/select")
+async def form_select(body: FormSelectRequest):
+    """Select an option from a <select> dropdown by label, name, or selector.
+
+    ``by`` = \"label\" | \"name\" | \"selector\"
+    ``text_or_value`` = label text, name attr, or CSS selector
+    ``option_value`` = optional: select option by value instead of display text
+
+    Examples:
+      {\"by\": \"label\", \"text_or_value\": \"Country\", \"option_value\": \"HU\"}
+      {\"by\": \"selector\", \"text_or_value\": \"#country\", \"option_value\": \"Hungary\"}
+      {\"by\": \"name\", \"text_or_value\": \"country\", \"option_value\": \"HU\"}
+    """
+    return await run_op("form_select", client.form_select,
+                        body.by, body.text_or_value, body.option_value)
+
+
+@app.post("/page/iframe-text")
+async def iframe_text(body: IframeRequest | None = None):
+    """Extract text content from a specific iframe (index-based).
+
+    *index*: which iframe (0 = first). -1 returns main page text.
+
+    Returns the iframe's URL, title, and visible text.
+    Cross-origin iframes return an error (CORS restriction).
+    """
+    idx = body.index if body else 0
+    return await run_op("get_iframe_text", client.get_iframe_text, idx)
+
+
+@app.post("/page/iframe/switch")
+async def iframe_switch(body: IframeRequest | None = None):
+    """Switch active context to a specific iframe.
+
+    *index*: which iframe (0 = first). -1 switches back to main page.
+
+    After switch, /click, /type, /page/analyze operate inside the iframe.
+    """
+    idx = body.index if body else 0
+    return await run_op("switch_to_iframe", client.switch_to_iframe, idx)
+
+
+@app.post("/page/outline")
+async def page_outline():
+    """Extract the page's heading hierarchy as a structured outline.
+
+    Returns h1-h6 with text, id, position (x, y), and a snippet of the
+    following paragraph.  Perfect for understanding long document structure
+    without reading the full text — much cheaper than /page/text.
+    """
+    return await run_op("get_page_outline", client.get_page_outline)
 
 
 # ─── Settings & Chrome management ──────────────────────────────

@@ -979,7 +979,270 @@ class CDPClient:
             "count": len(file_paths),
         }
 
-    # ─── NEW: Cookie management ───────────────────────────────────
+    # ─── NEW: Dropdown select via label or value ─────────────────
+
+    async def form_select(self, by: str, text_or_value: str, option_value: str | None = None) -> dict:
+        """Select an option from a <select> dropdown.
+
+        ``by`` is one of:
+        - ``\"label\"`` — finds the select by a visible label text, selects option by visible text
+        - ``\"name\"`` — finds the select by name attribute
+        - ``\"selector\"`` — finds the select by CSS selector
+
+        ``text_or_value`` — label text, name, or CSS selector (depending on ``by``).
+        ``option_value`` — optional: if provided, selects by ``option.value`` instead of option text.
+
+        Examples:
+          form_select(\"label\", \"Country\", \"Hungary\")
+            → finds <select> whose <label> contains \"Country\", selects the <option> with text \"Hungary\"
+
+          form_select(\"selector\", \"#country\", \"HU\")
+            → uses CSS selector ``#country``, selects <option value=\"HU\">
+        """
+        await self._activate_current()
+
+        # Build the JS to find and set the select
+        js = f"""
+(function() {{
+  const by = {json.dumps(by)};
+  const target = {json.dumps(text_or_value)};
+  const optVal = {json.dumps(option_value)};
+
+  // Find the <select> element
+  let select = null;
+  if (by === "label") {{
+    const labels = document.querySelectorAll("label");
+    const low = target.toLowerCase().trim();
+    for (let lbl of labels) {{
+      const t = (lbl.textContent || "").toLowerCase().trim();
+      if (t === low || t.includes(low)) {{
+        const inputId = lbl.getAttribute("for");
+        if (inputId) {{
+          const el = document.getElementById(inputId);
+          if (el && el.tagName === "SELECT") {{ select = el; break; }}
+        }}
+        // Check parent for select
+        const parent = lbl.closest(".form-group, .field, div");
+        if (parent) {{
+          const sel = parent.querySelector("select");
+          if (sel) {{ select = sel; break; }}
+        }}
+      }}
+    }}
+  }} else if (by === "name") {{
+    select = document.querySelector("select[name=" + JSON.stringify(target) + "]");
+  }} else if (by === "selector") {{
+    select = document.querySelector(target);
+  }}
+
+  if (!select) return JSON.stringify({{"status": "error", "error": "select not found: " + target}});
+
+  // Find and select the option
+  const options = Array.from(select.options);
+  let found = false;
+  if (optVal) {{
+    // Match by value
+    for (let opt of options) {{
+      if (opt.value === optVal) {{
+        select.value = optVal;
+        found = true;
+        break;
+      }}
+    }}
+  }} else {{
+    // Match by visible text
+    const lowText = target.toLowerCase().trim();
+    for (let opt of options) {{
+      if ((opt.textContent || "").toLowerCase().trim() === lowText ||
+          (opt.textContent || "").toLowerCase().trim().includes(lowText)) {{
+        select.value = opt.value;
+        found = true;
+        break;
+      }}
+    }}
+  }}
+
+  if (!found) {{
+    return JSON.stringify({{"status": "error", "error": "option not found: " + (optVal || target)}});
+  }}
+
+  // Fire change event for JS frameworks
+  select.dispatchEvent(new Event("change", {{bubbles: true}}));
+  select.dispatchEvent(new Event("input", {{bubbles: true}}));
+
+  return JSON.stringify({{
+    "status": "ok",
+    "select_name": select.name || "",
+    "select_id": select.id || "",
+    "selected_value": select.value,
+    "selected_text": select.options[select.selectedIndex].textContent,
+  }});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"status": "error", "error": f"parse failed: {str(raw)[:200]}"}
+        return data
+
+    # ─── NEW: Iframe text extraction ──────────────────────────────
+
+    async def get_iframe_text(self, iframe_index: int = 0) -> dict:
+        """Extract text content from a specific iframe.
+
+        *iframe_index*: which iframe on the page (0 = first).
+        Returns the innerText of the iframe's document body.
+        """
+        await self._activate_current()
+        js = f"""
+(function() {{
+  const idx = {iframe_index};
+  const iframes = document.querySelectorAll("iframe");
+  if (idx >= iframes.length) {{
+    return JSON.stringify({{"status": "error", "error": "iframe index out of range: " + idx + " / " + iframes.length}});
+  }}
+  const iframe = iframes[idx];
+  let doc = null;
+  try {{
+    doc = iframe.contentDocument || iframe.contentWindow?.document;
+  }} catch(e) {{
+    return JSON.stringify({{"status": "error", "error": "cannot access iframe: " + e.message}});
+  }}
+  if (!doc) {{
+    return JSON.stringify({{"status": "error", "error": "iframe document not accessible (cross-origin)"}});
+  }}
+  const text = doc.body ? doc.body.innerText || "" : "";
+  return JSON.stringify({{
+    "status": "ok",
+    "url": doc.URL || "",
+    "title": doc.title || "",
+    "text": text.substring(0, 10000),
+    "length": text.length,
+  }});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"status": "error", "error": f"parse failed: {str(raw)[:200]}"}
+        return data
+
+    # ─── NEW: Switch to iframe context ────────────────────────────
+
+    async def switch_to_iframe(self, iframe_index: int = 0) -> dict:
+        """Switch the active context to a specific iframe.
+
+        After this, commands like click, type, analyze_page will
+        operate inside the iframe. Use iframe_index=-1 to switch back
+        to the main page.
+        """
+        await self._activate_current()
+        js = f"""
+(function() {{
+  const idx = {iframe_index};
+  if (idx < 0) {{
+    // Switch back to main page (top window focus)
+    window.focus();
+    return JSON.stringify({{"status": "ok", "context": "main"}});
+  }}
+  const iframes = document.querySelectorAll("iframe");
+  if (idx >= iframes.length) {{
+    return JSON.stringify({{"status": "error", "error": "iframe index out of range: " + idx + " / " + iframes.length}});
+  }}
+  const iframe = iframes[idx];
+  try {{
+    const iWindow = iframe.contentWindow;
+    if (iWindow) {{
+      // Focus the iframe's window
+      iWindow.focus();
+      return JSON.stringify({{
+        "status": "ok",
+        "context": "iframe",
+        "index": idx,
+        "src": iframe.src || "",
+        "title": iWindow.document?.title || "",
+      }});
+    }}
+  }} catch(e) {{
+    return JSON.stringify({{"status": "error", "error": "cannot switch to iframe: " + e.message}});
+  }}
+  return JSON.stringify({{"status": "error", "error": "iframe window not accessible"}});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"status": "error", "error": f"parse failed: {str(raw)[:200]}"}
+        return data
+
+    # ─── NEW: Page outline (heading hierarchy) ────────────────────
+
+    async def get_page_outline(self) -> dict:
+        """Extract the page's heading hierarchy (h1-h6) as a structured outline.
+
+        Returns headings grouped by level, with each heading's position
+        and following paragraph text. Useful for quickly understanding
+        long document structure without reading the full text.
+        """
+        await self._activate_current()
+        js = r"""
+(function() {
+  const result = {h1: [], h2: [], h3: [], h4: [], h5: [], h6: []};
+  const tags = ["h1", "h2", "h3", "h4", "h5", "h6"];
+
+  tags.forEach(function(tag) {
+    document.querySelectorAll(tag).forEach(function(el) {
+      if (el.offsetParent === null) return;
+      const text = (el.textContent || "").trim();
+      if (!text) return;
+
+      // Get the paragraph/section text immediately following this heading
+      let next = el.nextElementSibling;
+      let snippet = "";
+      while (next && !tags.includes(next.tagName.toLowerCase())) {
+        const t = (next.textContent || "").trim();
+        if (t) {
+          snippet = t.substring(0, 300);
+          break;
+        }
+        next = next.nextElementSibling;
+      }
+
+      const r = el.getBoundingClientRect();
+      result[tag].push({
+        text: text.substring(0, 200),
+        snippet: snippet,
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        id: el.id || "",
+      });
+    });
+  });
+
+  // Count total headings
+  result.total = result.h1.length + result.h2.length + result.h3.length +
+                 result.h4.length + result.h5.length + result.h6.length;
+
+  // Extract meta info
+  result.url = window.location.href;
+  result.title = document.title;
+
+  return JSON.stringify(result);
+})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"status": "error", "error": f"parse failed: {str(raw)[:200]}"}
+        return {"status": "ok", "result": data}
 
     async def get_cookies(self) -> dict:
         """Get all browser cookies."""
@@ -1157,6 +1420,22 @@ class CDPClient:
                 elif action == "close":
                     await self.close()
                     res = {"status": "ok", "action": "close"}
+                elif action == "form_select":
+                    res = await self.form_select(
+                        params["by"],
+                        params["text_or_value"],
+                        params.get("option_value"),
+                    )
+                elif action == "get_iframe_text":
+                    res = await self.get_iframe_text(
+                        params.get("iframe_index", 0),
+                    )
+                elif action == "switch_to_iframe":
+                    res = await self.switch_to_iframe(
+                        params.get("iframe_index", 0),
+                    )
+                elif action == "get_page_outline":
+                    res = await self.get_page_outline()
                 else:
                     res = {"status": "error", "error": f"Unknown action: {action}"}
             except Exception as e:
@@ -1616,6 +1895,25 @@ class CDPClient:
   // Text summary
   result.text_preview = (document.body ? document.body.innerText.substring(0, 2000) : "");
   result.text_length = document.body ? (document.body.innerText || "").length : 0;
+
+  // Iframe detection
+  result.iframes = [];
+  document.querySelectorAll("iframe").forEach(function(ifr, idx) {
+    if (ifr.offsetParent === null) return;
+    var src = ifr.src || "";
+    var domain = "";
+    try { domain = new URL(src).hostname; } catch(e) {}
+    result.iframes.push({
+      index: idx,
+      src: src.substring(0, 200),
+      domain: domain,
+      title: ifr.title || "",
+      width: ifr.clientWidth || 0,
+      height: ifr.clientHeight || 0,
+      name: ifr.name || "",
+      id: ifr.id || "",
+    });
+  });
 
   return JSON.stringify(result);
 })();

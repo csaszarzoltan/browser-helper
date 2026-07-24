@@ -419,6 +419,33 @@ input[type="text"] { width: 100%; }
           <button class="btn success" onclick="uploadFile()"><i class="fas fa-upload"></i> Upload</button>
         </div>
         <div id="upload-result" style="font-size:.7rem;color:#94a3b8"></div>
+
+        <!-- Divider -->
+        <hr style="border-color:#334155;margin:4px 0">
+
+        <!-- Form Select -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 0.7fr;gap:6px;align-items:end">
+          <input type="text" id="fs-label" placeholder='Label (e.g. "Country")' />
+          <input type="text" id="fs-option" placeholder="Option text" />
+          <input type="text" id="fs-by" placeholder='by="label"' style="font-size:.65rem" />
+          <button class="btn" onclick="formSelect()"><i class="fas fa-caret-down"></i> Select</button>
+        </div>
+        <div id="fs-result" style="font-size:.7rem;color:#94a3b8"></div>
+
+        <!-- Iframe Tools -->
+        <div style="display:grid;grid-template-columns:0.5fr 1fr 1fr;gap:6px;align-items:end">
+          <input type="number" id="iframe-idx" value="0" min="0" style="width:50px" />
+          <button class="btn" onclick="getIframeText()"><i class="fas fa-file"></i> Iframe Text</button>
+          <button class="btn" onclick="switchIframe()"><i class="fas fa-exchange-alt"></i> Switch</button>
+        </div>
+        <div id="iframe-result" style="font-size:.7rem;color:#94a3b8;max-height:80px;overflow-y:auto"></div>
+
+        <!-- Page Outline -->
+        <div style="display:grid;grid-template-columns:1fr 0.5fr;gap:6px;align-items:end">
+          <button class="btn" onclick="getPageOutline()"><i class="fas fa-list-tree"></i> Page Outline</button>
+          <span style="font-size:.65rem;color:#64748b" id="outline-count"></span>
+        </div>
+        <div id="outline-result" style="font-size:.7rem;color:#94a3b8;max-height:120px;overflow-y:auto"></div>
       </div>
     </div>
   </div>
@@ -1069,6 +1096,86 @@ async function uploadFile() {
     toast(`<i class="fas fa-upload"></i> ${data.result.count} file(s) uploaded`, 'success');
   } else {
     resultEl.innerHTML = `<span style="color:#f87171">❌ ${data?.error || 'Upload failed'}</span>`;
+  }
+}
+
+// ─── NEW: Form Select ────────────────────────────────────────
+async function formSelect() {
+  const label = document.getElementById('fs-label').value;
+  const option = document.getElementById('fs-option').value;
+  const by = document.getElementById('fs-by').value || 'label';
+  if (!label || !option) { toast('Enter label and option text', 'warning'); return; }
+  const body = { by, text_or_value: label, option_value: option };
+  const data = await apiPost('/form/select', body);
+  const el = document.getElementById('fs-result');
+  if (data && data.result && data.result.status === 'ok') {
+    el.innerHTML = `<span style="color:#22c55e">✅ "${data.result.selected_text}" (value=${data.result.selected_value})</span>`;
+    toast(`<i class="fas fa-check"></i> Selected "${data.result.selected_text}"`, 'success');
+  } else {
+    const err = data?.result?.error || data?.error || 'Select failed';
+    el.innerHTML = `<span style="color:#f87171">❌ ${err}</span>`;
+  }
+}
+
+// ─── NEW: Iframe Tools ────────────────────────────────────────
+async function getIframeText() {
+  const idx = parseInt(document.getElementById('iframe-idx').value) || 0;
+  const body = { index: idx };
+  const data = await apiPost('/page/iframe-text', body);
+  const el = document.getElementById('iframe-result');
+  if (data && data.result && data.result.status === 'ok') {
+    const r = data.result;
+    el.innerHTML = `<span style="color:#22c55e">✅ [${idx}] ${r.title||'untitled'}` +
+      (r.url ? ` <code style="font-size:.65rem">${r.url.substring(0,80)}</code>` : '') +
+      ` — ${(r.text||'').length} chars</span>` +
+      `<pre style="font-size:.6rem;margin:2px 0;max-height:60px;overflow:auto">${(r.text||'').substring(0,300)}</pre>`;
+    toast(`<i class="fas fa-file"></i> Iframe ${idx}: ${(r.text||'').length} chars`, 'success');
+  } else {
+    el.innerHTML = `<span style="color:#f87171">❌ ${data?.result?.error || data?.error || 'Failed'}</span>`;
+  }
+}
+
+async function switchIframe() {
+  const idx = parseInt(document.getElementById('iframe-idx').value) || 0;
+  const body = { index: idx };
+  const data = await apiPost('/page/iframe/switch', body);
+  const el = document.getElementById('iframe-result');
+  if (data && data.result && data.result.status === 'ok') {
+    const r = data.result;
+    el.innerHTML = `<span style="color:#22c55e">✅ Switched to ${r.context || 'iframe'}${r.title ? ': '+r.title : ''}</span>`;
+    toast(`<i class="fas fa-exchange-alt"></i> Switched to iframe ${idx}`, 'success');
+  } else {
+    el.innerHTML = `<span style="color:#f87171">❌ ${data?.result?.error || data?.error || 'Switch failed'}</span>`;
+  }
+}
+
+// ─── NEW: Page Outline ────────────────────────────────────────
+async function getPageOutline() {
+  const data = await apiPost('/page/outline');
+  const el = document.getElementById('outline-result');
+  const countEl = document.getElementById('outline-count');
+  if (data && data.result && data.result.result) {
+    const r = data.result.result;
+    const headings = ['h1','h2','h3','h4','h5','h6'];
+    let html = '';
+    let total = 0;
+    headings.forEach(function(tag) {
+      const items = r[tag] || [];
+      total += items.length;
+      items.forEach(function(h) {
+        html += `<div style="padding:1px 0"><b>${tag.toUpperCase()}</b> ` +
+          `<a href="#${h.id||''}" style="color:#60a5fa;cursor:pointer" ` +
+          `onclick="eval('window.location.hash=\\\'${h.id||''}\\\'')" ` +
+          `title="${(h.snippet||'').substring(0,100)}">` +
+          `${h.text.substring(0,60)}</a>` +
+          ` <span style="color:#64748b;font-size:.6rem">(${h.x},${h.y})</span></div>`;
+      });
+    });
+    countEl.textContent = `${total} heading(s)`;
+    el.innerHTML = html || '<span style="color:#94a3b8">No headings found</span>';
+    toast(`<i class="fas fa-list-tree"></i> ${total} heading(s)`, 'success');
+  } else {
+    el.innerHTML = '<span style="color:#f87171">Failed</span>';
   }
 }
 // ============================================================
