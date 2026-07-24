@@ -388,6 +388,41 @@ input[type="text"] { width: 100%; }
     </div>
   </div>
 
+  <!-- ── Advanced Tools ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fas fa-tools"></i> Advanced Tools</h2>
+    </div>
+    <div class="card-body no-scroll">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <!-- Page Text -->
+        <div class="btn-group" style="grid-template-columns:1fr 1fr">
+          <button class="btn" onclick="getPageText()"><i class="fas fa-file-alt"></i> Page Text</button>
+          <button class="btn" onclick="apiPost('/page/text').then(r => toast('Page text extracted', 'success'))"><i class="fas fa-copy"></i> Extract Text</button>
+        </div>
+        <div id="page-text-output" style="display:none">
+          <textarea readonly rows="4" style="width:100%;font-size:.7rem;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:6px;margin-top:4px"></textarea>
+        </div>
+
+        <!-- Find Element -->
+        <div style="display:grid;grid-template-columns:3fr 1fr 1fr;gap:6px;align-items:end">
+          <input type="text" id="find-text" placeholder="Search text (e.g. 'Submit order')" />
+          <input type="text" id="find-tag" placeholder="Tag" style="width:60px" />
+          <button class="btn primary" onclick="findElement()"><i class="fas fa-search"></i> Find</button>
+        </div>
+        <div id="find-result" style="font-size:.7rem;color:#94a3b8;max-height:120px;overflow-y:auto"></div>
+
+        <!-- File Upload -->
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:6px;align-items:end">
+          <input type="text" id="upload-selector" placeholder='CSS selector (e.g. "#file-input")' />
+          <input type="text" id="upload-path" placeholder="File path" />
+          <button class="btn success" onclick="uploadFile()"><i class="fas fa-upload"></i> Upload</button>
+        </div>
+        <div id="upload-result" style="font-size:.7rem;color:#94a3b8"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Screenshot Preview ── -->
   <div class="card">
     <div class="card-header">
@@ -983,7 +1018,59 @@ function clearConsole() {
 }
 
 // ============================================================
-//  CHROME MANAGEMENT
+//  ADVANCED TOOLS
+// ============================================================
+async function getPageText() {
+  const data = await apiPost('/page/text');
+  if (data && data.result) {
+    const text = data.result.text || data.result.result || '';
+    const el = document.getElementById('page-text-output');
+    const ta = el.querySelector('textarea');
+    ta.value = text.substring(0, 2000) + (text.length > 2000 ? '\n\n... (truncated)' : '');
+    el.style.display = 'block';
+    toast(`<i class="fas fa-file-alt"></i> ${data.result.length || text.length} chars extracted`, 'success');
+  }
+}
+
+async function findElement() {
+  const text = document.getElementById('find-text').value;
+  const tag = document.getElementById('find-tag').value;
+  if (!text) { toast('Enter search text', 'warning'); return; }
+  const body = { text, tag: tag || null };
+  const data = await apiPost('/page/find', body);
+  const resultEl = document.getElementById('find-result');
+  if (data && data.result && data.result.result) {
+    const r = data.result.result;
+    if (r.matches && r.matches.length > 0) {
+      resultEl.innerHTML = r.matches.map(m =>
+        `<div style="padding:2px 0"><b>${m.tag}</b> "${m.text.substring(0, 40)}"` +
+        (m.selector ? ` <code style="font-size:.65rem">${m.selector.substring(0, 60)}</code>` : '') +
+        ` <span style="color:#64748b">(${m.x},${m.y})</span></div>`
+      ).join('');
+      toast(`<i class="fas fa-check"></i> ${r.matches.length} match(es)`, 'success');
+    } else {
+      resultEl.innerHTML = '<span style="color:#f87171">No matches</span>';
+      toast('No matches found', 'warning');
+    }
+  } else {
+    resultEl.innerHTML = '<span style="color:#f87171">Error</span>';
+  }
+}
+
+async function uploadFile() {
+  const selector = document.getElementById('upload-selector').value;
+  const filePath = document.getElementById('upload-path').value;
+  if (!selector || !filePath) { toast('Enter selector and file path', 'warning'); return; }
+  const body = { selector, files: [filePath] };
+  const data = await apiPost('/upload', body);
+  const resultEl = document.getElementById('upload-result');
+  if (data && data.status === 'ok') {
+    resultEl.innerHTML = `<span style="color:#22c55e">✅ ${data.result.files[0]} → ${data.result.count} file(s) uploaded</span>`;
+    toast(`<i class="fas fa-upload"></i> ${data.result.count} file(s) uploaded`, 'success');
+  } else {
+    resultEl.innerHTML = `<span style="color:#f87171">❌ ${data?.error || 'Upload failed'}</span>`;
+  }
+}
 // ============================================================
 async function loadChromeSettings() {
   const data = await apiGet('/settings');

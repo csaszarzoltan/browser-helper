@@ -441,7 +441,8 @@ class CDPClient:
     # ─── Click by text ────────────────────────────────────────────
 
     async def click_by_text(self, text: str, timeout: int = 5,
-                            container_selector: str | None = None) -> dict:
+                            container_selector: str | None = None,
+                            nth: int = 0) -> dict:
         """Click an element by its visible text content.
 
         Searches all visible ``a``, ``button``, ``input[type=submit]``,
@@ -451,6 +452,10 @@ class CDPClient:
         If *container_selector* is given, restricts search to elements
         inside that CSS selector (e.g. "accept-modal" to only search
         within a modal).
+
+        If *nth* is given (0-indexed), clicks the Nth matching element
+        instead of the first. Useful for lists of identical buttons
+        (e.g. "Edit", "Delete" in a table).
         """
         await self._activate_current()
         container_js = ""
@@ -462,46 +467,52 @@ class CDPClient:
   const target = {json.dumps(text)};
   const low = target.toLowerCase().trim();
   const deadline = Date.now() + {timeout * 1000};
+  const nth = {nth};
 
-  function findVisible() {{
-    const deadline = Date.now() + {timeout * 1000};
-    while (Date.now() < deadline) {{
-      // Use container root if specified
-      const root = {('document' if not container_selector else 'container')};
-      
-      // Priority 1: exact match on interactive elements
-      const interactive = root.querySelectorAll(
-        "a, button, input[type=submit], input[type=button], [role=button]"
-      );
-      let best = null, bestMatch = 0;
-      for (let el of interactive) {{
-        if (el.offsetParent === null) continue;
-        const txt = (el.textContent || "").toLowerCase().trim();
-        if (txt === low) {{ best = el; bestMatch = 2; break; }}
-        if (txt.includes(low) && bestMatch < 2) {{ best = el; bestMatch = 1; }}
+  function findAll() {{
+    const root = {('document' if not container_selector else 'container')};
+    const results = [];
+    const seen = new Set();
+
+    // Priority: interactive elements
+    const interactive = root.querySelectorAll(
+      "a, button, input[type=submit], input[type=button], [role=button]"
+    );
+    for (let el of interactive) {{
+      if (el.offsetParent === null) continue;
+      const txt = (el.textContent || "").toLowerCase().trim();
+      if (txt === low || txt.includes(low)) {{
+        const key = txt + ":" + Math.round(el.getBoundingClientRect().x) + ":" + Math.round(el.getBoundingClientRect().y);
+        if (!seen.has(key)) {{
+          seen.add(key);
+          results.push(el);
+        }}
       }}
-      if (best && bestMatch >= 2) return best;
-      if (best && bestMatch >= 1) return best;
+    }}
 
-      // Priority 2: exact match on any element (fallback)
+    // Fallback: clickable spans/divs
+    if (results.length === 0) {{
       const all = root.querySelectorAll("[onclick], span, div");
       for (let el of all) {{
         if (el.offsetParent === null) continue;
         const txt = (el.textContent || "").toLowerCase().trim();
         if (txt === low) {{
-          let p = el.parentElement;
-          if (p && ["A", "BUTTON"].includes(p.tagName) &&
-              p.textContent.toLowerCase().trim() === low) return p;
-          if (el.children.length < 3) return el;
+          const key = txt + ":" + Math.round(el.getBoundingClientRect().x);
+          if (!seen.has(key)) {{
+            seen.add(key);
+            results.push(el);
+          }}
         }}
       }}
     }}
-    return null;
+
+    return results;
   }}
 
   while (Date.now() < deadline) {{
-    const el = findVisible();
-    if (el) {{
+    const matches = findAll();
+    if (matches.length > nth) {{
+      const el = matches[nth];
       el.scrollIntoView({{behavior: "instant", block: "center"}});
       const r = el.getBoundingClientRect();
       return JSON.stringify({{
@@ -512,10 +523,12 @@ class CDPClient:
         y: r.y + r.height/2,
         w: r.width,
         h: r.height,
+        match_index: nth,
+        total_matches: matches.length,
       }});
     }}
   }}
-  return JSON.stringify({{status: "error", error: "text not found: " + target.substring(0, 50)}});
+  return JSON.stringify({{status: "error", error: "text not found: " + target.substring(0, 50) + " (nth=" + nth + ")"}});
 }})();
 """
         eval_result = await self.evaluate(js)
@@ -537,6 +550,89 @@ class CDPClient:
             "button": "left", "clickCount": 1,
         })
         data["cdp_click"] = True
+        return {"status": "ok", "text": text, "result": data}
+
+    # ─── NEW: Find element by text ────────────────────────────────
+
+    async def find_element_by_text(self, text: str, tag: str | None = None,
+                                    return_selector: bool = True) -> dict:
+        """Find a visible element by its text content.
+
+        Returns the element's position, CSS selector, and attributes.
+        Does NOT click it — use click_by_text / click_label for that.
+
+        *tag* restricts to a specific HTML tag (button, a, input, label, etc.).
+        *return_selector* generates a unique CSS selector for the element.
+        """
+        await self._activate_current()
+        tag_filter = ""
+        if tag:
+            tag_filter = f"el.tagName.toLowerCase() === {json.dumps(tag.lower())} &&"
+        js = f"""
+(function() {{
+  const target = {json.dumps(text)};
+  const low = target.toLowerCase().trim();
+  const deadline = Date.now() + 5000;
+
+  function getSelector(el) {{
+    if (el.id) return "#" + CSS.escape(el.id);
+    let path = [];
+    let cur = el;
+    while (cur && cur !== document.body) {{
+      let tag = cur.tagName.toLowerCase();
+      if (cur.id) {{ path.unshift("#" + CSS.escape(cur.id)); break; }}
+      let parent = cur.parentElement;
+      if (parent) {{
+        let idx = 1;
+        for (let sib of parent.children) {{
+          if (sib === cur) break;
+          if (sib.tagName === cur.tagName) idx++;
+        }}
+        tag += ":nth-child(" + idx + ")";
+      }}
+      path.unshift(tag);
+      cur = parent;
+    }}
+    return path.join(" > ");
+  }}
+
+  while (Date.now() < deadline) {{
+    const all = document.querySelectorAll("*");
+    const results = [];
+    for (let el of all) {{
+      if (el.offsetParent === null) continue;
+      if (!({tag_filter} true)) continue;
+      const txt = (el.textContent || "").trim().toLowerCase();
+      if (txt === low) {{
+        const r = el.getBoundingClientRect();
+        results.push({{
+          tag: el.tagName,
+          text: (el.textContent || "").trim().substring(0, 100),
+          selector: getSelector(el),
+          x: Math.round(r.x + r.width/2),
+          y: Math.round(r.y + r.height/2),
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          id: el.id || "",
+          name: el.getAttribute("name") || "",
+          type: el.type || "",
+          href: el.getAttribute("href") || "",
+          is_interactive: ["A","BUTTON","INPUT","SELECT","TEXTAREA","LABEL"].includes(el.tagName),
+        }});
+        if (results.length >= 10) break;
+      }}
+    }}
+    if (results.length > 0) return JSON.stringify({{status: "ok", matches: results, count: results.length}});
+  }}
+  return JSON.stringify({{status: "error", error: "element not found: " + target.substring(0, 50)}});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {"status": "error", "error": "parse failed"}
         return {"status": "ok", "text": text, "result": data}
 
     # ─── NEW: Click by label text (framework-safe) ────────────────
@@ -814,6 +910,75 @@ class CDPClient:
         data = result.get("data", "")
         return {"status": "ok", "data": data, "format": "pdf", "size": len(data)}
 
+    # ─── NEW: File upload via CDP ──────────────────────────────────
+
+    async def upload_files(self, selector: str, file_paths: list[str]) -> dict:
+        """Upload files by setting the value of a file input element.
+
+        *selector* is a CSS selector for ``<input type="file">``.
+        *file_paths* are absolute paths to the files on the local machine.
+
+        Uses the CDP ``DOM.setFileInputFiles`` method which bypasses the
+        browser's file dialog — works even when the picker is hidden.
+        """
+        await self._activate_current()
+        # Find the element node via Runtime
+        find_js = (
+            f"(function() {{"
+            f"  const el = document.querySelector({json.dumps(selector)});"
+            f"  if (!el) return null;"
+            f"  if (el.tagName !== 'INPUT' || (el.type !== 'file' && !el.getAttribute('capture')))"
+            f"    return null;"
+            f"  // Resolve backend node ID for CDP"
+            f"  return 1;"
+            f"}})()"
+        )
+        result = await self.evaluate(find_js)
+        if result.get("status") == "error" or result.get("result") is None:
+            return {"status": "error", "error": f"File input not found: {selector}"}
+
+        # Get backend node ID from the element
+        get_node_js = (
+            f"(function() {{"
+            f"  const el = document.querySelector({json.dumps(selector)});"
+            f"  const backend = window.__backendNodeId;"
+            f"  return 1;"
+            f"}})()"
+        )
+
+        # Use DOM.querySelector to get the backend node ID
+        doc_result = await self._send_command("DOM.getDocument", {"depth": 0})
+        doc_node_id = doc_result.get("root", {}).get("nodeId", 0)
+
+        query_result = await self._send_command("DOM.querySelector", {
+            "nodeId": doc_node_id,
+            "selector": selector,
+        })
+        node_id = query_result.get("nodeId", 0)
+        if not node_id:
+            return {"status": "error", "error": f"Element not found via DOM: {selector}"}
+
+        # Set file input files using CDP
+        await self._send_command("DOM.setFileInputFiles", {
+            "nodeId": node_id,
+            "files": file_paths,
+        })
+
+        # Fire change event for JS frameworks
+        await self.evaluate(
+            f"(function() {{"
+            f"  const el = document.querySelector({json.dumps(selector)});"
+            f"  if (el) el.dispatchEvent(new Event('change', {{bubbles: true}}));"
+            f"}})()"
+        )
+
+        return {
+            "status": "ok",
+            "selector": selector,
+            "files": file_paths,
+            "count": len(file_paths),
+        }
+
     # ─── NEW: Cookie management ───────────────────────────────────
 
     async def get_cookies(self) -> dict:
@@ -952,6 +1117,7 @@ class CDPClient:
                         params["text"],
                         params.get("timeout", 5),
                         params.get("container_selector", None),
+                        params.get("nth", 0),
                     )
                 elif action == "form_fill":
                     res = await self.smart_form_fill(
@@ -973,6 +1139,16 @@ class CDPClient:
                 elif action == "page_diff":
                     res = await self.page_diff(
                         params.get("previous_snapshot"),
+                    )
+                elif action == "upload_files":
+                    res = await self.upload_files(
+                        params["selector"],
+                        params["files"],
+                    )
+                elif action == "find_element":
+                    res = await self.find_element_by_text(
+                        params["text"],
+                        params.get("tag"),
                     )
                 elif action == "get_text":
                     res = await self.get_page_text()
@@ -1421,6 +1597,7 @@ class CDPClient:
     placeholder: (el.placeholder || "").substring(0, 40),
     section: section,
     required: el.required === true,
+    checked: el.checked === true,
     has_error: hasError,
     error_text: errorText,
   });

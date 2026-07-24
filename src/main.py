@@ -269,11 +269,25 @@ class ClickTextRequest(BaseModel):
     text: str
     timeout: int = 5
     container_selector: str | None = None
+    nth: int = 0
 
 
 class ClickLabelRequest(BaseModel):
     text: str
     timeout: int = 5
+
+
+# ─── New: Upload, find element models ────────────────────────────
+
+
+class UploadRequest(BaseModel):
+    selector: str
+    files: list[str]
+
+
+class FindElementRequest(BaseModel):
+    text: str
+    tag: str | None = None
 
 
 # ─── New: Page analysis models ──────────────────────────────
@@ -531,7 +545,7 @@ async def click_by_text(body: ClickTextRequest):
     container (e.g. "#accept-modal" to click inside a modal).
     """
     return await run_op("click_text", client.click_by_text,
-                        body.text, body.timeout, body.container_selector)
+                        body.text, body.timeout, body.container_selector, body.nth)
 
 
 @app.post("/click/label")
@@ -621,6 +635,58 @@ async def page_diff(body: dict | None = None):
     """
     prev = (body or {}).get("previous_snapshot")
     return await run_op("page_diff", client.page_diff, prev)
+
+
+# ─── New: File upload ─────────────────────────────────────────
+
+
+@app.post("/upload")
+async def upload_files(body: UploadRequest):
+    """Upload files via a file input element.
+
+    *selector* is a CSS selector for ``<input type="file">``.
+    *files* is a list of absolute file paths on the local machine.
+
+    Uses CDP DOM.setFileInputFiles — bypasses the OS file dialog.
+    Works even when the input is hidden or styled with display:none.
+
+    Example: {"selector": "#image-upload", "files": ["C:\\photos\\test.jpg"]}
+    """
+    return await run_op("upload_files", client.upload_files,
+                        body.selector, body.files)
+
+
+# ─── New: Page text extraction ────────────────────────────────
+
+
+@app.post("/page/text")
+async def page_text():
+    """Extract the full visible text content of the current page.
+
+    Returns the innerText of document.body — cleaner than raw HTML,
+    preserves reading order, no script/style noise.
+
+    Useful for LLM context extraction before deciding what to do.
+    """
+    return await run_op("get_page_text", client.get_page_text)
+
+
+# ─── New: Find element by text ────────────────────────────────
+
+
+@app.post("/page/find")
+async def find_element(body: FindElementRequest):
+    """Find a visible element by its text content.
+
+    Returns position, CSS selector, tag, and attributes for all matches.
+    Does NOT click — use /click/text to click.
+
+    Optional *tag* restricts search (e.g. \"button\", \"a\", \"label\").
+
+    Example: {"text": "Submit order", "tag": "button"}
+    """
+    return await run_op("find_element", client.find_element_by_text,
+                        body.text, body.tag)
 
 
 # ─── Settings & Chrome management ──────────────────────────────
