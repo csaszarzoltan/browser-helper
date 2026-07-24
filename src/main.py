@@ -187,6 +187,25 @@ class NewTabRequest(BaseModel):
     url: str = "about:blank"
 
 
+# ─── New: Smart interaction models ──────────────────────────────
+
+
+class FormFillRequest(BaseModel):
+    fields: list[dict]
+    timeout: int = 5
+
+
+class WaitRequest(BaseModel):
+    selector: str
+    timeout: int = 10
+    visible: bool = True
+
+
+class ClickTextRequest(BaseModel):
+    text: str
+    timeout: int = 5
+
+
 # ---------------------------------------------------------------------------
 # Auth middleware — Bearer token check
 # ---------------------------------------------------------------------------
@@ -372,6 +391,42 @@ async def click_element(body: ClickRequest):
 async def type_text(body: TypeRequest):
     """Type *text* into the element matching *selector*."""
     return await run_op("type", client.type_text, body.selector, body.text)
+
+
+# ─── New: Smart interaction endpoints ────────────────────────────
+
+
+@app.post("/form/fill")
+async def form_fill(body: FormFillRequest):
+    """Fill form fields by label text — no CSS selectors needed.
+
+    Each field in *fields* has ``label`` (search text) and ``value``.
+    The engine finds inputs by <label>, placeholder, name, or aria-label.
+    """
+    return await run_op("form_fill", client.smart_form_fill,
+                        body.fields, body.timeout)
+
+
+@app.post("/wait")
+async def wait_element(body: WaitRequest):
+    """Wait until an element matching *selector* appears in the DOM.
+
+    Polls every 200ms. Returns when found or timeout.
+    Use before form fill, click, or screenshot to ensure the page is ready.
+    """
+    return await run_op("wait", client.wait_for_element,
+                        body.selector, body.timeout, body.visible)
+
+
+@app.post("/click/text")
+async def click_by_text(body: ClickTextRequest):
+    """Click an element by its visible text content.
+
+    Searches a/button/span elements whose text matches.
+    No CSS selector needed — just the text you see on screen.
+    """
+    return await run_op("click_text", client.click_by_text,
+                        body.text, body.timeout)
 
 
 @app.post("/screenshot")

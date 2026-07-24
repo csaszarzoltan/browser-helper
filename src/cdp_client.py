@@ -271,6 +271,221 @@ class CDPClient:
         """Alias for evaluate()."""
         return await self.evaluate(js_code)
 
+    # ─── Smart form fill ──────────────────────────────────────────
+
+    async def smart_form_fill(self, fields: list[dict], timeout: int = 5) -> dict:
+        """Fill form fields by label text — no CSS selectors needed.
+
+        *fields* is a list of ``{"label": "...", "value": "..."}``.
+        The method finds each field by label, placeholder, name, or
+        aria-label, types the value, and returns per-field results.
+        """
+        js = r"""
+(function() {
+  const fields = """ + json.dumps(fields) + r""";
+  const maxWait = """ + str(int(timeout * 1000)) + r""";
+  const results = [];
+
+  function findInput(label) {
+    const low = label.toLowerCase().trim();
+
+    // 1. Label → input via <label for=""> or <label> wrapping
+    const labels = document.querySelectorAll("label");
+    for (let lb of labels) {
+      const lbl = (lb.textContent || "").toLowerCase().trim();
+      if (!lbl.includes(low)) continue;
+
+      // <label for="id">
+      if (lb.getAttribute("for")) {
+        const el = document.getElementById(lb.getAttribute("for"));
+        if (el) return el;
+      }
+      // <label> wrapping <input>
+      const wrapped = lb.querySelector("input, textarea, select");
+      if (wrapped) return wrapped;
+    }
+
+    // 2. Placeholder match
+    const byPlaceholder = document.querySelector(
+      "input[placeholder*='" + CSS.escape(label) + "'], " +
+      "textarea[placeholder*='" + CSS.escape(label) + "']"
+    );
+    if (byPlaceholder) return byPlaceholder;
+
+    // 3. Name / aria-label match
+    const byAttr = document.querySelector(
+      "input[name*='" + CSS.escape(label) + "'], " +
+      "input[aria-label*='" + CSS.escape(label) + "'], " +
+      "textarea[name*='" + CSS.escape(label) + "'], " +
+      "textarea[aria-label*='" + CSS.escape(label) + "']"
+    );
+    if (byAttr) return byAttr;
+
+    // 4. Adjacent label (previous sibling or parent)
+    const all = document.querySelectorAll("input, textarea");
+    for (let el of all) {
+      let prev = el.previousElementSibling;
+      if (prev && (prev.textContent || "").toLowerCase().includes(low)) return el;
+      let parent = el.parentElement;
+      if (parent && (parent.textContent || "").toLowerCase().includes(low) &&
+          parent.children.length < 4) return el;
+    }
+
+    return null;
+  }
+
+  const deadline = Date.now() + maxWait;
+  fields.forEach(function(f) {
+    try {
+      const el = findInput(f.label);
+      if (!el) {
+        results.push({label: f.label, status: "error", error: "field not found"});
+        return;
+      }
+
+      // Wait a bit for element to be interactive
+      while (Date.now() < deadline) {
+        if (el.offsetParent !== null) break;
+      }
+
+      el.focus();
+      el.value = "";
+      el.value = f.value;
+      el.dispatchEvent(new Event("input", {bubbles: true}));
+      el.dispatchEvent(new Event("change", {bubbles: true}));
+      el.dispatchEvent(new Event("blur", {bubbles: true}));
+
+      const tag = el.tagName.toLowerCase();
+      const type = el.type || "";
+      results.push({
+        label: f.label,
+        status: "ok",
+        tag: tag,
+        type: type,
+        filled: f.value.substring(0, 50),
+      });
+    } catch(e) {
+      results.push({label: f.label, status: "error", error: e.message});
+    }
+  });
+
+  return JSON.stringify({fields_filled: results.length, results: results});
+})();
+"""
+        result = await self.evaluate(js)
+        raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed", "raw": str(raw)[:200]}
+        return {"status": "ok", "fields": fields, "result": data}
+
+    # ─── Wait for element ─────────────────────────────────────────
+
+    async def wait_for_element(self, selector: str, timeout: int = 10,
+                               visible: bool = True) -> dict:
+        """Wait until an element matching *selector* appears in DOM.
+
+        Polls every 200 ms. Returns the element's tag and text when found.
+        """
+        js = f"""
+(async function() {{
+  const deadline = Date.now() + {timeout * 1000};
+  const poll = 200;
+  while (Date.now() < deadline) {{
+    const el = document.querySelector({json.dumps(selector)});
+    if (el) {{
+      const isVisible = el.offsetParent !== null;
+      if (!{str(visible).lower()} || isVisible) {{
+        return JSON.stringify({{
+          status: "ok",
+          tag: el.tagName,
+          text: (el.textContent || "").trim().substring(0, 200),
+          visible: isVisible,
+          rect: {{w: el.offsetWidth, h: el.offsetHeight}}
+        }});
+      }}
+    }}
+    await new Promise(r => setTimeout(r, poll));
+  }}
+  return JSON.stringify({{status: "error", error: "timeout after " + {timeout} + "s"}});
+}})();
+"""
+        result = await self.evaluate(js)
+        raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed"}
+        return {"status": "ok", "selector": selector, "timeout": timeout, "result": data}
+
+    # ─── Click by text ────────────────────────────────────────────
+
+    async def click_by_text(self, text: str, timeout: int = 5) -> dict:
+        """Click an element by its visible text content.
+
+        Searches all visible ``a``, ``button``, ``input[type=submit]``,
+        and ``[role=button]`` elements whose text matches. Clicks the
+        first match using real CDP mouse events.
+        """
+        js = f"""
+(function() {{
+  const target = {json.dumps(text)};
+  const low = target.toLowerCase().trim();
+  const deadline = Date.now() + {timeout * 1000};
+
+  function findVisible() {{
+    const candidates = document.querySelectorAll(
+      "a, button, input[type=submit], input[type=button], [role=button], span, div"
+    );
+    for (let el of candidates) {{
+      if (el.offsetParent === null) continue;
+      const txt = (el.textContent || "").toLowerCase().trim();
+      if (txt === low || txt.includes(low)) return el;
+    }}
+    return null;
+  }}
+
+  while (Date.now() < deadline) {{
+    const el = findVisible();
+    if (el) {{
+      el.scrollIntoView({{behavior: "instant", block: "center"}});
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({{
+        status: "ok",
+        tag: el.tagName,
+        text: (el.textContent || "").trim().substring(0, 100),
+        x: r.x + r.width/2,
+        y: r.y + r.height/2,
+        w: r.width,
+        h: r.height,
+      }});
+    }}
+  }}
+  return JSON.stringify({{status: "error", error: "text not found: " + target.substring(0, 50)}});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {"status": "error", "error": "parse failed"}
+        if data.get("status") == "error":
+            return data
+        # Perform real CDP click at the position
+        x, y = data.get("x", 0), data.get("y", 0)
+        await self._send_command("Input.dispatchMouseEvent", {
+            "type": "mousePressed", "x": x, "y": y,
+            "button": "left", "clickCount": 1,
+        })
+        await self._send_command("Input.dispatchMouseEvent", {
+            "type": "mouseReleased", "x": x, "y": y,
+            "button": "left", "clickCount": 1,
+        })
+        data["cdp_click"] = True
+        return {"status": "ok", "text": text, "result": data}
+
     async def click(self, selector: str) -> dict:
         """Click element by CSS selector via real CDP mouse events."""
         js = (
