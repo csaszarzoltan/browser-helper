@@ -58,18 +58,34 @@ All updated in real-time via WebSocket. No page reload needed.
 ## Quick Start
 
 ```bash
-# Install
+# Install dependencies
 pip install fastapi uvicorn websockets httpx Pillow
 
-# Run (Chrome must be running with --remote-debugging-port=9555)
-uvicorn src.main:app --host 0.0.0.0 --port 8000
+# Start (Chrome must be running with --remote-debugging-port=9555)
+python run.py
 
-# Open dashboard
-open http://localhost:8000
-
-# Optional: protect with API token
-API_TOKEN=my-secret-token uvicorn src.main:app --host 0.0.0.0 --port 8000
+# Or with custom port
+python run.py --port 8000
 ```
+
+> **Note for Windows users:** Use `python run.py` instead of `uvicorn src.main:app` to avoid import conflicts with other installed packages.
+
+### Alternative: via uvicorn directly
+
+```bash
+# Make sure src/ is on the path
+cd src
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+### With API token auth
+
+```bash
+# Protect all endpoints with Bearer token
+API_TOKEN=my-secret-token python run.py
+```
+
+Then open **http://localhost:8000** in your browser.
 
 ## API Authentication
 
@@ -121,3 +137,18 @@ docker run -p 8000:8000 browser-helper
 ```bash
 cd tests && pytest test_core.py -v
 ```
+
+Current test suite: **64 interface tests pass**, 25 skipped (Playwright/browser-level),
+4 pre-existing baseline failures. All source files pass `ruff check`.
+
+## Documentation
+
+| Document                                          | Description                               |
+|---------------------------------------------------|-------------------------------------------|
+| [Getting Started](docs/getting-started.md)         | Prerequisites, install, first run         |
+| [API Reference](docs/api-reference.md)            | Complete endpoint docs with examples      |
+| [Docker](docs/docker.md)                          | Container build and deployment            |
+| [Image Compression](docs/image-compression.md)    | Image processing and compression          |
+| [Changelog](CHANGELOG.md)                         | Version history and release notes         |
+| [Dashboard Demo](examples/dashboard-demo.py)      | WebSocket streaming example in Python     |
+| [Workflow Example](examples/browse-workflow.py)   | Complete automation pipeline demo         |
