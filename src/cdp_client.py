@@ -801,18 +801,18 @@ class CDPClient:
                 return {"error": str(e)}
 
         try:
-            async with asyncio.timeout(30):
-                t_res = await _eval("document.title", timeout=8)
+            async with asyncio.timeout(10):
+                t_res = await _eval("document.title", timeout=6)
                 title = ""
                 if isinstance(t_res, dict):
                     title = t_res.get("result", {}).get("result", {}).get("value", "")
 
-                txt_res = await _eval("document.body ? document.body.innerText.substring(0,5000) : ''", timeout=8)
+                txt_res = await _eval("document.body ? document.body.innerText.substring(0,5000) : ''", timeout=6)
                 page_text = ""
                 if isinstance(txt_res, dict):
                     page_text = txt_res.get("result", {}).get("result", {}).get("value", "")
 
-                url_res = await _eval("window.location.href", timeout=8)
+                url_res = await _eval("window.location.href", timeout=6)
                 url = ""
                 if isinstance(url_res, dict):
                     url = url_res.get("result", {}).get("result", {}).get("value", "")
@@ -843,22 +843,24 @@ class CDPClient:
             "text_length": len(page_text or ""),
         }
 
-    async def scan_all_tabs(self) -> list[dict]:
+    async def scan_all_tabs(self, max_concurrent: int = 5) -> list[dict]:
         """Extract content from ALL open tabs WITHOUT switching active tab.
 
+        Scans tabs in parallel (up to *max_concurrent* at a time).
+        Each tab has a hard 12s timeout — unresponsive tabs are skipped.
+
         Returns structured data for every page tab — title, URL, text preview.
-        Skips tabs that timeout or error.
         """
         tabs = await self.discover_tabs()
         page_tabs = [t for t in tabs if t.get("type") == "page"]
-        results = []
-        for tab in page_tabs:
+
+        async def _scan_one(tab):
             try:
-                async with asyncio.timeout(35):
+                async with asyncio.timeout(12):
                     content = await self.get_tab_content_direct(tab["id"])
             except Exception:
                 content = {"status": "error", "error": "unexpected error", "target_id": tab["id"]}
-            results.append({
+            return {
                 "id": tab["id"],
                 "title": content.get("title", tab.get("title", "")),
                 "url": content.get("url", tab.get("url", "")),
@@ -866,7 +868,15 @@ class CDPClient:
                 "text_length": content.get("text_length", 0),
                 "active": tab["id"] == self._active_tab_id,
                 "scan_status": content.get("status", "error"),
-            })
+            }
+
+        # Run in batches to avoid overloading Chrome's WS endpoint
+        results = []
+        for i in range(0, len(page_tabs), max_concurrent):
+            batch = page_tabs[i: i + max_concurrent]
+            batch_results = await asyncio.gather(*[_scan_one(t) for t in batch])
+            results.extend(batch_results)
+
         return results
 
     # ─── NEW: Disable/enable JS ───────────────────────────────────
