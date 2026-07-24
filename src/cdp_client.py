@@ -434,14 +434,29 @@ class CDPClient:
   const low = target.toLowerCase().trim();
   const deadline = Date.now() + {timeout * 1000};
 
-  function findVisible() {{
-    const candidates = document.querySelectorAll(
-      "a, button, input[type=submit], input[type=button], [role=button], span, div"
+  function findVisible(priority) {{
+    // Priority 1: exact match on interactive elements
+    const interactive = document.querySelectorAll(
+      "a, button, input[type=submit], input[type=button], [role=button]"
     );
-    for (let el of candidates) {{
+    for (let el of interactive) {{
       if (el.offsetParent === null) continue;
       const txt = (el.textContent || "").toLowerCase().trim();
       if (txt === low || txt.includes(low)) return el;
+    }}
+
+    // Priority 2: exact match on any element (fallback)
+    const all = document.querySelectorAll("[onclick], span, div");
+    for (let el of all) {{
+      if (el.offsetParent === null) continue;
+      const txt = (el.textContent || "").toLowerCase().trim();
+      if (txt === low) {{
+        // Make sure it's not just a text node inside an interactive element
+        let p = el.parentElement;
+        if (p && ["A", "BUTTON"].includes(p.tagName) &&
+            p.textContent.toLowerCase().trim() === low) return p;
+        if (el.children.length < 3) return el;
+      }}
     }}
     return null;
   }}
