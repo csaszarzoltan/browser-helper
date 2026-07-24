@@ -340,6 +340,54 @@ input[type="text"] { width: 100%; }
     </div>
   </div>
 
+  <!-- ── Chrome Management ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2><i class="fab fa-chrome"></i> Chrome Management</h2>
+    </div>
+    <div class="card-body no-scroll">
+      <div style="margin-bottom:10px">
+        <div class="status-grid" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="stat">
+            <div class="value gray" id="chrome-status-indicator">—</div>
+            <div class="label">Status</div>
+          </div>
+          <div class="stat">
+            <div class="value" id="chrome-port-display">—</div>
+            <div class="label">Port</div>
+          </div>
+          <div class="stat">
+            <div class="value" id="chrome-pid-display" style="font-size:1.2rem">—</div>
+            <div class="label">PID</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
+        <label style="font-size:.72rem;color:#64748b;font-weight:600">PROFILE DIRECTORY</label>
+        <input type="text" id="chrome-profile-dir" placeholder="C:\Users\...\AppData\Local\Google\Chrome\User Data\Default" />
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>
+            <label style="font-size:.72rem;color:#64748b;font-weight:600">DEBUG PORT</label>
+            <input type="number" id="chrome-debug-port" placeholder="9555" />
+          </div>
+          <div>
+            <label style="font-size:.72rem;color:#64748b;font-weight:600">CHROME PATH (üres = auto-detect)</label>
+            <input type="text" id="chrome-path" placeholder="Auto-detect" />
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn primary" onclick="saveChromeSettings()"><i class="fas fa-save"></i> Settings mentése</button>
+        <button class="btn success" onclick="launchChrome()"><i class="fas fa-play"></i> Chrome indítás</button>
+        <button class="btn danger" onclick="stopChrome()"><i class="fas fa-stop"></i> Chrome leállítás</button>
+        <button class="btn" onclick="refreshChromeStatus()"><i class="fas fa-sync"></i> Státusz</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Screenshot Preview ── -->
   <div class="card">
     <div class="card-header">
@@ -934,6 +982,74 @@ function clearConsole() {
   output.innerHTML = '<div class="line info">— Console cleared.</div>';
 }
 
+// ============================================================
+//  CHROME MANAGEMENT
+// ============================================================
+async function loadChromeSettings() {
+  const data = await apiGet('/settings');
+  if (data && data.settings) {
+    document.getElementById('chrome-profile-dir').value = data.settings.chrome_profile_dir || '';
+    document.getElementById('chrome-debug-port').value = data.settings.chrome_debug_port || 9555;
+    document.getElementById('chrome-path').value = data.settings.chrome_path || '';
+  }
+}
+
+async function saveChromeSettings() {
+  const body = {
+    chrome_profile_dir: document.getElementById('chrome-profile-dir').value,
+    chrome_debug_port: parseInt(document.getElementById('chrome-debug-port').value) || 9555,
+    chrome_path: document.getElementById('chrome-path').value,
+  };
+  const data = await apiPost('/settings', body);
+  if (data && data.status === 'ok') {
+    toast('<i class="fas fa-save"></i> Settings saved', 'success');
+  }
+}
+
+async function launchChrome() {
+  // Save first, then launch
+  await saveChromeSettings();
+  const data = await apiPost('/browser/launch');
+  if (data && data.result) {
+    if (data.result.port) {
+      toast(`<i class="fab fa-chrome"></i> Chrome launched on port ${data.result.port}`, 'success');
+    } else if (data.result.already_running) {
+      toast(`<i class="fab fa-chrome"></i> Chrome already running on port ${data.result.port}`, 'info');
+    } else if (data.status === 'error') {
+      toast(`<i class="fas fa-exclamation-triangle"></i> ${data.error || data.result?.error || 'Launch failed'}`, 'error');
+    }
+    refreshChromeStatus();
+  }
+}
+
+async function stopChrome() {
+  const data = await apiPost('/browser/stop');
+  if (data && data.status === 'ok') {
+    toast('<i class="fas fa-stop"></i> Chrome stopped', 'warning');
+    refreshChromeStatus();
+  }
+}
+
+async function refreshChromeStatus() {
+  const data = await apiGet('/browser/status');
+  if (data && data.result) {
+    const s = data.result;
+    const statusEl = document.getElementById('chrome-status-indicator');
+    const portEl = document.getElementById('chrome-port-display');
+    const pidEl = document.getElementById('chrome-pid-display');
+
+    if (s.running) {
+      statusEl.textContent = 'Running';
+      statusEl.className = 'value green';
+    } else {
+      statusEl.textContent = 'Stopped';
+      statusEl.className = 'value red';
+    }
+    portEl.textContent = s.port || '—';
+    pidEl.textContent = s.pid || '—';
+  }
+}
+
 function formatConsoleValue(val) {
   if (val === null || val === undefined) return String(val);
   if (typeof val === 'object') {
@@ -1073,6 +1189,10 @@ function init() {
   apiGet('/status').then(data => {
     if (data) updateState(data);
   });
+
+  // Load Chrome settings + status
+  loadChromeSettings();
+  refreshChromeStatus();
 
   // Keyboard shortcut: focus console with Ctrl+`
   document.addEventListener('keydown', (e) => {
