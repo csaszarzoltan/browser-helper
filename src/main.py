@@ -88,7 +88,9 @@ async def lifespan(application: FastAPI):
                     try:
                         cdp_url = result["cdp_http_url"]
                         logger.info("Auto-connecting to launched Chrome at %s", cdp_url)
-                        conn = await client.connect(cdp_url)
+                        # Update the client's base CDP URL before connecting
+                        client.cdp_http_url = cdp_url.rstrip("/")
+                        conn = await client.connect()
                         state["connected"] = True
                         state["cdp_url"] = conn.get("cdp_url", cdp_url)
                     except Exception as exc2:
@@ -445,6 +447,11 @@ async def connect(body: ConnectRequest | None = None):
     auto-discovers the endpoint via ``http://127.0.0.1:9555/json``.
     """
     cdp_url = body.cdp_url if body else None
+    # If a CDP HTTP URL is provided (not a tab URL), update the client base URL
+    if cdp_url and ("/json" not in cdp_url) and ("/devtools" not in cdp_url):
+        # Treat as CDP HTTP base URL (e.g. "http://127.0.0.1:9556")
+        client.cdp_http_url = cdp_url.rstrip("/")
+        cdp_url = None  # Don't pass as tab filter
     start = time.monotonic()
     try:
         result = await client.connect(cdp_url)
@@ -663,6 +670,20 @@ async def browser_launch(body: LaunchRequest | None = None):
         if body.chrome_path is not None:
             kwargs["chrome_path"] = body.chrome_path
     result = await chrome_mgr.launch(**kwargs)
+    # Auto-configure CDP client to the launched port
+    if result.get("status") == "ok" and result.get("cdp_http_url"):
+        cdp_url = result["cdp_http_url"].rstrip("/")
+        client.cdp_http_url = cdp_url
+        # Auto-connect if not already connected
+        if not client.is_connected:
+            try:
+                conn = await client.connect()
+                state["connected"] = True
+                state["cdp_url"] = conn.get("cdp_url", cdp_url)
+                result["_auto_connected"] = True
+                logger.info("Auto-connected to launched Chrome at %s", cdp_url)
+            except Exception as exc:
+                logger.warning("Auto-connect after launch failed: %s", exc)
     return {"status": "ok" if result.get("status") == "ok" else "error",
             "operation": "browser_launch",
             "result": result}

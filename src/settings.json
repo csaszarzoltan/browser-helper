@@ -1,0 +1,7 @@
+{
+  "chrome_profile_dir": "/tmp/chrome-test-profile",
+  "chrome_debug_port": 9555,
+  "chrome_path": "/usr/bin/google-chrome",
+  "chrome_launched_port": 0,
+  "chrome_pid": 0
+}
