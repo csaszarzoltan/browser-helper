@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -173,10 +173,15 @@ class TestWebSocketEndpoint:
 
     @pytest.fixture(autouse=True)
     def _setup(self):
-        """Import and prepare the app for WS testing, patching the CDP client."""
+        """Import and prepare the app for WS testing, patching the CDP client.
+
+        Stores the module reference as ``self.main`` so test methods see the
+        *same* ws_clients / operation_log / state as the app under test.
+        """
         main = _import_main()
         main.ws_clients.clear()
         main.operation_log.clear()
+        self.main = main
         # Patch the module-level `client` so WS actions don't touch real CDP
         self._patcher = patch.object(main, "client", autospec=True)
         self._mock_client = self._patcher.start()
@@ -199,12 +204,11 @@ class TestWebSocketEndpoint:
     @pytest.mark.asyncio
     async def test_connect_adds_to_ws_clients(self):
         from fastapi.testclient import TestClient
-        main = _import_main()  # same module
         tc = TestClient(self.app)
         with tc.websocket_connect("/ws") as ws:
             _ = ws.receive_json()  # hello
-            assert len(main.ws_clients) == 1
-            websocket_instance = list(main.ws_clients)[0]
+            assert len(self.main.ws_clients) == 1
+            websocket_instance = list(self.main.ws_clients)[0]
             assert websocket_instance is not None
 
     @pytest.mark.asyncio
@@ -254,25 +258,23 @@ class TestWebSocketEndpoint:
     @pytest.mark.asyncio
     async def test_disconnect_removes_from_clients(self):
         from fastapi.testclient import TestClient
-        main = _import_main()
         tc = TestClient(self.app)
         with tc.websocket_connect("/ws") as ws:
             _ = ws.receive_json()  # hello
-            assert len(main.ws_clients) == 1
+            assert len(self.main.ws_clients) == 1
         # After context manager exit, client should be removed
-        assert len(main.ws_clients) == 0
+        assert len(self.main.ws_clients) == 0
 
     @pytest.mark.asyncio
     async def test_multiple_connections(self):
         from fastapi.testclient import TestClient
-        main = _import_main()
         tc = TestClient(self.app)
         with tc.websocket_connect("/ws") as ws1:
             _ = ws1.receive_json()  # hello
             with tc.websocket_connect("/ws") as ws2:
                 _ = ws2.receive_json()  # hello
-                assert len(main.ws_clients) == 2
-        assert len(main.ws_clients) == 0
+                assert len(self.main.ws_clients) == 2
+        assert len(self.main.ws_clients) == 0
 
     @pytest.mark.asyncio
     async def test_action_screenshot_returns_error_when_disconnected(self):

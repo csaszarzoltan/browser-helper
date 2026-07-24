@@ -751,6 +751,7 @@ class CDPClient:
 
         Uses a temporary CDP WS connection to Runtime.evaluate
         directly on the target.  Much faster than switch + read.
+        Returns partial data on timeout / error.
         """
         client = await self._get_http_client()
         try:
@@ -767,43 +768,66 @@ class CDPClient:
             return {"status": "error", "error": "No WS URL"}
 
         try:
-            ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024,
-                                          open_timeout=5)
+            ws = await asyncio.wait_for(
+                websockets.connect(ws_url, max_size=50 * 1024 * 1024, open_timeout=5),
+                timeout=8,
+            )
         except Exception as e:
-            return {"status": "error", "error": f"WS connect: {e}"}
+            return {"status": "error", "error": f"WS connect: {e}", "target_id": target_id}
 
         mid = 1
         pending = {}
 
-        async def _eval(expr):
+        async def _eval(expr, timeout=10):
             nonlocal mid
             f = asyncio.get_event_loop().create_future()
             pending[mid] = f
-            await ws.send(json.dumps({"id": mid, "method": "Runtime.evaluate",
-                                      "params": {"expression": expr, "returnByValue": True}}))
-            mid += 1
             try:
-                async with asyncio.timeout(10):
+                await ws.send(json.dumps({"id": mid, "method": "Runtime.evaluate",
+                                          "params": {"expression": expr, "returnByValue": True}}))
+                mid += 1
+                async with asyncio.timeout(timeout):
                     async for raw in ws:
                         r = json.loads(raw)
                         if r.get("id") in pending:
                             pending.pop(r["id"]).set_result(r)
                             break
-                    return await f
+                    return await asyncio.wait_for(f, timeout=5)
             except asyncio.TimeoutError:
+                pending.pop(mid - 1, None)
                 return {"error": "timeout"}
+            except Exception as e:
+                pending.pop(mid - 1, None)
+                return {"error": str(e)}
 
         try:
-            t_res = await _eval("document.title")
-            title = t_res.get("result", {}).get("result", {}).get("value", "")
+            async with asyncio.timeout(30):
+                t_res = await _eval("document.title", timeout=8)
+                title = ""
+                if isinstance(t_res, dict):
+                    title = t_res.get("result", {}).get("result", {}).get("value", "")
 
-            txt_res = await _eval("document.body ? document.body.innerText.substring(0,5000) : ''")
-            page_text = txt_res.get("result", {}).get("result", {}).get("value", "")
+                txt_res = await _eval("document.body ? document.body.innerText.substring(0,5000) : ''", timeout=8)
+                page_text = ""
+                if isinstance(txt_res, dict):
+                    page_text = txt_res.get("result", {}).get("result", {}).get("value", "")
 
-            url_res = await _eval("window.location.href")
-            url = url_res.get("result", {}).get("result", {}).get("value", "")
+                url_res = await _eval("window.location.href", timeout=8)
+                url = ""
+                if isinstance(url_res, dict):
+                    url = url_res.get("result", {}).get("result", {}).get("value", "")
+        except asyncio.TimeoutError:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            return {"status": "error", "error": "overall timeout", "target_id": target_id}
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            return {"status": "error", "error": str(e), "target_id": target_id}
         finally:
             try:
                 await ws.close()
@@ -813,29 +837,35 @@ class CDPClient:
         return {
             "status": "ok",
             "target_id": target_id,
-            "title": title[:200],
-            "url": url,
-            "text": page_text[:5000],
-            "text_length": len(page_text),
+            "title": title[:200] or "",
+            "url": url or "",
+            "text": (page_text or "")[:5000],
+            "text_length": len(page_text or ""),
         }
 
     async def scan_all_tabs(self) -> list[dict]:
         """Extract content from ALL open tabs WITHOUT switching active tab.
 
         Returns structured data for every page tab — title, URL, text preview.
+        Skips tabs that timeout or error.
         """
         tabs = await self.discover_tabs()
         page_tabs = [t for t in tabs if t.get("type") == "page"]
         results = []
         for tab in page_tabs:
-            content = await self.get_tab_content_direct(tab["id"])
+            try:
+                async with asyncio.timeout(35):
+                    content = await self.get_tab_content_direct(tab["id"])
+            except Exception:
+                content = {"status": "error", "error": "unexpected error", "target_id": tab["id"]}
             results.append({
                 "id": tab["id"],
                 "title": content.get("title", tab.get("title", "")),
                 "url": content.get("url", tab.get("url", "")),
-                "text_preview": content.get("text", "")[:500],
+                "text_preview": (content.get("text") or "")[:500],
                 "text_length": content.get("text_length", 0),
                 "active": tab["id"] == self._active_tab_id,
+                "scan_status": content.get("status", "error"),
             })
         return results
 
