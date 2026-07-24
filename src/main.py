@@ -12,7 +12,12 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+# Python 3.10 compatibility: datetime.UTC is 3.11+
+try:
+    _UTC = datetime.UTC
+except AttributeError:
+    _UTC = timezone.utc
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -280,7 +285,7 @@ def log_operation(
 ) -> dict[str, Any]:
     """Append an operation entry to the ring buffer and update global state."""
     entry = {
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(_UTC).isoformat(),
         "operation": operation,
         "status": status,
         "duration_ms": round(duration_ms, 2),
