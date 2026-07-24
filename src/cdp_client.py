@@ -716,9 +716,18 @@ class CDPClient:
         ]
 
     async def switch_tab(self, tab_id: str) -> dict:
-        """Switch to a different tab by target ID."""
+        """Switch to a different tab by target ID.
+
+        Auto-refreshes tab cache on stale-ID miss.
+        """
         tabs = await self.discover_tabs()
         target = next((t for t in tabs if t["id"] == tab_id), None)
+        if not target:
+            # Cache miss — force fresh discovery and retry once
+            self._tabs_cache = []
+            self._tabs_cache_ts = 0
+            tabs = await self.discover_tabs()
+            target = next((t for t in tabs if t["id"] == tab_id), None)
         if not target:
             raise CDPError(f"Tab not found: {tab_id}")
         await self.close()
@@ -733,6 +742,101 @@ class CDPClient:
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
         return {"status": "ok", "tab_id": tab_id, "title": target.get("title", "")}
+
+    # ─── Multi-tab scan (no tab switch needed) ─────────────────────
+
+    async def get_tab_content_direct(self, target_id: str) -> dict:
+        """Extract page text from any tab WITHOUT switching to it.
+
+        Uses a temporary CDP WS connection to Runtime.evaluate
+        directly on the target.  Much faster than switch + read.
+        """
+        client = await self._get_http_client()
+        try:
+            resp = await client.get(f"{self.cdp_http_url}/json", timeout=5.0)
+            all_targets = resp.json()
+        except Exception as e:
+            return {"status": "error", "error": f"fetch targets: {e}"}
+
+        target = next((t for t in all_targets if t["id"] == target_id), None)
+        if not target:
+            return {"status": "error", "error": f"Target not found: {target_id}"}
+        ws_url = target.get("webSocketDebuggerUrl", "")
+        if not ws_url:
+            return {"status": "error", "error": "No WS URL"}
+
+        try:
+            ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024,
+                                          open_timeout=5)
+        except Exception as e:
+            return {"status": "error", "error": f"WS connect: {e}"}
+
+        mid = 1
+        pending = {}
+
+        async def _eval(expr):
+            nonlocal mid
+            f = asyncio.get_event_loop().create_future()
+            pending[mid] = f
+            await ws.send(json.dumps({"id": mid, "method": "Runtime.evaluate",
+                                      "params": {"expression": expr, "returnByValue": True}}))
+            mid += 1
+            try:
+                async with asyncio.timeout(10):
+                    async for raw in ws:
+                        r = json.loads(raw)
+                        if r.get("id") in pending:
+                            pending.pop(r["id"]).set_result(r)
+                            break
+                    return await f
+            except asyncio.TimeoutError:
+                return {"error": "timeout"}
+
+        try:
+            t_res = await _eval("document.title")
+            title = t_res.get("result", {}).get("result", {}).get("value", "")
+
+            txt_res = await _eval("document.body ? document.body.innerText.substring(0,5000) : ''")
+            page_text = txt_res.get("result", {}).get("result", {}).get("value", "")
+
+            url_res = await _eval("window.location.href")
+            url = url_res.get("result", {}).get("result", {}).get("value", "")
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+        finally:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+        return {
+            "status": "ok",
+            "target_id": target_id,
+            "title": title[:200],
+            "url": url,
+            "text": page_text[:5000],
+            "text_length": len(page_text),
+        }
+
+    async def scan_all_tabs(self) -> list[dict]:
+        """Extract content from ALL open tabs WITHOUT switching active tab.
+
+        Returns structured data for every page tab — title, URL, text preview.
+        """
+        tabs = await self.discover_tabs()
+        page_tabs = [t for t in tabs if t.get("type") == "page"]
+        results = []
+        for tab in page_tabs:
+            content = await self.get_tab_content_direct(tab["id"])
+            results.append({
+                "id": tab["id"],
+                "title": content.get("title", tab.get("title", "")),
+                "url": content.get("url", tab.get("url", "")),
+                "text_preview": content.get("text", "")[:500],
+                "text_length": content.get("text_length", 0),
+                "active": tab["id"] == self._active_tab_id,
+            })
+        return results
 
     # ─── NEW: Disable/enable JS ───────────────────────────────────
 

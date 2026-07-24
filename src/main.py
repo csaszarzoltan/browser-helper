@@ -359,6 +359,19 @@ async def list_tabs():
     return await run_op("get_tabs", client.get_tabs)
 
 
+@app.post("/tabs/scan")
+async def scan_tabs():
+    """Extract content from ALL open tabs WITHOUT switching.
+
+    Opens a temporary CDP WS connection to each tab, evaluates JS
+    to get title/URL/text, and returns everything in one response.
+
+    Much faster than sequential switch_tab + get_text — no tab
+    switching overhead, and the active tab stays unchanged.
+    """
+    return await run_op("scan_all_tabs", client.scan_all_tabs)
+
+
 @app.post("/switch_tab/{tab_id}")
 async def switch_tab(tab_id: str):
     """Switch the active context to the tab identified by *tab_id*."""
