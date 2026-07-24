@@ -603,7 +603,7 @@ class CDPClient:
       if (el.offsetParent === null) continue;
       if (!({tag_filter} true)) continue;
       const txt = (el.textContent || "").trim().toLowerCase();
-      if (txt === low) {{
+      if (txt === low || txt.includes(low)) {{
         const r = el.getBoundingClientRect();
         results.push({{
           tag: el.tagName,
