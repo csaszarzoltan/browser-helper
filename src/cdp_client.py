@@ -778,15 +778,17 @@ class CDPClient:
         mid = 1
         pending = {}
 
-        async def _eval(expr, timeout=10):
+        async def _send(method, params=None):
+            """Send a CDP command and wait for response."""
             nonlocal mid
+            if params is None:
+                params = {}
             f = asyncio.get_event_loop().create_future()
             pending[mid] = f
             try:
-                await ws.send(json.dumps({"id": mid, "method": "Runtime.evaluate",
-                                          "params": {"expression": expr, "returnByValue": True}}))
+                await ws.send(json.dumps({"id": mid, "method": method, "params": params}))
                 mid += 1
-                async with asyncio.timeout(timeout):
+                async with asyncio.timeout(6):
                     async for raw in ws:
                         r = json.loads(raw)
                         if r.get("id") in pending:
@@ -795,24 +797,36 @@ class CDPClient:
                     return await asyncio.wait_for(f, timeout=5)
             except asyncio.TimeoutError:
                 pending.pop(mid - 1, None)
-                return {"error": "timeout"}
+                return {"error": "timeout", "method": method}
             except Exception as e:
                 pending.pop(mid - 1, None)
-                return {"error": str(e)}
+                return {"error": str(e), "method": method}
+
+        async def _eval(expr, timeout=6):
+            """Evaluate JS and return result."""
+            r = await _send("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+            return r
 
         try:
-            async with asyncio.timeout(10):
-                t_res = await _eval("document.title", timeout=6)
+            async with asyncio.timeout(12):
+                # Step 1: Activate the target to wake it from discarding
+                await _send("Target.activateTarget", {"targetId": target_id})
+
+                # Step 2: Small delay for the tab to initialize
+                await asyncio.sleep(0.3)
+
+                # Step 3: Now evaluate JS
+                t_res = await _eval("document.title")
                 title = ""
                 if isinstance(t_res, dict):
                     title = t_res.get("result", {}).get("result", {}).get("value", "")
 
-                txt_res = await _eval("document.body ? document.body.innerText.substring(0,5000) : ''", timeout=6)
+                txt_res = await _eval("document.body ? document.body.innerText.substring(0,5000) : ''")
                 page_text = ""
                 if isinstance(txt_res, dict):
                     page_text = txt_res.get("result", {}).get("result", {}).get("value", "")
 
-                url_res = await _eval("window.location.href", timeout=6)
+                url_res = await _eval("window.location.href")
                 url = ""
                 if isinstance(url_res, dict):
                     url = url_res.get("result", {}).get("result", {}).get("value", "")
