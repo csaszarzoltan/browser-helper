@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -44,10 +45,40 @@ API_TOKEN = os.environ.get("API_TOKEN", "")
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Startup and shutdown lifecycle handler."""
+    global start_time
+    start_time = time.monotonic()
+    logger.info("Browser Helper API starting up ...")
+    try:
+        result = await client.connect()
+        state["connected"] = True
+        state["cdp_url"] = result.get("cdp_url", "auto-discovered")
+        logger.info("Auto-connected to CDP at %s", state["cdp_url"])
+    except Exception as exc:
+        logger.warning("Auto-connect to CDP failed (server will start anyway): %s", exc)
+    yield
+    # Shutdown
+    if client.is_connected:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+    for ws in ws_clients.copy():
+        try:
+            await ws.close()
+        except Exception:
+            pass
+    ws_clients.clear()
+
+
 app = FastAPI(
     title="Browser Helper API",
     version="1.0.0",
     description="REST + WebSocket API for browser automation via CDP.",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -847,40 +878,6 @@ if os.path.isdir(STATIC_DIR):
     logger.info("Serving static files from %s", STATIC_DIR)
 else:
     logger.warning("Static directory not found: %s", STATIC_DIR)
-
-
-# ---------------------------------------------------------------------------
-# Startup — try auto-connect to CDP
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup():
-    global start_time
-    start_time = time.monotonic()
-    logger.info("Browser Helper API starting up ...")
-    try:
-        result = await client.connect()
-        state["connected"] = True
-        state["cdp_url"] = result.get("cdp_url", "auto-discovered")
-        logger.info("Auto-connected to CDP at %s", state["cdp_url"])
-    except Exception as exc:
-        logger.warning("Auto-connect to CDP failed (server will start anyway): %s", exc)
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    """Clean up CDP connection and WS clients on shutdown."""
-    if client.is_connected:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
-    for ws in ws_clients.copy():
-        try:
-            await ws.close()
-        except Exception:
-            pass
-    ws_clients.clear()
 
 
 # ---------------------------------------------------------------------------

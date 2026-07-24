@@ -17,6 +17,7 @@ import json
 import logging
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import websockets
@@ -688,7 +689,7 @@ class CDPClient:
     async def open_new_tab(self, url: str = "about:blank") -> dict:
         """Open a new browser tab."""
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.put(f"{self.cdp_http_url}/json/new?{url}")
+            resp = await client.put(f"{self.cdp_http_url}/json/new?{quote(url)}")
             resp.raise_for_status()
             target = resp.json()
         return {"status": "ok", "tab_id": target.get("id"),
