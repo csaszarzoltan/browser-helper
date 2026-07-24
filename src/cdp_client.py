@@ -210,7 +210,7 @@ class CDPClient:
         self._message_id += 1
         msg_id = self._message_id
         payload = {"id": msg_id, "method": method, "params": params or {}}
-        future = asyncio.get_event_loop().create_future()
+        future = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = future
         await self._ws.send(json.dumps(payload))
         try:
