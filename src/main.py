@@ -67,6 +67,36 @@ async def lifespan(application: FastAPI):
         logger.info("Auto-connected to CDP at %s", state["cdp_url"])
     except Exception as exc:
         logger.warning("Auto-connect to CDP failed (server will start anyway): %s", exc)
+    # ── Auto-launch Chrome (if --launch-chrome was passed to run.py) ──
+    if os.environ.get("CHROME_AUTO_LAUNCH") == "1":
+        launch_kwargs = {}
+        profile = os.environ.get("CHROME_AUTO_PROFILE")
+        port = os.environ.get("CHROME_AUTO_PORT")
+        if profile:
+            launch_kwargs["profile_dir"] = profile
+        if port:
+            launch_kwargs["port"] = int(port)
+        try:
+            result = await chrome_mgr.launch(**launch_kwargs)
+            if result.get("status") == "ok":
+                port_str = result.get("port", "?")
+                pid = result.get("pid", "?")
+                logger.info("Chrome auto-launched on port %s (PID %s)", port_str, pid)
+                print(f"✅ Chrome launched on port {port_str} (PID {pid})")
+                # If auto-launch succeeded, try CDP connect using the launched port
+                if not client.is_connected and result.get("cdp_http_url"):
+                    try:
+                        cdp_url = result["cdp_http_url"]
+                        logger.info("Auto-connecting to launched Chrome at %s", cdp_url)
+                        conn = await client.connect(cdp_url)
+                        state["connected"] = True
+                        state["cdp_url"] = conn.get("cdp_url", cdp_url)
+                    except Exception as exc2:
+                        logger.warning("Auto-connect to launched Chrome failed: %s", exc2)
+            else:
+                logger.warning("Chrome auto-launch failed: %s", result.get("error", "unknown"))
+        except Exception as exc3:
+            logger.warning("Chrome auto-launch exception: %s", exc3)
     yield
     # Shutdown
     if client.is_connected:
