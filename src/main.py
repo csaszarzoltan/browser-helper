@@ -132,6 +132,7 @@ start_time = 0.0
 # ---------------------------------------------------------------------------
 class EvalRequest(BaseModel):
     js: str
+    format: str = "raw"  # "raw" | "pretty" | "structured"
 
 
 class ClickRequest(BaseModel):
@@ -213,6 +214,11 @@ class ClickTextRequest(BaseModel):
     container_selector: str | None = None
 
 
+class ClickLabelRequest(BaseModel):
+    text: str
+    timeout: int = 5
+
+
 # ─── New: Page analysis models ──────────────────────────────
 
 
@@ -224,6 +230,7 @@ class WaitTextRequest(BaseModel):
 
 class WaitNavigationRequest(BaseModel):
     timeout: int = 10
+    quiet_ms: int = 500
 
 
 class AnalyzePageRequest(BaseModel):
@@ -465,6 +472,19 @@ async def click_by_text(body: ClickTextRequest):
                         body.text, body.timeout, body.container_selector)
 
 
+@app.post("/click/label")
+async def click_label(body: ClickLabelRequest):
+    """Click a <label> element by its visible text.
+
+    Framework-safe: clicks actual HTML <label> elements that toggle
+    the associated input (React/Vue/Symfony forms only respond to
+    real label clicks). Use this for radio buttons, checkboxes, and
+    any field where click_by_text doesn't register with the framework.
+    """
+    return await run_op("click_label", client.click_label,
+                        body.text, body.timeout)
+
+
 # ─── New: Page analysis & wait endpoints ──────────────────────
 
 
@@ -507,6 +527,38 @@ async def wait_navigation(body: WaitNavigationRequest | None = None):
     """
     timeout = body.timeout if body else 10
     return await run_op("wait_navigation", client.wait_for_navigation, timeout)
+
+
+@app.post("/wait/network-idle")
+async def wait_network_idle(body: WaitNavigationRequest | None = None):
+    """Wait until the network has been quiet for a period.
+
+    Polls CDP Network events.  Useful after form submissions or
+    button clicks that trigger AJAX calls — ensures the next
+    action won't race with in-flight network requests.
+
+    *timeout*: max seconds to wait (default 10)
+    *quiet_ms*: how many ms of silence confirms idle (default 500)
+    """
+    timeout = body.timeout if body else 10
+    quiet_ms = body.quiet_ms if body else 500
+    return await run_op("wait_for_network_idle", client.wait_for_network_idle,
+                        timeout, quiet_ms)
+
+
+@app.post("/page/diff")
+async def page_diff(body: dict | None = None):
+    """Compare current page state with a previous snapshot.
+
+    Takes an optional *previous_snapshot* (the "page" dict from a
+    prior /page/analyze response).  If omitted, returns the current
+    snapshot as a baseline (call twice: baseline → action → diff).
+
+    Returns only WHAT CHANGED (buttons added/removed, modals,
+    error count, alerts, URL, text length) — LLM-friendly.
+    """
+    prev = (body or {}).get("previous_snapshot")
+    return await run_op("page_diff", client.page_diff, prev)
 
 
 @app.post("/screenshot")
@@ -1007,6 +1059,23 @@ async def websocket_endpoint(ws: WebSocket):
                                     step.get("fields", []),
                                     step.get("timeout", 5),
                                 )
+                            elif step_action == "click_label":
+                                r = await client.click_label(
+                                    step.get("text", ""),
+                                    step.get("timeout", 5),
+                                )
+                            elif step_action == "wait_for_network_idle":
+                                r = await client.wait_for_network_idle(
+                                    step.get("timeout", 10),
+                                    step.get("quiet_ms", 500),
+                                )
+                            elif step_action == "page_diff":
+                                r = await client.page_diff(
+                                    step.get("previous_snapshot"),
+                                )
+                            elif step_action == "close":
+                                await client.close()
+                                r = {"status": "ok", "action": "close"}
                             elif step_action == "screenshot":
                                 r = await client.screenshot(quality=step.get("quality", 0))
                             elif step_action == "get_text":

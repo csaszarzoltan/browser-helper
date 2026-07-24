@@ -458,6 +458,7 @@ class CDPClient:
             container_js = f"const container = document.querySelector({json.dumps(container_selector)}); if (!container) return JSON.stringify({{status: 'error', error: 'container not found: {json.dumps(container_selector)}'}});"
         js = f"""
 (function() {{
+{container_js}
   const target = {json.dumps(text)};
   const low = target.toLowerCase().trim();
   const deadline = Date.now() + {timeout * 1000};
@@ -537,6 +538,82 @@ class CDPClient:
         })
         data["cdp_click"] = True
         return {"status": "ok", "text": text, "result": data}
+
+    # ─── NEW: Click by label text (framework-safe) ────────────────
+
+    async def click_label(self, text: str, timeout: int = 5) -> dict:
+        """Click a <label> element whose text matches.
+
+        Unlike click_by_text which clicks visible DIV/SPAN/BUTTON elements,
+        this targets actual HTML <label> elements.  Framework forms
+        (React, Vue, Symfony) only respond to real <label> clicks that
+        toggle the associated input — plain element clicks don't register.
+
+        Searches labels by priority:
+        1. Exact match on <label> text
+        2. Partial match (fallback)
+        Automatically scrolls the label into view and uses real CDP
+        mouse events so framework two-way binding fires correctly.
+        """
+        await self._activate_current()
+        js = f"""
+(function() {{
+  const target = {json.dumps(text)};
+  const low = target.toLowerCase().trim();
+  const deadline = Date.now() + {timeout * 1000};
+
+  function findLabel() {{
+    while (Date.now() < deadline) {{
+      const labels = document.querySelectorAll("label");
+      let best = null, bestMatch = 0;
+      for (let lb of labels) {{
+        if (lb.offsetParent === null) continue;
+        const txt = (lb.textContent || "").trim().toLowerCase();
+        if (txt === low) {{ best = lb; bestMatch = 2; break; }}
+        if (txt.includes(low) && bestMatch < 2) {{ best = lb; bestMatch = 1; }}
+      }}
+      if (best) return best;
+    }}
+    return null;
+  }}
+
+  const el = findLabel();
+  if (!el) return JSON.stringify({{status: "error", error: "label not found: " + target.substring(0, 50)}});
+
+  el.scrollIntoView({{behavior: "instant", block: "center"}});
+  const r = el.getBoundingClientRect();
+  // Click the label with real CDP mouse events (framework-safe)
+  return JSON.stringify({{
+    status: "ok",
+    tag: "LABEL",
+    text: (el.textContent || "").trim().substring(0, 100),
+    forAttr: el.getAttribute("for") || "",
+    x: r.x + r.width / 2,
+    y: r.y + r.height / 2,
+    w: r.width,
+    h: r.height,
+  }});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {"status": "error", "error": "parse failed"}
+        if data.get("status") == "error":
+            return data
+        # Real CDP click
+        x, y = data.get("x", 0), data.get("y", 0)
+        await self._send_command("Input.dispatchMouseEvent", {
+            "type": "mousePressed", "x": x, "y": y,
+            "button": "left", "clickCount": 1,
+        })
+        await self._send_command("Input.dispatchMouseEvent", {
+            "type": "mouseReleased", "x": x, "y": y,
+            "button": "left", "clickCount": 1,
+        })
+        return {"status": "ok", "label": text, "result": data}
 
     async def click(self, selector: str) -> dict:
         """Click element by CSS selector via real CDP mouse events."""
@@ -883,6 +960,20 @@ class CDPClient:
                     )
                 elif action == "analyze_page":
                     res = await self.analyze_page()
+                elif action == "click_label":
+                    res = await self.click_label(
+                        params["text"],
+                        params.get("timeout", 5),
+                    )
+                elif action == "wait_for_network_idle":
+                    res = await self.wait_for_network_idle(
+                        params.get("timeout", 10),
+                        params.get("quiet_ms", 500),
+                    )
+                elif action == "page_diff":
+                    res = await self.page_diff(
+                        params.get("previous_snapshot"),
+                    )
                 elif action == "get_text":
                     res = await self.get_page_text()
                 elif action == "pdf":
@@ -1270,29 +1361,69 @@ class CDPClient:
     result.modals.push(info);
   });
 
-  // Form fields
+  // Form fields — enhanced with label context + error detection
   result.form_fields = [];
   document.querySelectorAll("input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select").forEach(function(el) {
-    if (el.offsetParent === null) return;
-    var label = "";
-    var id = el.id;
-    if (id) {
-      var lbl = document.querySelector("label[for='" + CSS.escape(id) + "']");
-      if (lbl) label = (lbl.textContent || "").trim();
+  if (el.offsetParent === null) return;
+  var label = "";
+  var id = el.id;
+  if (id) {
+    var lbl = document.querySelector("label[for='" + CSS.escape(id) + "']");
+    if (lbl) label = (lbl.textContent || "").trim();
+  }
+  if (!label && el.parentElement) {
+    var pl = el.parentElement.querySelector("label");
+    if (pl) label = (pl.textContent || "").trim();
+  }
+  if (!label) label = el.getAttribute("placeholder") || el.getAttribute("aria-label") || el.name || "";
+
+  // ── Section context: find the closest heading or bold text ──
+  var section = "";
+  var walk = el;
+  for (var s = 0; s < 10; s++) {
+    walk = walk.parentElement;
+    if (!walk) break;
+    var found = walk.querySelector("h1, h2, h3, h4, h5, h6, strong, b");
+    if (found) { section = (found.textContent || "").trim().substring(0, 80); break; }
+  }
+
+  // ── Validation error detection ──
+  var hasError = false;
+  var errorText = "";
+  // Check if the element has validation classes
+  var cls = el.className;
+  if (cls && (cls.indexOf("error") >= 0 || cls.indexOf("invalid") >= 0 || cls.indexOf("danger") >= 0)) {
+    hasError = true;
+  }
+  // Check parent for error classes
+  if (!hasError && walk) {
+    var errorEl = walk.querySelector(".has-error, .error, .alert-danger, [class*=error], [class*=invalid], .help-block, .field-error, .form-error");
+    if (errorEl) {
+      hasError = true;
+      errorText = (errorEl.textContent || "").trim().substring(0, 120);
     }
-    if (!label && el.parentElement) {
-      var pl = el.parentElement.querySelector("label");
-      if (pl) label = (pl.textContent || "").trim();
+  }
+  // Check for error text next to the field
+  if (!hasError && el.nextElementSibling) {
+    var ns = el.nextElementSibling;
+    if (ns.className.indexOf("error") >= 0 || ns.className.indexOf("help") >= 0) {
+      hasError = true;
+      errorText = (ns.textContent || "").trim().substring(0, 120);
     }
-    if (!label) label = el.getAttribute("placeholder") || el.getAttribute("aria-label") || el.name || "";
-    result.form_fields.push({
-      tag: el.tagName,
-      type: el.type || "",
-      name: el.name || "",
-      label: label.substring(0, 80),
-      value: (el.value || "").substring(0, 80),
-      placeholder: (el.placeholder || "").substring(0, 40),
-    });
+  }
+
+  result.form_fields.push({
+    tag: el.tagName,
+    type: el.type || "",
+    name: el.name || "",
+    label: label.substring(0, 80),
+    value: (el.value || "").substring(0, 80),
+    placeholder: (el.placeholder || "").substring(0, 40),
+    section: section,
+    required: el.required === true,
+    has_error: hasError,
+    error_text: errorText,
+  });
   });
 
   // Alert / success / error messages
@@ -1408,6 +1539,143 @@ class CDPClient:
         except (json.JSONDecodeError, TypeError):
             data = {"error": "parse failed"}
         return {"status": "ok", "timeout": timeout, "result": data}
+
+    # ─── Wait for network idle ────────────────────────────────────
+
+    async def wait_for_network_idle(self, timeout: int = 10,
+                                     quiet_ms: int = 500) -> dict:
+        """Wait until no network requests have been made for *quiet_ms*.
+
+        Useful after form submissions or button clicks that trigger
+        async AJAX calls — ensures the next action won't race with
+        in-flight requests.
+
+        Polls CDP Network events.  Returns immediately if the network
+        has been quiet for *quiet_ms*; raises timeout error otherwise.
+        """
+        await self._activate_current()
+        # Enable Network domain if not already
+        await self._send_command("Network.enable")
+        # Keep track of in-flight requests
+        requests = set()
+        deadline = time.monotonic() + timeout
+
+        # Listen for request/response events
+        async def on_request(evt):
+            req_id = evt.get("params", {}).get("requestId", "")
+            if req_id:
+                requests.add(req_id)
+        async def on_response(evt):
+            req_id = evt.get("params", {}).get("requestId", "")
+            if req_id and req_id in requests:
+                requests.remove(req_id)
+        async def on_loading(evt):
+            req_id = evt.get("params", {}).get("requestId", "")
+            if req_id and req_id in requests:
+                requests.remove(req_id)
+
+        self._event_callbacks.setdefault("Network.requestWillBeSent", []).append(on_request)
+        self._event_callbacks.setdefault("Network.responseReceived", []).append(on_response)
+        self._event_callbacks.setdefault("Network.loadingFinished", []).append(on_loading)
+
+        try:
+            while time.monotonic() < deadline:
+                if not requests:
+                    # Network is quiet — wait *quiet_ms* to confirm
+                    await asyncio.sleep(quiet_ms / 1000)
+                    if not requests:
+                        return {"status": "ok", "quiet_ms": quiet_ms,
+                                "idle": True}
+                await asyncio.sleep(0.1)
+            return {"status": "ok", "quiet_ms": quiet_ms,
+                    "idle": False, "pending": len(requests)}
+        finally:
+            # Clean up callbacks
+            for cb_list in self._event_callbacks.values():
+                for cb in (on_request, on_response, on_loading):
+                    if cb in cb_list:
+                        cb_list.remove(cb)
+
+    # ─── Page diff: detect what changed after an action ────────────
+
+    async def page_diff(self, previous_snapshot: dict | None = None) -> dict:
+        """Compare current page state with a previous snapshot.
+
+        Takes an optional *previous_snapshot* (from a prior analyze_page call).
+        If omitted, returns the current snapshot as a baseline for future diff
+        calls (call twice: first to get baseline, second to detect changes).
+
+        Returns added/removed buttons, new modals, new errors, text changes,
+        URL change, etc.  Designed for LLM consumption — tells the agent
+        *what happened* without needing to re-analyze the whole page.
+        """
+        current = await self.analyze_page()
+        if previous_snapshot is None:
+            return {"status": "ok", "baseline": True, "snapshot": current}
+
+        prev_page = previous_snapshot.get("page") or previous_snapshot
+        curr_page = current.get("page") or current
+
+        changes = {}
+
+        # URL change
+        old_url = prev_page.get("url", "")
+        new_url = curr_page.get("url", "")
+        if old_url != new_url:
+            changes["url_changed"] = {"from": old_url, "to": new_url}
+
+        # Button changes (by position + text)
+        old_btns = {(b["x"], b["y"]): b["text"] for b in prev_page.get("buttons", [])}
+        new_btns = {(b["x"], b["y"]): b["text"] for b in curr_page.get("buttons", [])}
+        added = [{"text": t, "x": x, "y": y} for (x, y), t in new_btns.items()
+                 if (x, y) not in old_btns]
+        removed = [{"text": t, "x": x, "y": y} for (x, y), t in old_btns.items()
+                   if (x, y) not in new_btns]
+        if added:
+            changes["buttons_added"] = added
+        if removed:
+            changes["buttons_removed"] = removed
+
+        # Modal changes
+        old_modals = [m["id"] for m in prev_page.get("modals", [])]
+        new_modals = [m["id"] for m in curr_page.get("modals", [])]
+        opened = [m for m in curr_page.get("modals", []) if m["id"] not in old_modals]
+        closed = [m for m in prev_page.get("modals", []) if m["id"] not in new_modals]
+        if opened:
+            changes["modals_opened"] = opened
+        if closed:
+            changes["modals_closed"] = closed
+
+        # Error changes
+        old_errors = [f for f in prev_page.get("form_fields", []) if f.get("has_error")]
+        new_errors = [f for f in curr_page.get("form_fields", []) if f.get("has_error")]
+        old_err_count = len(old_errors)
+        new_err_count = len(new_errors)
+        if old_err_count != new_err_count:
+            changes["errors_changed"] = {"before": old_err_count, "after": new_err_count}
+            errs = [f for f in new_errors if f.get("error_text")]
+            if errs:
+                changes["current_errors"] = [f["error_text"] for f in errs[:5]]
+
+        # Alert changes
+        old_alerts = set(prev_page.get("alerts", []))
+        new_alerts = set(curr_page.get("alerts", []))
+        new_alert_msgs = list(new_alerts - old_alerts)
+        if new_alert_msgs:
+            changes["new_alerts"] = new_alert_msgs[:5]
+
+        # Text length change
+        old_len = prev_page.get("text_length", 0)
+        new_len = curr_page.get("text_length", 0)
+        if old_len != new_len:
+            changes["text_length_changed"] = {"from": old_len, "to": new_len}
+
+        if not changes:
+            changes["no_changes"] = True
+
+        return {"status": "ok", "changed": len(changes) > 0
+                if "no_changes" not in changes else False,
+                "changes": changes, "snapshot": current}
 
     # ─── Deep scan: extract all sub-tabs + iframes ────────────────
 
