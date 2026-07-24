@@ -403,6 +403,21 @@ async def scan_tabs():
     return await run_op("scan_all_tabs", client.scan_all_tabs)
 
 
+@app.post("/tabs/deep-scan/{tab_id}")
+async def deep_scan_tab(tab_id: str):
+    """Deep-extract ALL content from a tab: sub-tabs, iframes, meta.
+
+    Switches to the tab, then runs a comprehensive JS engine that:
+    - Detects all sub-tab navigation (hash links, data-tab, ARIA tabs)
+    - Clicks each one and captures the visible content
+    - Extracts same-origin iframe content
+    - Returns everything in one structured JSON response
+
+    One call replaces: switch_tab + N× (click + get_text) + iframe scan.
+    """
+    return await run_op("deep_scan_tab", client.deep_scan_tab, tab_id)
+
+
 @app.post("/switch_tab/{tab_id}")
 async def switch_tab(tab_id: str):
     """Switch the active context to the tab identified by *tab_id*."""

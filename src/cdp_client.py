@@ -893,6 +893,185 @@ class CDPClient:
 
         return results
 
+    # ─── Deep scan: extract all sub-tabs + iframes ────────────────
+
+    async def deep_scan_tab(self, tab_id: str | None = None) -> dict:
+        """Deep-extract ALL content from a tab: sub-tabs, iframes, meta.
+
+        Switches to the tab, then runs a comprehensive JS that:
+        - Detects all sub-tab navigation links (hash, data-tab, ARIA)
+        - Clicks each one and captures the visible content
+        - Extracts iframe content (same-origin) or marks cross-origin
+        - Returns everything as structured JSON
+
+        Pass tab_id=None to scan the currently active tab.
+        """
+        # Step 1: Switch to the tab if specified
+        if tab_id and tab_id != self._active_tab_id:
+            await self.switch_tab(tab_id)
+
+        # Step 2: Run deep scan JS
+        js = r"""
+(function() {
+  const result = {};
+  const MAX_TEXT = 3000;
+
+  // ─── HELPER: collect visible text from a container ───
+  function getText(el) {
+    if (!el) return "";
+    var t = el.innerText || el.textContent || "";
+    return t.trim().substring(0, MAX_TEXT);
+  }
+
+  // ─── SUB-TAB DETECTION ───
+  var tabSources = [];
+
+  // Pattern 1: hash-based links (a[href^="#]"])
+  document.querySelectorAll("a[href^='#']").forEach(function(a) {
+    var hash = a.getAttribute("href").substring(1);
+    if (hash && a.offsetParent !== null && a.textContent.trim()) {
+      tabSources.push({el: a, hash: hash, label: a.textContent.trim().substring(0, 40)});
+    }
+  });
+
+  // Pattern 2: data-tab attributes
+  document.querySelectorAll("[data-tab]").forEach(function(el) {
+    var tab = el.getAttribute("data-tab");
+    if (tab && el.offsetParent !== null) {
+      tabSources.push({el: el, hash: tab, label: el.textContent.trim().substring(0, 40) || tab});
+    }
+  });
+
+  // Pattern 3: ARIA tabs
+  document.querySelectorAll("[role=tab]").forEach(function(el) {
+    var controls = el.getAttribute("aria-controls");
+    if (controls && el.offsetParent !== null) {
+      tabSources.push({el: el, hash: controls, label: el.textContent.trim().substring(0, 40)});
+    }
+  });
+
+  // Deduplicate by label
+  var seen = {};
+  var tabs = [];
+  tabSources.forEach(function(ts) {
+    if (!seen[ts.label]) {
+      seen[ts.label] = true;
+      tabs.push(ts);
+    }
+  });
+
+  // Limit to 15 tabs max
+  if (tabs.length > 15) tabs = tabs.slice(0, 15);
+
+  result._sub_tabs = [];
+  tabs.forEach(function(tab) {
+    try {
+      tab.el.click();
+      // Busy-wait up to 1500ms for content update
+      var deadline = Date.now() + 1500;
+      var content = "";
+      var panel = null;
+      while (Date.now() < deadline) {
+        var p = document.getElementById(tab.hash);
+        if (p && p.textContent.trim().length > 20) {
+          panel = p;
+          content = getText(p);
+          break;
+        }
+        var ap = document.querySelector("[role=tabpanel]:not([hidden])");
+        if (ap && ap.textContent.trim().length > 30) {
+          panel = ap;
+          content = getText(ap);
+          break;
+        }
+        var tc = document.querySelector(".tab-content.active, .tab-pane.active, [class*='tab-pane'][class*='active']");
+        if (tc && tc.textContent.trim().length > 30) {
+          panel = tc;
+          content = getText(tc);
+          break;
+        }
+      }
+      if (!content) {
+        content = getText(document.body);
+      }
+      result._sub_tabs.push({
+        label: tab.label,
+        content: content.substring(0, MAX_TEXT),
+        len: content.length
+      });
+    } catch(e) {
+      result._sub_tabs.push({label: tab.label, error: e.message});
+    }
+  });
+
+  // ─── IFRAMES ───
+  result._iframes = [];
+  document.querySelectorAll("iframe").forEach(function(f, i) {
+    try {
+      var doc = f.contentDocument || (f.contentWindow ? f.contentWindow.document : null);
+      var txt = "";
+      var title = "";
+      if (doc) {
+        txt = (doc.body ? doc.body.innerText : "").substring(0, 1000);
+        title = doc.title || "";
+      }
+      result._iframes.push({
+        idx: i, src: f.src || "", id: f.id || "",
+        w: f.offsetWidth, h: f.offsetHeight,
+        title: title, text_preview: txt.substring(0, 300),
+        text_len: txt.length,
+        accessible: !!doc
+      });
+    } catch(e) {
+      result._iframes.push({
+        idx: i, src: f.src || "", id: f.id || "",
+        w: f.offsetWidth, h: f.offsetHeight,
+        accessible: false, error: "cross-origin"
+      });
+    }
+  });
+
+  // ─── CURRENT STATE ───
+  var allLinks = document.querySelectorAll("a, button, [role=tab]");
+  var interactive = [];
+  allLinks.forEach(function(el) {
+    if (el.offsetParent !== null && el.textContent.trim()) {
+      var tag = el.tagName.toLowerCase();
+      var txt = el.textContent.trim().substring(0, 40);
+      interactive.push(tag + ":" + txt);
+    }
+  });
+
+  result._meta = {
+    title: document.title,
+    url: window.location.href,
+    tabsFound: tabs.length,
+    tabsExtracted: result._sub_tabs.length,
+    iframesFound: document.querySelectorAll("iframe").length,
+    interactiveElements: interactive.length,
+    readyState: document.readyState
+  };
+
+  return JSON.stringify(result);
+})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {"status": "error", "error": "JS parse failed", "raw": str(raw)[:500]}
+
+        return {
+            "status": "ok",
+            "tab_id": tab_id or self._active_tab_id,
+            "meta": data.get("_meta", {}),
+            "sub_tabs": data.get("_sub_tabs", []),
+            "iframes": data.get("_iframes", []),
+            "interactive": data.get("_meta", {}).get("interactiveElements", 0),
+        }
+
     # ─── NEW: Disable/enable JS ───────────────────────────────────
 
     async def disable_javascript(self) -> dict:
