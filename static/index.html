@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser Helper Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+  h1 { font-size: 1.5rem; margin-bottom: 1rem; color: #38bdf8; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; }
+  .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 12px; }
+  .stat { text-align: center; }
+  .stat .value { font-size: 1.8rem; font-weight: 700; }
+  .stat .label { font-size: .75rem; color: #64748b; }
+  .connected { color: #22c55e; }
+  .disconnected { color: #ef4444; }
+  .log-entry { padding: 6px 0; border-bottom: 1px solid #334155; font-size: .85rem; display: flex; gap: 8px; }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time { color: #64748b; white-space: nowrap; }
+  .log-op { color: #38bdf8; font-weight: 600; }
+  .log-status { font-weight: 600; }
+  .log-status.success { color: #22c55e; }
+  .log-status.error { color: #ef4444; }
+  .ws-status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .ws-status.connected { background: #22c55e; }
+  .ws-status.disconnected { background: #ef4444; }
+  .endpoints { display: grid; grid-template-columns: repeat(auto-fill,minmax(200px,1fr)); gap: 6px; }
+  .endpoints code { font-size: .8rem; background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #a78bfa; }
+</style>
+</head>
+<body>
+  <h1>🔧 Browser Helper Dashboard</h1>
+
+  <div class="card">
+    <h2>Connection Status</h2>
+    <div class="status-grid">
+      <div class="stat">
+        <div class="value" id="status-indicator" class="disconnected">—</div>
+        <div class="label">Status</div>
+      </div>
+      <div class="stat">
+        <div class="value" id="tabs-count">0</div>
+        <div class="label">Tabs</div>
+      </div>
+      <div class="stat">
+        <div class="value" id="last-op">—</div>
+        <div class="label">Last Operation</div>
+      </div>
+      <div class="stat">
+        <div class="value" id="ws-indicator"><span class="ws-status disconnected"></span></div>
+        <div class="label">WebSocket</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Available Endpoints</h2>
+    <div class="endpoints">
+      <div><code>GET  /</code> — Dashboard</div>
+      <div><code>GET  /status</code> — Status</div>
+      <div><code>POST /connect</code> — Connect</div>
+      <div><code>POST /navigate?url=</code> — Navigate</div>
+      <div><code>POST /eval</code> — Eval JS</div>
+      <div><code>POST /click</code> — Click</div>
+      <div><code>POST /type</code> — Type</div>
+      <div><code>POST /screenshot</code> — Screenshot</div>
+      <div><code>GET  /tabs</code> — List Tabs</div>
+      <div><code>POST /switch_tab/{id}</code> — Switch Tab</div>
+      <div><code>POST /get_text</code> — Get Text</div>
+      <div><code>POST /disconnect</code> — Disconnect</div>
+      <div><code>WS   /ws</code> — Status Stream</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Operation Log</h2>
+    <div id="log-container">No operations yet.</div>
+  </div>
+
+<script>
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = `${protocol}//${location.host}/ws`;
+let ws = null;
+
+function connectWs() {
+  ws = new WebSocket(wsUrl);
+  ws.onopen = () => {
+    document.querySelector('#ws-indicator').innerHTML = '<span class="ws-status connected"></span> Connected';
+  };
+  ws.onclose = () => {
+    document.querySelector('#ws-indicator').innerHTML = '<span class="ws-status disconnected"></span> Disconnected';
+    setTimeout(connectWs, 3000);
+  };
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'state_update' || data.type === 'hello') {
+      const s = data.state;
+      const indicator = document.querySelector('#status-indicator');
+      if (s.connected) {
+        indicator.textContent = 'Connected';
+        indicator.className = 'value connected';
+      } else {
+        indicator.textContent = 'Disconnected';
+        indicator.className = 'value disconnected';
+      }
+      document.querySelector('#tabs-count').textContent = s.tabs_count;
+      document.querySelector('#last-op').textContent = s.last_operation || '—';
+      if (data.recent_log && data.recent_log.length > 0) {
+        const container = document.querySelector('#log-container');
+        container.innerHTML = data.recent_log.map(e => `
+          <div class="log-entry">
+            <span class="log-time">${new Date(e.timestamp).toLocaleTimeString()}</span>
+            <span class="log-op">${e.operation}</span>
+            <span class="log-status ${e.status}">${e.status}</span>
+            <span>${e.duration_ms}ms</span>
+            <span style="color:#94a3b8">${e.details || ''}</span>
+          </div>
+        `).join('');
+      }
+    }
+  };
+}
+connectWs();
+</script>
+</body>
+</html>
