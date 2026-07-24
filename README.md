@@ -16,17 +16,28 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 | Feature | Endpoint | Description |
 |---------|----------|-------------|
-| 🔌 Connect | `POST /connect` | Connect to Chrome CDP (auto-discover or explicit URL) |
+| 🔌 Connect | `POST /connect` | Connect to Chrome CDP (auto-discover or explicit URL — also accepts plain HTTP base URL) |
 | 🔌 Disconnect | `POST /disconnect` | Disconnect from CDP |
 | 🚀 Navigate | `POST /navigate?url=...` | Navigate current tab to a URL (auto-activates) |
 | 💻 Execute JS | `POST /eval` | Run JavaScript, get result |
 | 🖱 Click | `POST /click` | Click element by CSS selector |
-| 👆 Click by Text | `POST /click/text` | Click element by visible text — no CSS selectors needed |
+| 👆 Click by Text | `POST /click/text` | Click element by visible text — **optional `nth` param** (0-indexed, e.g. 2nd "Edit" button) |
+| 👆 Click by Label | `POST /click/label` | Click `<label>` by text — framework-safe for React/Vue radios & checkboxes |
 | ⌨️ Type | `POST /type` | Type text into form fields |
-| ✏️ Smart Form Fill | `POST /form/fill` | Fill forms by label text — finds inputs via `<label>`, placeholder, name, aria-label |
-| ⏳ Wait for Element | `POST /wait` | Poll until element appears in DOM (with timeout) |
+| ✏️ Smart Form Fill | `POST /form/fill` | Fill forms by label text — finds inputs via &lt;label&gt;, placeholder, name, aria-label |
+| 🔽 Dropdown Select | `POST /form/select` | Select dropdown option by label, name, or CSS selector — **searches inside same-origin iframes too** |
+| ⏳ Wait for Element | `POST /wait` | Poll until element appears in DOM (CSS selector) |
+| ⏳ Wait for Text | `POST /wait/text` | Wait for specific text to appear/disappear |
+| ⏳ Wait for Navigation | `POST /wait/navigation` | Wait for URL change (SPA routing) |
+| ⏳ Wait for Network Idle | `POST /wait/network-idle` | Wait until network is quiet (AJAX submissions) |
+| 📊 Page Analyze | `POST /page/analyze` | **Comprehensive page snapshot** — buttons, forms, modals, alerts, text preview, **checkbox/radio state**, **iframe list** |
+| 📄 Page Text | `POST /page/text` | Full page innerText — clean, no HTML/script noise |
+| 📑 Page Outline | `POST /page/outline` | Heading hierarchy (h1-h6) with positions + section snippets |
+| 🔍 Find Element | `POST /page/find` | Find visible element by text — returns CSS selector, position, tag, attributes |
+| 📄 Page Diff | `POST /page/diff` | Compare current vs previous page state (buttons added/removed, URL, text change) |
+| 📺 Iframe Text | `POST /page/iframe-text` | Extract text from a specific iframe (same-origin) |
+| 🔄 Iframe Switch | `POST /page/iframe/switch` | Switch active context into an iframe (index=-1 returns to main) |
 | 📸 Screenshot | `POST /screenshot` | Viewport JPEG screenshot |
-| 📖 Get Text | `POST /get_text` | Extract visible page text |
 | 📊 DOM Query | `POST /dom_query` | Query elements by CSS selector + attribute |
 | 👆 DOM Click All | `POST /dom_click_all` | Click ALL matching elements (e.g. "Load more") |
 
@@ -101,10 +112,24 @@ Open **http://localhost:8001** in any browser to see:
 - **Cookie viewer** — inspect and clear cookies
 - **Script runner** — write and execute multi-step scripts
 - **Session manager** — save/restore browser sessions
+- **Chrome Management** — configure profile dir, debug port, Chrome path; Launch/Stop browser buttons
+- **Advanced Tools** — Page Text extract, Find Element, File Upload, Form Select, Iframe Text/Switch, Page Outline
 - **Action buttons** — one-click PDF, screenshot, text extraction
 - **JS Console** — execute arbitrary JS and see results
 
-All updated in real-time via WebSocket. No page reload needed.
+### Chrome Management (v0.4+)
+
+Start and stop Chrome directly from the API — no manual command line needed.
+
+| Feature | Endpoint | Description |
+|---------|----------|-------------|
+| ⚙️ Get Settings | `GET /settings` | View saved profile dir, debug port, Chrome path |
+| ⚙️ Update Settings | `POST /settings` | Save chrome_profile_dir, chrome_debug_port, chrome_path |
+| ▶️ Launch Chrome | `POST /browser/launch` | Start Chrome with remote debugging (auto-increments port if busy) |
+| ⏹ Stop Chrome | `POST /browser/stop` | Kill managed Chrome process |
+| 🔍 Chrome Status | `GET /browser/status` | Port-based running check (no CDP call needed) |
+
+Also via CLI: `python run.py --launch-chrome` with optional `--profile-dir` and `--debug-port`.
 
 ## Quick Start
 
