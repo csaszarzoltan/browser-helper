@@ -7,13 +7,16 @@ real-time status updates over WebSocket.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
+import tempfile
 import time
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 # Python 3.10 compatibility: datetime.UTC is 3.11+
 try:
@@ -27,15 +30,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 # ---------------------------------------------------------------------------
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
+from baseline_manager import BaselineManager
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
 from headless_manager import HeadlessManager
 from profile_manager import Profile, ProfileManager
+from screenshot_diff import ScreenshotDiffEngine
 from settings_manager import SettingsManager
 
 # Paths excluded from auth and rate-limiting middleware
@@ -152,6 +157,9 @@ headless_mgr = HeadlessManager()
 
 # Profile manager
 profile_mgr = ProfileManager()
+
+# Baseline manager for visual regression testing
+baseline_mgr = BaselineManager()
 
 # Operation log: list of dicts, max 100 entries
 # Each entry: {timestamp, operation, status, duration_ms, details}
@@ -396,6 +404,40 @@ class ExtensionRequest(BaseModel):
 
 class ImportRequest(BaseModel):
     path: str
+
+
+# ─── Visual regression testing models ────────────────────────
+
+
+class ViewportModel(BaseModel):
+    width: int
+    height: int
+
+
+class BaselineRequest(BaseModel):
+    url: str
+    profile: str | None = None
+    quality: int = 70
+    viewport: dict | None = None
+
+
+class CompareRequest(BaseModel):
+    url: str
+    profile: str | None = None
+    threshold: float = 0.001
+    quality: int = 70
+
+    @field_validator("threshold")
+    @classmethod
+    def validate_threshold(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError("threshold must be between 0.0 and 1.0")
+        return v
+
+
+class DeleteBaselineRequest(BaseModel):
+    url: str
+    profile: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -917,6 +959,178 @@ async def screenshot():
     Returns a base64-encoded JPEG image (quality 70).
     """
     return await run_op("screenshot", client.screenshot)
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — visual regression testing (screenshot baselines)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/screenshot/baseline")
+async def screenshot_baseline(body: BaselineRequest):
+    """Capture the current page as a visual baseline.
+
+    Takes a screenshot of the current page via CDP, saves it as
+    a baseline image tied to the given URL (+ optional profile
+    and viewport), and returns baseline metadata.
+
+    Requires an active CDP connection.
+    """
+    ensure_connected()
+
+    try:
+        # Take screenshot via CDP
+        screenshot_result = await client.screenshot()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Screenshot failed: {exc}",
+        )
+
+    image_data: str = screenshot_result.get("data", "")
+    if not image_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Screenshot returned no data",
+        )
+
+    image_bytes = base64.b64decode(image_data)
+
+    path = baseline_mgr.save_baseline(
+        url=body.url,
+        image_data=image_bytes,
+        profile=body.profile,
+        viewport=body.viewport,
+    )
+
+    stat = os.stat(path)
+
+    return {
+        "status": "ok",
+        "baseline": {
+            "url": body.url,
+            "path": path,
+            "size": stat.st_size,
+            "timestamp": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+        },
+    }
+
+
+@app.post("/screenshot/compare")
+async def screenshot_compare(body: CompareRequest):
+    """Compare the current page against its stored baseline.
+
+    Takes a fresh screenshot via CDP, compares it to the
+    previously stored baseline for this URL (+ profile/viewport),
+    and returns a DiffResult with base64-encoded diff image.
+
+    Requires an active CDP connection and an existing baseline.
+    """
+    ensure_connected()
+
+    # Check baseline exists
+    baseline_path = baseline_mgr.get_baseline(
+        url=body.url,
+        profile=body.profile,
+    )
+    if baseline_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No baseline found for URL: {body.url}",
+        )
+
+    # Take current screenshot
+    try:
+        screenshot_result = await client.screenshot()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Screenshot failed: {exc}",
+        )
+
+    image_data: str = screenshot_result.get("data", "")
+    if not image_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Screenshot returned no data",
+        )
+
+    current_bytes = base64.b64decode(image_data)
+    current_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    current_tmp.write(current_bytes)
+    current_tmp.close()
+    current_path = current_tmp.name
+
+    diff_output = os.path.join(
+        os.path.dirname(current_path),
+        f"diff_{Path(baseline_path).stem}.png",
+    )
+
+    result = ScreenshotDiffEngine.diff(
+        baseline_path=baseline_path,
+        current_path=current_path,
+        output_path=diff_output,
+        threshold=body.threshold,
+    )
+
+    # Clean up temp current screenshot
+    try:
+        os.unlink(current_path)
+    except Exception:
+        pass
+
+    baseline_stat = os.stat(baseline_path)
+
+    return {
+        "status": "ok",
+        "comparison": {
+            "url": body.url,
+            "passed": result.passed,
+            "pixel_delta": result.pixel_delta,
+            "threshold": body.threshold,
+            "dimensions_match": result.dimensions_match,
+            "baseline_size": list(result.baseline_size) if result.baseline_size else None,
+            "current_size": list(result.current_size) if result.current_size else None,
+            "diff_image": result.diff_image,
+            "baseline_taken_at": datetime.fromtimestamp(baseline_stat.st_mtime, tz=UTC).isoformat(),
+            "compared_at": datetime.now(UTC).isoformat(),
+        },
+    }
+
+
+@app.get("/screenshot/baselines")
+async def screenshot_baselines(profile: str | None = None):
+    """List all stored baselines, optionally filtered by profile."""
+    baselines = baseline_mgr.list_baselines(profile=profile)
+    return {
+        "status": "ok",
+        "baselines": baselines,
+        "count": len(baselines),
+    }
+
+
+@app.delete("/screenshot/baseline")
+async def screenshot_delete_baseline(body: DeleteBaselineRequest):
+    """Delete a stored baseline for the given URL (+ optional profile).
+
+    Idempotent for un-scoped deletes: returns 200 with ``deleted=true``
+    even when no baseline exists.  For profile-scoped deletes, returns
+    404 if the baseline is not found.
+    """
+    if body.profile and not baseline_mgr.get_baseline(url=body.url, profile=body.profile):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No baseline found for URL: {body.url}",
+        )
+
+    baseline_mgr.delete_baseline(
+        url=body.url,
+        profile=body.profile,
+    )
+    return {
+        "status": "ok",
+        "deleted": True,
+    }
 
 
 @app.get("/tabs")

@@ -146,11 +146,13 @@ Launch and manage headless Chrome instances with resource limits and timeout gua
 | 📸 Batch Screenshot | `POST /headless/batch-screenshot` | Multiple screenshots in sequence |
 | 🏥 Health | `GET /headless/health` | Pool stats + per-session resource usage |
 
-**Resource limits (configurable):**
+**Pool resource limits (configurable):**
 - Max concurrent sessions: 5
 - Session timeout: 300s (auto-kill)
 - CPU threshold: 80% (auto-kill)
 - Memory limit: 512MB (auto-kill)
+
+**Profile-aware sessions:** Pass `"profile": "<name>"` in the launch request to use a named profile's isolated data directory and extensions (see Multi-Profile section below).
 
 ```bash
 # Launch a headless session
@@ -168,6 +170,248 @@ curl -s -X POST http://localhost:8001/headless/screenshot \
 
 # Check pool health
 curl -s http://localhost:8001/headless/health | python -m json.tool
+```
+
+### Multi-Profile Session Management (v0.4+)
+
+Named profiles with isolated data directories, per-profile extensions, resource limits, and import/export as ZIP archives.
+
+| Feature | Endpoint | Description |
+|---------|----------|-------------|
+| 📋 List Profiles | `GET /profiles` | List all profiles |
+| ➕ Create Profile | `POST /profiles` | Create a new profile (name, description, tags, extensions, resource_limits) |
+| 🔍 Get Profile | `GET /profiles/{name}` | Get profile details by name |
+| ✏️ Update Profile | `PUT /profiles/{name}` | Update description, tags, or resource limits |
+| 🗑 Delete Profile | `DELETE /profiles/{name}` | Delete profile and its data directory |
+| 📦 Export Profile | `POST /profiles/{name}/export` | Export profile as ZIP (metadata + data files) |
+| 📥 Import Profile | `POST /profiles/import` | Import profile from ZIP archive |
+| 📋 List Extensions | `GET /profiles/{name}/extensions` | List extensions for a profile |
+| ➕ Add Extension | `POST /profiles/{name}/extensions` | Add an extension path to a profile |
+| ❌ Remove Extension | `DELETE /profiles/{name}/extensions` | Remove an extension from a profile |
+
+**Profile fields:**
+- `name` — unique identifier, must not contain path separators (`/`, `\`, `..`)
+- `description` — free-text label
+- `tags` — list of strings for categorization
+- `extensions` — list of absolute paths to Chrome extensions to load
+- `resource_limits` — `{max_memory_mb: 512, max_cpu_percent: 80}`
+- `data_dir` — auto-managed directory under `profiles/<name>/`
+- `created_at`, `last_used` — UTC timestamps
+
+**Storage layout:**
+```
+~/.browser-helper/
+├── profiles.json          # Metadata for all profiles (JSON)
+└── profiles/
+    └── <name>/            # Per-profile data directory
+        └── ...            # Chrome user data, extensions, cookies
+```
+
+**Integration with headless sessions:**
+
+Pass a `profile` parameter to `/headless/launch` — the headless Chrome instance automatically uses that profile's isolated data directory and loads its extensions:
+
+```bash
+# Create a profile
+curl -X POST http://localhost:8001/profiles \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "work",
+    "description": "Work profile with extensions",
+    "tags": ["work", "automation"],
+    "extensions": ["/path/to/adblocker"]
+  }'
+
+# List profiles
+curl http://localhost:8001/profiles
+
+# Get profile details
+curl http://localhost:8001/profiles/work
+
+# Update profile metadata
+curl -X PUT http://localhost:8001/profiles/work \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Updated work profile", "tags": ["work", "prod"]}'
+
+# Add extension to a profile
+curl -X POST http://localhost:8001/profiles/work/extensions \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/home/user/extensions/ublock"}'
+
+# Launch headless session WITH profile (uses its data dir + extensions)
+curl -X POST http://localhost:8001/headless/launch \
+  -H "Content-Type: application/json" \
+  -d '{"profile": "work"}'
+
+# Launch headless session with profile + extra extensions
+curl -X POST http://localhost:8001/headless/launch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "profile": "work",
+    "extensions": ["/extra/ext1", "/extra/ext2"]
+  }'
+
+# Export profile as ZIP
+curl -X POST http://localhost:8001/profiles/work/export -o work-profile.zip
+
+# Import profile from ZIP (file must be on server)
+curl -X POST http://localhost:8001/profiles/import \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/tmp/work-profile.zip"}'
+
+# Delete profile
+curl -X DELETE http://localhost:8001/profiles/work
+```
+
+**Per-profile resource limits:** Each profile carries its own `resource_limits` (`max_memory_mb`, `max_cpu_percent`). These limits are stored in the profile metadata and can be used by session management to apply per-profile resource governance (defaults: 512 MB memory, 80% CPU).
+
+**Profile-aware headless sessions:** When launching a headless session with a named profile:
+1. The profile's data directory (`~/.browser-helper/profiles/<name>/`) is used as `--user-data-dir`
+2. The profile's extension list is loaded via `--load-extension` flags
+3. The session handle records `profile_name` for traceability
+4. Explicit `extensions` passed at launch are merged only when no profile is used; with a profile, the profile's own extensions take precedence unless overridden
+
+
+### Visual Regression Testing (v0.5.0)
+
+Screenshot diff engine compares page screenshots against stored baselines. REST API for capturing, comparing, listing, and deleting baselines. CI/CD-friendly JSON output with configurable pass/fail thresholds.
+
+| Feature | Endpoint | Description |
+|---------|----------|-------------|
+| 📸 Capture Baseline | `POST /screenshot/baseline` | Capture current page as a baseline snapshot |
+| 🔍 Compare Screenshot | `POST /screenshot/compare` | Compare current screenshot against a stored baseline |
+| 📋 List Baselines | `GET /screenshot/baselines` | List all stored baselines |
+| 🗑 Delete Baseline | `DELETE /screenshot/baseline` | Remove a stored baseline |
+
+**Baseline storage:** Baselines are stored under `~/.browser-helper/baselines/<profile>/<url-hash>.png` with metadata in `~/.browser-helper/baselines/index.json`.
+
+```bash
+# Capture a baseline
+curl -X POST http://localhost:8001/screenshot/baseline \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://example.com", "profile": "work"}'
+
+# Compare against baseline
+curl -X POST http://localhost:8001/screenshot/compare \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://example.com", "profile": "work", "threshold": 0.001}'
+
+# List stored baselines
+curl http://localhost:8001/screenshot/baselines
+
+# List baselines for a specific profile
+curl "http://localhost:8001/screenshot/baselines?profile=work"
+
+# Delete a baseline
+curl -X DELETE http://localhost:8001/screenshot/baseline \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://example.com", "profile": "work"}'
+```
+
+**Comparison response:**
+```json
+{
+  "status": "ok",
+  "comparison": {
+    "url": "https://example.com",
+    "passed": true,
+    "pixel_delta": 0.0003,
+    "threshold": 0.001,
+    "dimensions_match": true,
+    "baseline_size": {"w": 1280, "h": 720},
+    "current_size": {"w": 1280, "h": 720},
+    "diff_image": "<base64>",
+    "baseline_taken_at": "2026-07-26T10:00:00Z",
+    "compared_at": "2026-07-26T10:01:00Z"
+  }
+}
+```
+
+The `pixel_delta` is the fraction of differing pixels (0.0 = identical, 1.0 = completely different). A comparison **passes** when `pixel_delta <= threshold`. The `diff_image` field contains a base64-encoded PNG showing pixel differences (white = match, red = difference).
+
+### POST /screenshot/baseline
+Capture current page as a baseline snapshot.
+
+**Request:** `{"url": "...", "profile": "...", "quality": 70}`
+- `url` (optional) — page URL tag for baseline lookup
+- `profile` (optional) — scope baseline to a user profile
+- `quality` (optional) — JPEG quality (default 70)
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "baseline": {
+    "url": "https://example.com",
+    "path": "~/.browser-helper/baselines/work/abc123hash.png",
+    "size": 12345,
+    "timestamp": "2026-07-26T10:00:00Z"
+  }
+}
+```
+
+### POST /screenshot/compare
+Compare current screenshot against a stored baseline.
+
+**Request:** `{"url": "...", "profile": "...", "threshold": 0.001}`
+- `url` (optional) — baseline URL key
+- `profile` (optional) — profile-scoped baseline
+- `threshold` (optional) — pixel diff threshold 0.0-1.0 (default 0.001)
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "comparison": {
+    "url": "https://example.com",
+    "passed": true,
+    "pixel_delta": 0.0003,
+    "threshold": 0.001,
+    "dimensions_match": true,
+    "baseline_size": {"w": 1280, "h": 720},
+    "current_size": {"w": 1280, "h": 720},
+    "diff_image": "<base64>",
+    "baseline_taken_at": "2026-07-26T10:00:00Z",
+    "compared_at": "2026-07-26T10:01:00Z"
+  }
+}
+```
+
+### GET /screenshot/baselines
+List all stored baselines.
+
+**Query params:** `?profile=work` (optional filter)
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "baselines": [
+    {
+      "url": "https://example.com",
+      "profile": "work",
+      "path": "~/.browser-helper/baselines/work/abc123hash.png",
+      "size": 12345,
+      "timestamp": "2026-07-26T10:00:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+### DELETE /screenshot/baseline
+Remove a stored baseline.
+
+**Request:** `{"url": "...", "profile": "..."}`
+- `url` (optional) — baseline URL key
+- `profile` (optional) — profile-scoped baseline
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "deleted": true
+}
 ```
 
 ## Quick Start
@@ -409,7 +653,7 @@ The container bundles the CDP backend. Chrome must still be running on the host 
 cd tests && pytest -v
 ```
 
-Current test suite: **59 tests pass, 1 skipped, 0 failures** (60 total). All source files pass `ruff check` cleanly.
+Current test suite: **142 tests pass, 1 skipped, 0 failures** (143 total). All source files pass `ruff check` cleanly.
 
 ## Documentation
 

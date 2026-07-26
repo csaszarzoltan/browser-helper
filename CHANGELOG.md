@@ -2,6 +2,17 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+## [0.5.0] — 2026-07-26
+
+### Added
+
+- **Visual regression testing** with screenshot diff engine (Pillow ImageChops.difference)
+- **Baseline snapshot management** — capture, store, list, delete with profile-aware scoping
+- **REST API** — `POST /screenshot/baseline`, `POST /screenshot/compare`, `GET /screenshot/baselines`, `DELETE /screenshot/baseline`
+- **CI/CD-friendly JSON output** with configurable pass/fail threshold (default 0.1%)
+- **Profile-aware baseline scoping** — baselines isolated per browser profile
+- **38 new integration and edge-case tests** for screenshot diff, baseline management, and screenshot API
+
 ## [0.4.0] — 2026-07-26
 
 ### Added
