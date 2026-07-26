@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from cdp_client import CDPClient
 from settings_manager import SettingsManager
 from chrome_manager import ChromeManager
+from headless_manager import HeadlessManager
 
 # Paths excluded from auth and rate-limiting middleware
 PUBLIC_PATHS = {"/", "/health", "/ready", "/ws"}
@@ -142,6 +143,9 @@ client = CDPClient()
 # Settings and Chrome process manager
 settings_mgr = SettingsManager()
 chrome_mgr = ChromeManager(settings_mgr)
+
+# Headless session manager
+headless_mgr = HeadlessManager()
 
 # Operation log: list of dicts, max 100 entries
 # Each entry: {timestamp, operation, status, duration_ms, details}
@@ -328,6 +332,37 @@ class WorkflowStep(BaseModel):
 
 class WorkflowRequest(BaseModel):
     steps: list[WorkflowStep]
+
+
+# ─── Headless session models ────────────────────────────────────
+
+
+class HeadlessLaunchRequest(BaseModel):
+    profile_dir: str | None = None
+    port: int | None = None
+
+
+class HeadlessCloseRequest(BaseModel):
+    session_id: str
+
+
+class HeadlessNavigateRequest(BaseModel):
+    session_id: str
+    url: str
+
+
+class HeadlessEvalRequest(BaseModel):
+    session_id: str
+    expression: str
+
+
+class HeadlessScreenshotRequest(BaseModel):
+    session_id: str
+
+
+class HeadlessBatchScreenshotRequest(BaseModel):
+    session_id: str
+    urls: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -1399,6 +1434,81 @@ async def websocket_endpoint(ws: WebSocket):
     finally:
         ws_clients.discard(ws)
         logger.info("WebSocket client disconnected (%d remaining)", len(ws_clients))
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — headless Chrome sessions
+# ---------------------------------------------------------------------------
+
+
+@app.post("/headless/launch")
+async def headless_launch(body: HeadlessLaunchRequest | None = None):
+    """Launch a new headless Chrome session.
+
+    Optionally provide profile_dir and/or port.
+    Returns session_id, port, cdp_url, pid.
+    """
+    kwargs = {}
+    if body:
+        if body.profile_dir is not None:
+            kwargs["profile_dir"] = body.profile_dir
+        if body.port is not None:
+            kwargs["port"] = body.port
+    result = await headless_mgr.launch_session(**kwargs)
+    status_code = 200 if result.get("status") == "ok" else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.post("/headless/close")
+async def headless_close(body: HeadlessCloseRequest):
+    """Close a headless session by ID."""
+    result = await headless_mgr.close_session(body.session_id)
+    status_code = 200 if result.get("status") == "ok" else 404
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.get("/headless/sessions")
+async def headless_sessions():
+    """List all active headless sessions with resource usage."""
+    return {"status": "ok", "sessions": headless_mgr.get_sessions()}
+
+
+@app.post("/headless/navigate")
+async def headless_navigate(body: HeadlessNavigateRequest):
+    """Navigate a headless session to a URL."""
+    result = await headless_mgr.navigate(body.session_id, body.url)
+    status_code = 200 if result.get("status") == "ok" else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.post("/headless/eval")
+async def headless_eval(body: HeadlessEvalRequest):
+    """Evaluate JavaScript in a headless session."""
+    result = await headless_mgr.evaluate(body.session_id, body.expression)
+    status_code = 200 if result.get("status") == "ok" else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.post("/headless/screenshot")
+async def headless_screenshot(body: HeadlessScreenshotRequest):
+    """Take a screenshot of a headless session's current page."""
+    result = await headless_mgr.screenshot(body.session_id)
+    status_code = 200 if result.get("status") == "ok" else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.post("/headless/batch-screenshot")
+async def headless_batch_screenshot(body: HeadlessBatchScreenshotRequest):
+    """Take multiple screenshots by navigating to each URL."""
+    result = await headless_mgr.batch_screenshot(body.session_id, body.urls)
+    status_code = 200 if result.get("status") == "ok" else 400
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.get("/headless/health")
+async def headless_health():
+    """Pool stats and per-session resource usage."""
+    return headless_mgr.health_check()
 
 
 # ---------------------------------------------------------------------------

@@ -110,6 +110,7 @@ class ChromeManager:
         profile_dir: str | None = None,
         port: int | None = None,
         chrome_path: str | None = None,
+        headless: bool = False,
     ) -> dict:
         """
         Launch Chrome with remote debugging.
@@ -119,6 +120,8 @@ class ChromeManager:
         - *port* overrides the saved debug port; if busy the next free port
           is tried (up to +10).
         - *chrome_path* overrides the saved Chrome executable path.
+        - *headless* when True, launches Chrome in headless mode (--headless=new).
+          Falls back to --headless for Chrome < 112.
         """
         # Resolve parameters: use override or fall back to saved settings
         profile_dir = profile_dir or self.settings.get("chrome_profile_dir") or ""
@@ -169,6 +172,10 @@ class ChromeManager:
             "--no-default-browser-check",
             "--hide-scrollbars",
         ]
+
+        # Headless mode: --headless=new (Chrome 112+), fallback --headless for older
+        if headless:
+            cmd.append("--headless=new")
 
         logger.info("Launching: %s", " ".join(cmd))
 

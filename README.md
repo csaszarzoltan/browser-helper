@@ -131,6 +131,45 @@ Start and stop Chrome directly from the API — no manual command line needed.
 
 Also via CLI: `python run.py --launch-chrome` with optional `--profile-dir` and `--debug-port`.
 
+### Headless Chrome Sessions (v0.3+)
+
+Launch and manage headless Chrome instances with resource limits and timeout guards.
+
+| Feature | Endpoint | Description |
+|---------|----------|-------------|
+| 🚀 Launch Session | `POST /headless/launch` | Start a new headless Chrome instance |
+| ⏹ Close Session | `POST /headless/close` | Kill a session by ID |
+| 📋 List Sessions | `GET /headless/sessions` | Active sessions with resource usage |
+| 🌐 Navigate | `POST /headless/navigate` | Navigate session to URL |
+| 💻 Evaluate JS | `POST /headless/eval` | Execute JavaScript in session |
+| 📸 Screenshot | `POST /headless/screenshot` | Capture page screenshot |
+| 📸 Batch Screenshot | `POST /headless/batch-screenshot` | Multiple screenshots in sequence |
+| 🏥 Health | `GET /headless/health` | Pool stats + per-session resource usage |
+
+**Resource limits (configurable):**
+- Max concurrent sessions: 5
+- Session timeout: 300s (auto-kill)
+- CPU threshold: 80% (auto-kill)
+- Memory limit: 512MB (auto-kill)
+
+```bash
+# Launch a headless session
+curl -s -X POST http://localhost:8001/headless/launch | python -m json.tool
+
+# Navigate it
+curl -s -X POST http://localhost:8001/headless/navigate \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id": "abc123", "url": "https://example.com"}'
+
+# Take a screenshot
+curl -s -X POST http://localhost:8001/headless/screenshot \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id": "abc123"}'
+
+# Check pool health
+curl -s http://localhost:8001/headless/health | python -m json.tool
+```
+
 ## Quick Start
 
 ### 1. Start Chrome with remote debugging
@@ -370,7 +409,7 @@ The container bundles the CDP backend. Chrome must still be running on the host 
 cd tests && pytest -v
 ```
 
-Current test suite: **259 tests pass, 26 skipped, 0 failures** (285 total). All source files pass `ruff check` cleanly.
+Current test suite: **59 tests pass, 1 skipped, 0 failures** (60 total). All source files pass `ruff check` cleanly.
 
 ## Documentation
 
