@@ -40,7 +40,7 @@ def _detect_chrome_on_port(port: int) -> bool:
     try:
         resp = httpx.get(f"http://127.0.0.1:{port}/json/version", timeout=2)
         return resp.status_code == 200
-    except Exception:
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
         return False
 
 
@@ -58,7 +58,7 @@ def _kill_process(pid: int) -> None:
         if platform.system() == "Windows":
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/F"],
-                capture_output=True, timeout=5,
+                capture_output=True, timeout=5, check=False,
             )
         else:
             os.kill(pid, signal.SIGTERM)
@@ -101,6 +101,7 @@ class SessionHandle:
     created_at: float
     last_active: float
     status: str  # "active", "idle", "closing", "closed"
+    profile_name: str | None = None
     resource_monitor: ResourceMonitor | None = None
     process: asyncio.subprocess.Process | None = field(default=None, repr=False)
 
@@ -163,8 +164,18 @@ class HeadlessManager:
         self,
         profile_dir: str | None = None,
         port: int | None = None,
+        profile: str | None = None,
+        extensions: list[str] | None = None,
     ) -> dict:
         """Launch a new headless Chrome session.
+
+        Args:
+            profile_dir: Optional explicit path to a Chrome user data directory.
+            port: Optional explicit debug port.
+            profile: Optional profile name (resolved via ProfileManager's
+                     data directory). Takes precedence when both it and
+                     profile_dir are given.
+            extensions: Optional list of extension paths to load.
 
         Returns session info dict with session_id, port, cdp_url, etc.
         """
@@ -190,13 +201,38 @@ class HeadlessManager:
             "--disable-gpu",
             "--no-sandbox",
         ]
-        if profile_dir:
+
+        # Resolve profile data dir
+        resolved_profile_name: str | None = profile
+        if profile:
+            # Lazy import to avoid circular dependency at module level
+            from profile_manager import ProfileManager
+            pm = ProfileManager()
+            data_dir = pm.get_data_dir(profile)
+            if data_dir is None:
+                return {
+                    "status": "error",
+                    "error": f"Profile {profile!r} not found",
+                }
+            cmd.append(f"--user-data-dir={data_dir}")
+            # If extensions weren't passed explicitly, look them up from profile
+            if extensions is None:
+                exts = pm.get_extensions(profile)
+                if exts:
+                    for ext_path in exts:
+                        cmd.append(f"--load-extension={ext_path}")
+        elif profile_dir:
             cmd.append(f"--user-data-dir={profile_dir}")
         else:
             # Use a temp profile dir for headless sessions
             import tempfile
             tmpdir = tempfile.mkdtemp(prefix="bh-headless-")
             cmd.append(f"--user-data-dir={tmpdir}")
+
+        # Add explicit extensions
+        if extensions and not profile:
+            for ext_path in extensions:
+                cmd.append(f"--load-extension={ext_path}")
 
         logger.info("Launching headless Chrome: %s", " ".join(cmd))
 
@@ -211,7 +247,7 @@ class HeadlessManager:
                 "status": "error",
                 "error": f"Chrome executable not found: {self._chrome_path}",
             }
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
         # Wait for CDP to be ready
@@ -240,6 +276,7 @@ class HeadlessManager:
             created_at=now,
             last_active=now,
             status="active",
+            profile_name=resolved_profile_name,
             resource_monitor=ResourceMonitor(proc.pid),
             process=proc,
         )
@@ -295,6 +332,7 @@ class HeadlessManager:
                 "pid": s.chrome_pid,
                 "cdp_url": s.cdp_url,
                 "status": s.status,
+                "profile_name": s.profile_name,
                 "created_at": s.created_at,
                 "last_active": s.last_active,
                 "age_seconds": round(time.time() - s.created_at, 1),
@@ -336,7 +374,7 @@ class HeadlessManager:
                     timeout=10,
                 )
                 return {"status": "ok", "result": nav_resp.json()}
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
     async def evaluate(self, session_id: str, expression: str) -> dict:
@@ -356,7 +394,7 @@ class HeadlessManager:
 
                 tab_id = tabs[0]["id"]
                 # Use Runtime.evaluate via WebSocket (simplified: use HTTP activate + eval)
-                eval_resp = await http.put(
+                await http.put(
                     f"{handle.cdp_url}/json/activate/{tab_id}",
                     timeout=5,
                 )
@@ -367,7 +405,7 @@ class HeadlessManager:
                     "title": tabs[0].get("title", ""),
                     "url": tabs[0].get("url", ""),
                 }
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
     async def screenshot(self, session_id: str) -> dict:
@@ -395,7 +433,7 @@ class HeadlessManager:
                     "url": tabs[0].get("url", ""),
                     "title": tabs[0].get("title", ""),
                 }
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
     async def batch_screenshot(self, session_id: str, urls: list[str]) -> dict:

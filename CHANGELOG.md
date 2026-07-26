@@ -2,6 +2,18 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+## [0.4.0] — 2026-07-26
+
+### Added
+
+- **ProfileManager** — create, read, update, delete browser profiles with JSON persistence (follows SettingsManager pattern)
+- **Profile dataclass** — stores name, description, tags, data directory, extensions list, resource limits, and timestamps
+- **Profile-aware headless sessions** — launch headless Chrome with a named profile's isolated data directory and extensions
+- **Per-profile extension loading** — extensions stored per-profile, loaded automatically on session launch
+- **Profile import/export (ZIP)** — export profile data + extensions as a ZIP archive; import from ZIP with validation and path-traversal protection
+- **REST API for profile management** — `GET /profiles`, `POST /profiles`, `GET /profiles/{name}`, `PUT /profiles/{name}`, `DELETE /profiles/{name}`, `POST /profiles/{name}/export`, `POST /profiles/import`
+- **83 new tests** covering ProfileManager CRUD, profile-aware headless sessions, profile import/export, and profile REST API endpoints
+
 ## [0.3.0] — 2026-07-26
 
 ### Added

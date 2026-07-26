@@ -11,13 +11,15 @@ import json
 import logging
 import os
 import time
+import zipfile
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 # Python 3.10 compatibility: datetime.UTC is 3.11+
 try:
     _UTC = datetime.UTC
 except AttributeError:
-    _UTC = timezone.utc
+    _UTC = UTC
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -31,9 +33,10 @@ from pydantic import BaseModel
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
 from cdp_client import CDPClient
-from settings_manager import SettingsManager
 from chrome_manager import ChromeManager
 from headless_manager import HeadlessManager
+from profile_manager import Profile, ProfileManager
+from settings_manager import SettingsManager
 
 # Paths excluded from auth and rate-limiting middleware
 PUBLIC_PATHS = {"/", "/health", "/ready", "/ws"}
@@ -146,6 +149,9 @@ chrome_mgr = ChromeManager(settings_mgr)
 
 # Headless session manager
 headless_mgr = HeadlessManager()
+
+# Profile manager
+profile_mgr = ProfileManager()
 
 # Operation log: list of dicts, max 100 entries
 # Each entry: {timestamp, operation, status, duration_ms, details}
@@ -340,6 +346,8 @@ class WorkflowRequest(BaseModel):
 class HeadlessLaunchRequest(BaseModel):
     profile_dir: str | None = None
     port: int | None = None
+    profile: str | None = None
+    extensions: list[str] | None = None
 
 
 class HeadlessCloseRequest(BaseModel):
@@ -363,6 +371,31 @@ class HeadlessScreenshotRequest(BaseModel):
 class HeadlessBatchScreenshotRequest(BaseModel):
     session_id: str
     urls: list[str]
+
+
+# ─── Profile management models ────────────────────────────────
+
+
+class ProfileCreateRequest(BaseModel):
+    name: str
+    extensions: list[str] | None = None
+    description: str = ""
+    tags: list[str] | None = None
+    resource_limits: dict | None = None
+
+
+class ProfileUpdateRequest(BaseModel):
+    description: str | None = None
+    tags: list[str] | None = None
+    resource_limits: dict | None = None
+
+
+class ExtensionRequest(BaseModel):
+    path: str
+
+
+class ImportRequest(BaseModel):
+    path: str
 
 
 # ---------------------------------------------------------------------------
@@ -1445,7 +1478,8 @@ async def websocket_endpoint(ws: WebSocket):
 async def headless_launch(body: HeadlessLaunchRequest | None = None):
     """Launch a new headless Chrome session.
 
-    Optionally provide profile_dir and/or port.
+    Optionally provide profile_dir, port, profile (profile name), and/or
+    extensions (list of extension paths).
     Returns session_id, port, cdp_url, pid.
     """
     kwargs = {}
@@ -1454,6 +1488,10 @@ async def headless_launch(body: HeadlessLaunchRequest | None = None):
             kwargs["profile_dir"] = body.profile_dir
         if body.port is not None:
             kwargs["port"] = body.port
+        if body.profile is not None:
+            kwargs["profile"] = body.profile
+        if body.extensions is not None:
+            kwargs["extensions"] = body.extensions
     result = await headless_mgr.launch_session(**kwargs)
     status_code = 200 if result.get("status") == "ok" else 400
     return JSONResponse(status_code=status_code, content=result)
@@ -1509,6 +1547,214 @@ async def headless_batch_screenshot(body: HeadlessBatchScreenshotRequest):
 async def headless_health():
     """Pool stats and per-session resource usage."""
     return headless_mgr.health_check()
+
+
+# ---------------------------------------------------------------------------
+# REST endpoints — Profile management
+# ---------------------------------------------------------------------------
+
+
+def _profile_to_response(p: Profile) -> dict:
+    """Serialize a Profile to a JSON-safe dict for API responses."""
+    return {
+        "name": p.name,
+        "data_dir": p.data_dir,
+        "created_at": p.created_at,
+        "last_used": p.last_used,
+        "extensions": list(p.extensions),
+        "description": p.description,
+        "tags": list(p.tags),
+        "resource_limits": dict(p.resource_limits),
+    }
+
+
+@app.get("/profiles")
+async def list_profiles():
+    """List all profiles."""
+    profiles = profile_mgr.list_profiles()
+    return {
+        "status": "ok",
+        "profiles": [_profile_to_response(p) for p in profiles],
+    }
+
+
+@app.post("/profiles", status_code=201)
+async def create_profile(body: ProfileCreateRequest):
+    """Create a new profile."""
+    if not body.name:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Profile name must not be empty"},
+        )
+    try:
+        profile = profile_mgr.create_profile(
+            name=body.name,
+            extensions=body.extensions,
+            description=body.description,
+            tags=body.tags,
+            resource_limits=body.resource_limits,
+        )
+        return {
+            "status": "ok",
+            "profile": _profile_to_response(profile),
+        }
+    except ValueError as exc:
+        msg = str(exc).lower()
+        if "already exists" in msg or "duplicate" in msg:
+            return JSONResponse(
+                status_code=409,
+                content={"detail": str(exc)},
+            )
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc)},
+        )
+
+
+@app.get("/profiles/{name}")
+async def get_profile(name: str):
+    """Get profile details by name."""
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    return {
+        "status": "ok",
+        "profile": _profile_to_response(profile),
+    }
+
+
+@app.put("/profiles/{name}")
+async def update_profile(name: str, body: ProfileUpdateRequest):
+    """Update profile metadata (description, tags, resource_limits)."""
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+
+    # Apply updates via the manager's internal dict
+    updated = Profile(
+        name=profile.name,
+        data_dir=profile.data_dir,
+        created_at=profile.created_at,
+        last_used=profile.last_used,
+        extensions=profile.extensions,
+        description=body.description if body.description is not None else profile.description,
+        tags=body.tags if body.tags is not None else profile.tags,
+        resource_limits=body.resource_limits if body.resource_limits is not None else profile.resource_limits,
+    )
+
+    # Directly update the data dict and save
+    profile_mgr._data[name] = updated.to_dict()
+    profile_mgr.save()
+
+    return {
+        "status": "ok",
+        "profile": _profile_to_response(
+            profile_mgr.get_profile(name)  # type: ignore[arg-type]
+        ),
+    }
+
+
+@app.delete("/profiles/{name}")
+async def delete_profile(name: str):
+    """Delete a profile and its data directory."""
+    if profile_mgr.get_profile(name) is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    profile_mgr.delete_profile(name)
+    return {"status": "ok"}
+
+
+@app.post("/profiles/{name}/export")
+async def export_profile(name: str):
+    """Export a profile as a ZIP archive."""
+    import tempfile
+
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+
+    output = str(tempfile.mktemp(suffix=".zip"))
+    result = profile_mgr.export_profile(name, output)
+    if result is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    return {"status": "ok", "path": result}
+
+
+@app.post("/profiles/import", status_code=201)
+async def import_profile(body: ImportRequest):
+    """Import a profile from a ZIP archive."""
+    try:
+        profile = profile_mgr.import_profile(body.path)
+        return {
+            "status": "ok",
+            "profile": _profile_to_response(profile),
+        }
+    except (ValueError, zipfile.BadZipFile) as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc)},
+        )
+
+
+@app.get("/profiles/{name}/extensions")
+async def get_extensions(name: str):
+    """List extensions for a profile."""
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    return {
+        "status": "ok",
+        "extensions": profile.extensions,
+    }
+
+
+@app.post("/profiles/{name}/extensions")
+async def add_extension(name: str, body: ExtensionRequest):
+    """Add an extension to a profile."""
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    profile_mgr.add_extension(name, body.path)
+    return {
+        "status": "ok",
+        "extensions": profile_mgr.get_extensions(name),
+    }
+
+
+@app.delete("/profiles/{name}/extensions")
+async def remove_extension(name: str, body: ExtensionRequest):
+    """Remove an extension from a profile."""
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    profile_mgr.remove_extension(name, body.path)
+    return {
+        "status": "ok",
+        "extensions": profile_mgr.get_extensions(name),
+    }
 
 
 # ---------------------------------------------------------------------------
