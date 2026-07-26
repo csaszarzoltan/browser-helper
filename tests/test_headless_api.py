@@ -1,13 +1,12 @@
 """Tests for browser-helper headless REST API endpoints."""
 
 import sys
-import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # Import the FastAPI app and headless manager
 from main import app, headless_mgr

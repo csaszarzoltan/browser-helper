@@ -1,18 +1,16 @@
 """Tests for browser-helper headless manager."""
 
 import sys
-import os
-import asyncio
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
+
 from headless_manager import (
     HeadlessManager,
-    SessionPool,
     SessionHandle,
-    ResourceMonitor,
+    SessionPool,
     _find_free_port,
     _kill_process,
 )

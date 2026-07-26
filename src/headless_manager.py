@@ -14,7 +14,6 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
 
 import httpx
 
@@ -277,7 +276,7 @@ class HeadlessManager:
         if handle.process:
             try:
                 await asyncio.wait_for(handle.process.wait(), timeout=5.0)
-            except (asyncio.TimeoutError, ProcessLookupError):
+            except (TimeoutError, ProcessLookupError):
                 pass
 
         handle.status = "closed"
