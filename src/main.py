@@ -295,6 +295,21 @@ class ClickLabelRequest(BaseModel):
     timeout: int = 5
 
 
+# ─── New: Checkbox operation models ────────────────────────────
+
+
+class CheckboxRequest(BaseModel):
+    """Single checkbox operation: target one checkbox/radio by label text."""
+    text: str
+    timeout: int = 5
+
+
+class CheckboxBatchRequest(BaseModel):
+    """Batch checkbox operation: target multiple checkboxes/radios by label texts."""
+    texts: list[str]
+    timeout: int = 5
+
+
 # ─── New: Upload, find element models ────────────────────────────
 
 
@@ -658,7 +673,7 @@ async def wait_element(body: WaitRequest):
 
 
 @app.post("/click/text")
-async def click_by_text(body: ClickTextRequest):
+async def click_by_text(body: ClickTextRequest, confirm: str | None = Query(None, description="Post-click confirmation: 'screenshot' for base64 JPEG, 'analyze' for state comparison")):
     """Click an element by its visible text content.
 
     Searches a/button/span elements whose text matches.
@@ -666,29 +681,158 @@ async def click_by_text(body: ClickTextRequest):
 
     Optional ``container_selector`` restricts search to a specific
     container (e.g. "#accept-modal" to click inside a modal).
+
+    Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
+    post-click screenshot / state comparison to the response.
     """
-    return await run_op("click_text", client.click_by_text,
-                        body.text, body.timeout, body.container_selector, body.nth)
+    # Capture before-state for confirmation
+    if confirm:
+        try:
+            before = await client.analyze_page()
+            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+        except Exception:
+            client._before_visual_state = {}
+    result = await run_op("click_text", client.click_by_text,
+                          body.text, body.timeout, body.container_selector, body.nth)
+    if confirm and result.get("status") == "ok":
+        try:
+            if confirm == "screenshot":
+                conf = await client._confirm_with_screenshot()
+            elif confirm == "analyze":
+                conf = await client._confirm_with_analyze()
+            else:
+                conf = None
+            if conf:
+                result["confirmation"] = conf
+        except Exception:
+            pass
+    return result
 
 
 @app.post("/click/label")
-async def click_label(body: ClickLabelRequest):
+async def click_label(body: ClickLabelRequest, confirm: str | None = Query(None, description="Post-click confirmation: 'screenshot' for base64 JPEG, 'analyze' for state comparison")):
     """Click a <label> element by its visible text.
 
     Framework-safe: clicks actual HTML <label> elements that toggle
     the associated input (React/Vue/Symfony forms only respond to
     real label clicks). Use this for radio buttons, checkboxes, and
     any field where click_by_text doesn't register with the framework.
+
+    Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
+    post-click screenshot / state comparison to the response.
     """
-    return await run_op("click_label", client.click_label,
-                        body.text, body.timeout)
+    if confirm:
+        try:
+            before = await client.analyze_page()
+            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+        except Exception:
+            client._before_visual_state = {}
+    result = await run_op("click_label", client.click_label,
+                          body.text, body.timeout)
+    if confirm and result.get("status") == "ok":
+        try:
+            if confirm == "screenshot":
+                conf = await client._confirm_with_screenshot()
+            elif confirm == "analyze":
+                conf = await client._confirm_with_analyze()
+            else:
+                conf = None
+            if conf:
+                result["confirmation"] = conf
+        except Exception:
+            pass
+    return result
+
+
+# ─── New: Checkbox operation endpoints ──────────────────────────
+
+
+@app.post("/checkbox/select")
+async def checkbox_select(body: CheckboxRequest | CheckboxBatchRequest, confirm: str | None = Query(None, description="Post-operation confirmation: 'screenshot' for base64 JPEG, 'analyze' for state comparison")):
+    """Check/select a checkbox or radio by label text.
+
+    Single mode: ``{"text": "Email notifications", "timeout": 5}``
+    Batch mode:  ``{"texts": ["Email", "SMS"], "timeout": 5}``
+
+    Framework-safe: uses the same label-resolution strategy as
+    ``analyze_page()`` and clicks the associated <label> to toggle.
+
+    Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
+    post-operation screenshot / state comparison to the response.
+    """
+    if confirm:
+        try:
+            before = await client.analyze_page()
+            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+        except Exception:
+            client._before_visual_state = {}
+    if isinstance(body, CheckboxBatchRequest):
+        result = await run_op("checkbox_select_batch",
+                              client.checkbox_set_state_batch,
+                              body.texts, True, body.timeout)
+    else:
+        result = await run_op("checkbox_select",
+                              client.checkbox_set_state,
+                              body.text, True, body.timeout)
+    if confirm and result.get("status") == "ok":
+        try:
+            if confirm == "screenshot":
+                conf = await client._confirm_with_screenshot()
+            elif confirm == "analyze":
+                conf = await client._confirm_with_analyze()
+            else:
+                conf = None
+            if conf:
+                result["confirmation"] = conf
+        except Exception:
+            pass
+    return result
+
+
+@app.post("/checkbox/deselect")
+async def checkbox_deselect(body: CheckboxRequest | CheckboxBatchRequest, confirm: str | None = Query(None, description="Post-operation confirmation: 'screenshot' for base64 JPEG, 'analyze' for state comparison")):
+    """Uncheck/deselect a checkbox or radio by label text.
+
+    Single mode: ``{"text": "SMS notifications", "timeout": 5}``
+    Batch mode:  ``{"texts": ["Email", "SMS"], "timeout": 5}``
+
+    Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
+    post-operation screenshot / state comparison to the response.
+    """
+    if confirm:
+        try:
+            before = await client.analyze_page()
+            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+        except Exception:
+            client._before_visual_state = {}
+    if isinstance(body, CheckboxBatchRequest):
+        result = await run_op("checkbox_deselect_batch",
+                              client.checkbox_set_state_batch,
+                              body.texts, False, body.timeout)
+    else:
+        result = await run_op("checkbox_deselect",
+                              client.checkbox_set_state,
+                              body.text, False, body.timeout)
+    if confirm and result.get("status") == "ok":
+        try:
+            if confirm == "screenshot":
+                conf = await client._confirm_with_screenshot()
+            elif confirm == "analyze":
+                conf = await client._confirm_with_analyze()
+            else:
+                conf = None
+            if conf:
+                result["confirmation"] = conf
+        except Exception:
+            pass
+    return result
 
 
 # ─── New: Page analysis & wait endpoints ──────────────────────
 
 
 @app.post("/page/analyze")
-async def page_analyze():
+async def page_analyze(condensed: bool = Query(False, description="Enable condensed mode (strips nav/sidebar/footer)")):
     """Analyze the current page and return structured information.
 
     Returns a comprehensive snapshot of the page state in one call:
@@ -698,8 +842,13 @@ async def page_analyze():
     - Alert/success/error messages
     - Visible text preview
 
+    Optional ``?condensed=true`` strips navigation/sidebar/footer
+    and returns only main content with interactive elements.
+
     Replaces 3-4 separate eval() calls.
     """
+    if condensed:
+        return await run_op("page_analyze_condensed", client.analyze_page_condensed)
     return await run_op("page_analyze", client.analyze_page)
 
 
@@ -1440,6 +1589,36 @@ async def tab_new(body: NewTabRequest):
 async def tab_close(tab_id: str):
     """Close a browser tab by its target ID."""
     return await run_op("close_tab", client.close_tab, tab_id)
+
+
+# ─── v0.7: New endpoints — tab activation & action confirmation ───
+
+
+@app.post("/activate-tab/{tab_id}")
+async def activate_tab(tab_id: str):
+    """Activate a tab by target ID (brings it to foreground)."""
+    return await run_op("activate_tab", client._activate_tab_by_id, tab_id)
+
+
+@app.post("/confirm-action")
+async def confirm_action(confirm: str = Query("analyze", description="Confirmation type: 'screenshot' or 'analyze'")):
+    """Post-action confirmation helper.
+
+    Returns screenshot or state comparison after an operation.
+    Use after any action that doesn't natively support ?confirm=.
+
+    ``?confirm=screenshot`` returns a base64 JPEG screenshot.
+    ``?confirm=analyze`` returns visual_state before/after comparison.
+    """
+    ensure_connected()
+    try:
+        if confirm == "screenshot":
+            result = await client._confirm_with_screenshot()
+        else:
+            result = await client._confirm_with_analyze()
+        return {"status": "ok", "operation": "confirm_action", "result": result}
+    except Exception as exc:
+        return {"status": "error", "operation": "confirm_action", "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------

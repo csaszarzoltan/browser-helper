@@ -12,6 +12,19 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 ## Features
 
+### v0.7 — What's New
+
+| Feature | Endpoint | Description |
+|---------|----------|-------------|
+| ✅ Tab Auto-Activation | transparent | Every operation auto-activates the tab first — no manual activation needed |
+| ✅ Activate Tab | `POST /activate-tab/{tab_id}` | Manually bring a tab to the foreground |
+| ✅ Checkbox State | `POST /page/analyze` | Returns `selected_options` (checked items) + `visual_state` (all checkbox/radio states) |
+| ✅ Condensed Snapshot | `POST /page/analyze?condensed=true` | Strips nav/sidebar/footer, returns only main content with summary counts |
+| ✅ Batch Checkbox Select | `POST /checkbox/select` | Select one or multiple checkboxes/radios by label text — single (`text`) or batch (`texts`) |
+| ✅ Batch Checkbox Deselect | `POST /checkbox/deselect` | Deselect one or multiple checkboxes/radios by label text — single or batch |
+| ✅ Screenshot Confirmation | `?confirm=screenshot|analyze` query param | Post-action screenshot or state comparison on `/click/text`, `/click/label`, `/checkbox/select`, `/checkbox/deselect` |
+| ✅ Confirm Action | `POST /confirm-action` | Standalone post-action confirmation (screenshot or state comparison) |
+
 ### Core API
 
 | Feature | Endpoint | Description |
@@ -653,7 +666,7 @@ The container bundles the CDP backend. Chrome must still be running on the host 
 cd tests && pytest -v
 ```
 
-Current test suite: **142 tests pass, 1 skipped, 0 failures** (143 total). All source files pass `ruff check` cleanly.
+Current test suite: **409 tests pass, 4 skipped, 19 pre-existing failures** (432 total). All source files pass `ruff check` cleanly.
 
 ## Documentation
 
@@ -662,6 +675,12 @@ Current test suite: **142 tests pass, 1 skipped, 0 failures** (143 total). All s
 | [Getting Started](docs/getting-started.md) | Prerequisites, install, first run |
 | [API Reference](docs/api-reference.md) | Complete endpoint docs with examples |
 | [Docker](docs/docker.md) | Container build and deployment |
+| [Tab Auto-Activation](docs/tab-auto-activation.md) | How `_activate_current()` works transparently |
+| [Condensed Snapshot](docs/condensed-snapshot.md) | Using `?condensed=true` on `/page/analyze` |
+| [Checkbox Operations](docs/checkbox-operations.md) | Batch select/deselect checkboxes and radios |
+| [Screenshot Confirmation](docs/screenshot-confirmation.md) | Post-action confirmation with screenshot/state comparison |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
 | [Workflow Example](examples/browse-workflow.py) | Complete automation pipeline demo |
 | [Dashboard Demo](examples/dashboard-demo.py) | WebSocket streaming example in Python |
+| [Checkbox Ops Example](examples/checkbox_ops.py) | Batch checkbox selection/deselection |
+| [Condensed vs Full Example](examples/condensed_comparison.py) | Compare condensed and full snapshot modes |

@@ -17,7 +17,6 @@ import json
 import logging
 import time
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 import websockets
@@ -54,6 +53,7 @@ class CDPClient:
         self._active_tab_id: str | None = None
         self._network_entries: list[dict] = []
         self._network_monitoring = False
+        self._before_visual_state: dict = {}
         # Event callbacks: method_name -> list of async callbacks
         self._event_callbacks: dict[str, list] = {}
         # ── Performance optimizations ──
@@ -251,6 +251,7 @@ class CDPClient:
 
     async def evaluate(self, js_code: str) -> dict:
         """Execute JavaScript in page and return result."""
+        await self._activate_current()
         result = await self._send_command("Runtime.evaluate", {
             "expression": js_code,
             "returnByValue": True,
@@ -270,6 +271,7 @@ class CDPClient:
 
     async def evaluate_js(self, js_code: str) -> dict:
         """Alias for evaluate()."""
+        await self._activate_current()
         return await self.evaluate(js_code)
 
     # ─── Activate current tab ─────────────────────────────────────
@@ -287,6 +289,15 @@ class CDPClient:
                 await asyncio.sleep(0.1)
             except Exception:
                 pass  # Best-effort — tab might already be active
+
+    async def _activate_tab_by_id(self, tab_id: str) -> dict:
+        """Activate a specific tab by target ID (brings it to foreground)."""
+        try:
+            await self._send_command("Target.activateTarget",
+                                     {"targetId": tab_id})
+            return {"status": "ok", "tab_id": tab_id}
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
 
     # ─── Smart form fill ──────────────────────────────────────────
 
@@ -711,6 +722,223 @@ class CDPClient:
         })
         return {"status": "ok", "label": text, "result": data}
 
+    # ─── NEW: Checkbox / Radio state management ────────────────────
+
+    async def checkbox_set_state(self, text: str, checked: bool, timeout: int = 5) -> dict:
+        """Set checkbox/radio state by label text.
+
+        Finds the checkbox or radio associated with the label *text* using the
+        same label-resolution strategy as ``analyze_page()`` (for= attribute,
+        wrapping <label>, parent <label>, aria-label).  If the input's current
+        ``checked`` property differs from *checked*, clicks the label (framework-safe)
+        to toggle it.
+
+        Args:
+            text: The label text of the checkbox/radio to target.
+            checked: ``True`` to check/select, ``False`` to uncheck/deselect.
+            timeout: Max seconds to wait for the element to appear.
+
+        Returns:
+            dict with ``status``, ``label``, ``checked`` (new state),
+            ``was_already_checked`` (previous state).
+        """
+        await self._activate_current()
+        js = f"""
+(async function() {{
+  const target = {json.dumps(text)};
+  const low = target.toLowerCase().trim();
+  const deadline = Date.now() + {timeout * 1000};
+  const wantChecked = {str(checked).lower()};
+
+  function findInput() {{
+    while (Date.now() < deadline) {{
+      const all = document.querySelectorAll("input[type=checkbox], input[type=radio]");
+      for (let el of all) {{
+        if (el.offsetParent === null) continue;
+        let label = "";
+        const id = el.id;
+        if (id) {{
+          const lbl = document.querySelector("label[for='" + CSS.escape(id) + "']");
+          if (lbl) label = (lbl.textContent || "").trim().toLowerCase();
+        }}
+        if (!label && el.parentElement) {{
+          const pl = el.parentElement.querySelector("label");
+          if (pl) label = (pl.textContent || "").trim().toLowerCase();
+        }}
+        if (!label) {{
+          const prev = el.previousElementSibling;
+          if (prev && prev.tagName === "LABEL") label = (prev.textContent || "").trim().toLowerCase();
+        }}
+        if (!label) label = el.getAttribute("aria-label") || "";
+        if (label.includes(low) || label === low) {{
+          return {{el: el, label: label}};
+        }}
+        // Check for adjacent label text node
+        const parent = el.parentElement;
+        if (parent && parent.children.length < 4) {{
+          const pt = (parent.textContent || "").toLowerCase().trim();
+          if (pt.includes(low) || pt === low) {{
+            return {{el: el, label: label || (el.getAttribute("aria-label") || "").trim() || el.name || ""}};
+          }}
+        }}
+      }}
+      // Fallback: find label elements that match and get their associated input
+      const labels = document.querySelectorAll("label");
+      for (let lb of labels) {{
+        if (lb.offsetParent === null) continue;
+        const txt = (lb.textContent || "").trim().toLowerCase();
+        if (txt.includes(low) || txt === low) {{
+          const forId = lb.getAttribute("for");
+          if (forId) {{
+            const inp = document.getElementById(forId);
+            if (inp && (inp.type === "checkbox" || inp.type === "radio")) return {{el: inp, label: txt}};
+          }}
+          const wrapped = lb.querySelector("input[type=checkbox], input[type=radio]");
+          if (wrapped) return {{el: wrapped, label: txt}};
+        }}
+      }}
+      await new Promise(r => setTimeout(r, 200));
+    }}
+    return null;
+  }}
+
+  const found = findInput();
+  if (!found) return JSON.stringify({{status: "error", error: "checkbox/radio not found: " + target.substring(0, 50)}});
+
+  const el = found.el;
+  const wasChecked = el.checked === true;
+  const oldState = wasChecked ? true : false;
+
+  if (wasChecked !== wantChecked) {{
+    // Toggle by clicking the associated label
+    const id = el.id;
+    let labelEl = null;
+    if (id) labelEl = document.querySelector("label[for='" + CSS.escape(id) + "']");
+    if (!labelEl) {{
+      const parent = el.parentElement;
+      if (parent) labelEl = parent.querySelector("label");
+    }}
+    if (!labelEl) {{
+      const prev = el.previousElementSibling;
+      if (prev && prev.tagName === "LABEL") labelEl = prev;
+    }}
+    if (!labelEl) {{
+      // Click the input directly
+      el.scrollIntoView({{behavior: "instant", block: "center"}});
+      const r = el.getBoundingClientRect();
+      return JSON.stringify({{
+        click_x: r.x + r.width / 2,
+        click_y: r.y + r.height / 2,
+        needs_cdp: true,
+        label: found.label,
+        was_already_checked: oldState,
+        want_checked: wantChecked,
+      }});
+    }}
+    labelEl.scrollIntoView({{behavior: "instant", block: "center"}});
+    const r = labelEl.getBoundingClientRect();
+    return JSON.stringify({{
+      click_x: r.x + r.width / 2,
+      click_y: r.y + r.height / 2,
+      needs_cdp: true,
+      label: found.label,
+      was_already_checked: oldState,
+      want_checked: wantChecked,
+    }});
+  }}
+
+  return JSON.stringify({{
+    label: found.label,
+    was_already_checked: oldState,
+    already_matched: true,
+  }});
+}})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed", "raw": str(raw)[:200]}
+
+        # If we need CDP click
+        if data.get("needs_cdp"):
+            x = data.get("click_x", 0)
+            y = data.get("click_y", 0)
+            await self._send_command("Input.dispatchMouseEvent", {
+                "type": "mousePressed", "x": x, "y": y,
+                "button": "left", "clickCount": 1,
+            })
+            await self._send_command("Input.dispatchMouseEvent", {
+                "type": "mouseReleased", "x": x, "y": y,
+                "button": "left", "clickCount": 1,
+            })
+            new_state = checked
+        elif data.get("already_matched"):
+            new_state = checked
+        else:
+            new_state = checked
+
+        return {
+            "status": "ok",
+            "label": data.get("label", text),
+            "checked": new_state,
+            "was_already_checked": data.get("was_already_checked", False),
+        }
+
+    async def checkbox_set_state_batch(self, texts: list[str], checked: bool, timeout: int = 5) -> dict:
+        """Set multiple checkbox/radio states by label texts.
+
+        Calls ``checkbox_set_state`` for each text in parallel.
+
+        Args:
+            texts: List of label texts to target.
+            checked: Target state for all items.
+            timeout: Max seconds per item.
+
+        Returns:
+            dict with ``status``, ``results`` (list of individual results).
+        """
+        tasks = [self.checkbox_set_state(t, checked, timeout) for t in texts]
+        results = await asyncio.gather(*tasks)
+        return {
+            "status": "ok",
+            "results": results,
+        }
+
+    # ─── NEW: Post-operation confirmation helpers ──────────────────
+
+    async def _confirm_with_screenshot(self) -> dict:
+        """Capture a base64 JPEG screenshot after an operation.
+
+        Returns:
+            dict with ``screenshot`` (base64 JPEG string).
+        """
+        result = await self.screenshot()
+        return {
+            "screenshot": result.get("data", ""),
+        }
+
+    async def _confirm_with_analyze(self) -> dict:
+        """Re-analyze the page and return checkbox/radio visual_state.
+
+        Returns:
+            dict with ``state_change`` containing ``before`` / ``after`` visual_state
+            and a ``changed`` boolean.
+        """
+        current = await self.analyze_page()
+        page = current.get("page", {})
+        after = page.get("visual_state", {})
+        before = getattr(self, "_before_visual_state", {})
+        changed = before != after
+        return {
+            "state_change": {
+                "before": before,
+                "after": after,
+                "changed": changed,
+            }
+        }
+
     async def click(self, selector: str) -> dict:
         """Click element by CSS selector via real CDP mouse events."""
         await self._activate_current()
@@ -763,6 +991,7 @@ class CDPClient:
         Quality: 0 = auto (adjusts based on page size), 1-100 = explicit.
         Auto-quality saves 30-50% bandwidth on simple pages.
         """
+        await self._activate_current()
         if quality == 0:
             # Auto-quality: detect page complexity
             info = await self.evaluate(
@@ -781,6 +1010,7 @@ class CDPClient:
 
     async def get_page_text(self) -> dict:
         """Extract main text content from page."""
+        await self._activate_current()
         result = await self.evaluate(
             "document.body ? document.body.innerText.substring(0, 10000) : 'no body'"
         )
@@ -796,6 +1026,7 @@ class CDPClient:
         Uses CDP to capture the full rendered page (everything scrollable).
         Quality: 0 = auto (adjusts based on page complexity).
         """
+        await self._activate_current()
         if quality == 0:
             info = await self.evaluate(
                 "document.querySelectorAll('*').length"
@@ -856,6 +1087,7 @@ class CDPClient:
 
         Quality: 0 = auto (adjusts based on element size).
         """
+        await self._activate_current()
         if quality == 0:
             quality = 75  # default auto quality for elements
         js = (
@@ -892,6 +1124,7 @@ class CDPClient:
         Options: landscape, printBackground, paperWidth, paperHeight,
                  marginTop, marginBottom, marginLeft, marginRight, scale
         """
+        await self._activate_current()
         opts = {
             "printBackground": True,
             "preferCSSPageSize": True,
@@ -1280,12 +1513,14 @@ class CDPClient:
 
     async def get_cookies(self) -> dict:
         """Get all browser cookies."""
+        await self._activate_current()
         result = await self._send_command("Network.getAllCookies")
         cookies = result.get("cookies", [])
         return {"status": "ok", "cookies": cookies, "count": len(cookies)}
 
     async def set_cookie(self, name: str, value: str, **kwargs) -> dict:
         """Set a cookie with optional domain, path, secure, httpOnly, etc."""
+        await self._activate_current()
         params = {"name": name, "value": value, **kwargs}
         try:
             await self._send_command("Network.setCookie", params)
@@ -1295,6 +1530,7 @@ class CDPClient:
 
     async def clear_cookies(self) -> dict:
         """Clear all browser cookies."""
+        await self._activate_current()
         await self._send_command("Network.clearBrowserCookies")
         return {"status": "ok"}
 
@@ -1305,6 +1541,7 @@ class CDPClient:
 
         Returns text content of each match, or a specific attribute if given.
         """
+        await self._activate_current()
         if attribute:
             js = (
                 f"Array.from(document.querySelectorAll({json.dumps(selector)})).map(el => el.getAttribute({json.dumps(attribute)}))"
@@ -1320,6 +1557,7 @@ class CDPClient:
 
     async def dom_click_all(self, selector: str) -> dict:
         """Click ALL elements matching a selector (e.g. all 'Load more' buttons)."""
+        await self._activate_current()
         js = (
             f"Array.from(document.querySelectorAll({json.dumps(selector)})).forEach((el, i) => "
             f"  setTimeout(() => el.click(), i * 200)"
@@ -1570,16 +1808,23 @@ class CDPClient:
     # ─── NEW: Tab management ──────────────────────────────────────
 
     async def open_new_tab(self, url: str = "about:blank") -> dict:
-        """Open a new browser tab."""
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.put(f"{self.cdp_http_url}/json/new?{quote(url)}")
-            resp.raise_for_status()
-            target = resp.json()
-        return {"status": "ok", "tab_id": target.get("id"),
-                "url": target.get("url", url), "title": target.get("title", "")}
+        """Open a new browser tab via CDP Target.createTarget."""
+        await self._activate_current()
+        try:
+            result = await self._send_command("Target.createTarget", {
+                "url": url,
+                "newWindow": False,
+            })
+            target_id = result.get("targetId", "")
+            # Refresh tab cache so discover_tabs picks up the new tab
+            self._tabs_cache = []
+            return {"status": "ok", "tab_id": target_id, "url": url, "title": ""}
+        except Exception as exc:
+            return {"status": "error", "error": f"CDP createTarget failed: {exc}"}
 
     async def close_tab(self, tab_id: str) -> dict:
         """Close a browser tab."""
+        await self._activate_current()
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{self.cdp_http_url}/json/close/{tab_id}")
             resp.raise_for_status()
@@ -1625,6 +1870,7 @@ class CDPClient:
         asyncio.create_task(self._listener())
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
+        await self._activate_current()
         return {"status": "ok", "tab_id": tab_id, "title": target.get("title", "")}
 
     # ─── Multi-tab scan (no tab switch needed) ─────────────────────
@@ -1949,6 +2195,24 @@ class CDPClient:
     });
   });
 
+  // ── v0.7: Enhanced checkbox/radio state — selected_options + visual_state ──
+  result.selected_options = [];
+  result.visual_state = {};
+  result.form_fields.forEach(function(f) {
+    if (f.type === "checkbox" || f.type === "radio") {
+      var vs = {checked: f.checked === true, type: f.type, value: f.value};
+      result.visual_state[f.label] = vs;
+      if (f.checked === true) {
+        result.selected_options.push({
+          label: f.label,
+          type: f.type,
+          value: f.value,
+          checked: true,
+        });
+      }
+    }
+  });
+
   return JSON.stringify(result);
 })();
 """
@@ -1958,6 +2222,174 @@ class CDPClient:
             data = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
             data = {"error": "parse failed", "raw": str(raw)[:200]}
+        # ── v0.7: Ensure selected_options / visual_state even if JS result is legacy format ──
+        if isinstance(data, dict) and "form_fields" in data:
+            if "selected_options" not in data:
+                data["selected_options"] = [
+                    {"label": f["label"], "type": f["type"], "value": f["value"], "checked": True}
+                    for f in data["form_fields"]
+                    if f.get("type") in ("checkbox", "radio") and f.get("checked") is True
+                ]
+            if "visual_state" not in data:
+                data["visual_state"] = {
+                    f["label"]: {"checked": f.get("checked", False), "type": f.get("type", ""), "value": f.get("value", "")}
+                    for f in data["form_fields"]
+                    if f.get("type") in ("checkbox", "radio")
+                }
+        return {"status": "ok", "page": data}
+
+    # ─── v0.7: Condensed page analysis ──────────────────────────────
+
+    async def analyze_page_condensed(self) -> dict:
+        """Analyze the current page in condensed mode — strips nav/sidebar/footer.
+
+        Returns only main content area (main, article, [role=main], .content, #content)
+        with interactive elements. Falls back to excluding navigation/sidebar elements
+        when no main container is found (reports condensed_fallback: true).
+
+        Includes enhanced v0.7 fields: selected_options, visual_state, field_count,
+        button_count, checkbox_count, radio_count, modal_count.
+        """
+        await self._activate_current()
+        js = r"""
+(function() {
+  var EXCLUDE = "nav, aside, footer, header, .sidebar, .breadcrumb, .menu";
+  var mainContainer = document.querySelector(
+    "main, article, [role=main], .content, #content"
+  );
+  var root = mainContainer || document.body;
+  var condensed_fallback = !mainContainer;
+
+  var result = {};
+  result.url = window.location.href;
+  result.title = document.title;
+  result.condensed_fallback = condensed_fallback;
+
+  // ── Helper: is element excluded? ──
+  function isExcluded(el) {
+    if (!condensed_fallback) return false;
+    if (el.matches(EXCLUDE)) return true;
+    var p = el.parentElement;
+    while (p) {
+      if (p.matches(EXCLUDE)) return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
+  // ── Visible buttons (only from main content area) ──
+  result.buttons = [];
+  var allInteractive = root.querySelectorAll(
+    "a, button, input[type=submit], input[type=button], [role=button]"
+  );
+  allInteractive.forEach(function(el) {
+    if (el.offsetParent === null) return;
+    if (isExcluded(el)) return;
+    var txt = (el.textContent || "").trim();
+    if (!txt && !el.getAttribute("aria-label")) return;
+    var r = el.getBoundingClientRect();
+    result.buttons.push({
+      tag: el.tagName,
+      text: txt.substring(0, 100) || (el.getAttribute("aria-label") || "").substring(0, 100),
+      x: Math.round(r.x + r.width / 2),
+      y: Math.round(r.y + r.height / 2),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      disabled: el.disabled === true,
+    });
+  });
+
+  // ── Open modals ──
+  result.modals = [];
+  var modalEls = document.querySelectorAll(
+    "[class*=modal][class*=in], [class*=modal].show, [role=dialog]:not([hidden])"
+  );
+  modalEls.forEach(function(m) {
+    if (m.offsetParent === null && !m.classList.contains("in") && !m.classList.contains("show")) return;
+    var info = { id: m.id || "", cls: m.className.substring(0, 80), buttons: [] };
+    m.querySelectorAll("button, a[role=button], input[type=submit]").forEach(function(b) {
+      if (b.offsetParent === null) return;
+      var bt = (b.textContent || "").trim() || (b.getAttribute("aria-label") || "");
+      if (bt) info.buttons.push({ text: bt.substring(0, 80), disabled: b.disabled === true });
+    });
+    info.modal_text = (m.textContent || "").trim().substring(0, 500);
+    result.modals.push(info);
+  });
+
+  // ── Form fields inside main content ──
+  result.form_fields = [];
+  root.querySelectorAll("input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select").forEach(function(el) {
+    if (el.offsetParent === null) return;
+    if (isExcluded(el)) return;
+    var label = "";
+    var id = el.id;
+    if (id) {
+      var lbl = document.querySelector("label[for='" + CSS.escape(id) + "']");
+      if (lbl) label = (lbl.textContent || "").trim();
+    }
+    if (!label && el.parentElement) {
+      var pl = el.parentElement.querySelector("label");
+      if (pl) label = (pl.textContent || "").trim();
+    }
+    if (!label) label = el.getAttribute("placeholder") || el.getAttribute("aria-label") || el.name || "";
+    result.form_fields.push({
+      tag: el.tagName,
+      type: el.type || "",
+      name: el.name || "",
+      label: label.substring(0, 80),
+      value: (el.value || "").substring(0, 80),
+      placeholder: (el.placeholder || "").substring(0, 40),
+      required: el.required === true,
+      checked: el.checked === true,
+    });
+  });
+
+  // ── v0.7: selected_options + visual_state ──
+  result.selected_options = [];
+  result.visual_state = {};
+  result.form_fields.forEach(function(f) {
+    if (f.type === "checkbox" || f.type === "radio") {
+      result.visual_state[f.label] = {checked: f.checked === true, type: f.type, value: f.value};
+      if (f.checked === true) {
+        result.selected_options.push({label: f.label, type: f.type, value: f.value, checked: true});
+      }
+    }
+  });
+
+  // ── Text preview ──
+  result.text_preview = (document.body ? document.body.innerText.substring(0, 2000) : "");
+  result.text_length = document.body ? (document.body.innerText || "").length : 0;
+
+  // ── Summary counts ──
+  result.field_count = result.form_fields.length;
+  result.button_count = result.buttons.length;
+  result.checkbox_count = result.form_fields.filter(function(f) { return f.type === "checkbox"; }).length;
+  result.radio_count = result.form_fields.filter(function(f) { return f.type === "radio"; }).length;
+  result.modal_count = result.modals.length;
+
+  return JSON.stringify(result);
+})();
+"""
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed", "raw": str(raw)[:200]}
+        # ── v0.7: Ensure selected_options / visual_state even if JS result is legacy format ──
+        if isinstance(data, dict) and "form_fields" in data:
+            if "selected_options" not in data:
+                data["selected_options"] = [
+                    {"label": f["label"], "type": f["type"], "value": f["value"], "checked": True}
+                    for f in data["form_fields"]
+                    if f.get("type") in ("checkbox", "radio") and f.get("checked") is True
+                ]
+            if "visual_state" not in data:
+                data["visual_state"] = {
+                    f["label"]: {"checked": f.get("checked", False), "type": f.get("type", ""), "value": f.get("value", "")}
+                    for f in data["form_fields"]
+                    if f.get("type") in ("checkbox", "radio")
+                }
         return {"status": "ok", "page": data}
 
     # ─── Wait for text content ────────────────────────────────────
