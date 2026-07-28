@@ -2,6 +2,23 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+### [1.2.0] — 2026-07-28
+
+#### Added
+- **Proxy rotation support** — `ProxyPool` manager with CRUD operations, health checks, and 4 rotation strategies (round-robin, random, least-used, sequential)
+- **Proxy REST API** — `POST /proxy/pool` (add), `GET /proxy/pool` (list), `DELETE /proxy/pool/{name}` (remove), `GET /proxy/health/{name}` (health check), `GET /proxy/stats` (pool statistics)
+- **`--proxy-server` flag integration** — Headless and visible Chrome sessions launch with `--proxy-server` via new `proxy` field in session launch requests
+- **Proxy authentication support** — SOCKS5, HTTP, and HTTPS proxy auth with `user:pass@` credentials, redacted from logs
+- **Proxy health monitoring** — Periodic health pings with configurable timeout, dead proxy eviction with auto-retry
+- **Credential leak fix** — Chrome command-line `--proxy-server` flag now redacts `user:pass@` to `***:***@` before logging
+- **123 new tests** — `test_proxy_manager.py`, `test_proxy_api.py`, `test_proxy_edge_cases.py` covering proxy pool CRUD, health checks, rotation strategies, authentication, and API integration
+
+#### Changed
+- `src/headless_manager.py` — Added `proxy` field to session launch, credential redaction in logging
+- `src/chrome_manager.py` — Added `proxy` field to launch parameters
+- `src/main.py` — Registered proxy REST endpoints
+- `SKILL.md` — Added proxy setup and usage guide
+
 ### [1.1.0] — 2026-07-28
 
 #### Added

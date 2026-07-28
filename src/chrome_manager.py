@@ -111,6 +111,7 @@ class ChromeManager:
         port: int | None = None,
         chrome_path: str | None = None,
         headless: bool = False,
+        proxy: str | None = None,
     ) -> dict:
         """
         Launch Chrome with remote debugging.
@@ -122,6 +123,7 @@ class ChromeManager:
         - *chrome_path* overrides the saved Chrome executable path.
         - *headless* when True, launches Chrome in headless mode (--headless=new).
           Falls back to --headless for Chrome < 112.
+        - *proxy* when set, passes --proxy-server flag to Chrome.
         """
         # Resolve parameters: use override or fall back to saved settings
         profile_dir = profile_dir or self.settings.get("chrome_profile_dir") or ""
@@ -177,6 +179,10 @@ class ChromeManager:
         if headless:
             cmd.append("--headless=new")
 
+        # Proxy server
+        if proxy:
+            cmd.append(f"--proxy-server={proxy}")
+
         logger.info("Launching: %s", " ".join(cmd))
 
         try:
@@ -223,6 +229,7 @@ class ChromeManager:
             "cdp_debugger_url": ws_url,
             "chrome_path": self._chrome_path,
             "profile_dir": profile_dir,
+            "proxy": proxy if proxy else None,
         }
 
     async def stop(self) -> dict:

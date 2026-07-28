@@ -16,6 +16,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import httpx
 import websockets
@@ -172,6 +173,9 @@ class HeadlessManager:
         port: int | None = None,
         profile: str | None = None,
         extensions: list[str] | None = None,
+        proxy_url: str | None = None,
+        proxy_strategy: str | None = None,
+        proxy_group: str | None = None,
     ) -> dict:
         """Launch a new headless Chrome session.
 
@@ -182,6 +186,9 @@ class HeadlessManager:
                      data directory). Takes precedence when both it and
                      profile_dir are given.
             extensions: Optional list of extension paths to load.
+            proxy_url: Explicit proxy URL (takes precedence over strategy).
+            proxy_strategy: Rotation strategy ("round-robin", "random", "sticky", "by-tag").
+            proxy_group: Tag group filter for by-tag strategy.
 
         Returns session info dict with session_id, port, cdp_url, etc.
         """
@@ -240,7 +247,37 @@ class HeadlessManager:
             for ext_path in extensions:
                 cmd.append(f"--load-extension={ext_path}")
 
-        logger.info("Launching headless Chrome: %s", " ".join(cmd))
+        # ── Proxy resolution ─────────────────────────────
+        resolved_proxy_url: str | None = None
+        if proxy_url:
+            resolved_proxy_url = proxy_url
+        elif proxy_strategy or proxy_group:
+            from proxy_manager import ProxyPool
+            pool = ProxyPool()
+            strategy = proxy_strategy or "round-robin"
+            entry = pool.get_proxy(strategy=strategy, group=proxy_group)
+            if entry:
+                resolved_proxy_url = entry["url"]
+
+        if resolved_proxy_url:
+            cmd.append(f"--proxy-server={resolved_proxy_url}")
+
+        # Redact proxy credentials in log
+        _safe_cmd = []
+        for arg in cmd:
+            if arg.startswith("--proxy-server="):
+                val = arg[len("--proxy-server="):]
+                try:
+                    parsed = urlparse(val)
+                    if parsed.username or parsed.password:
+                        netloc = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname or ""
+                        val = f"{parsed.scheme}://***:***@{netloc}"
+                except Exception:
+                    pass  # fall through with original val if parsing fails
+                _safe_cmd.append(f"--proxy-server={val}")
+            else:
+                _safe_cmd.append(arg)
+        logger.info("Launching headless Chrome: %s", " ".join(_safe_cmd))
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -304,6 +341,7 @@ class HeadlessManager:
             "port": actual_port,
             "pid": proc.pid,
             "cdp_url": handle.cdp_url,
+            "proxy": resolved_proxy_url if resolved_proxy_url else None,
         }
 
     async def close_session(self, session_id: str) -> dict:

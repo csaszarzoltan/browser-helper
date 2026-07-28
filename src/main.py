@@ -45,6 +45,8 @@ from profile_manager import Profile, ProfileManager
 from screenshot_diff import ScreenshotDiffEngine
 from settings_manager import SettingsManager
 
+from proxy_manager import ProxyParseError, ProxyPool
+
 # Paths excluded from auth and rate-limiting middleware
 PUBLIC_PATHS = {"/", "/health", "/ready", "/ws"}
 
@@ -165,6 +167,9 @@ baseline_mgr = BaselineManager()
 artifact_store = ArtifactStore()
 snapshot_store = SnapshotStore()
 
+# Proxy pool for anti-detection proxy rotation
+proxy_pool = ProxyPool()
+
 # Operation log: list of dicts, max 100 entries
 # Each entry: {timestamp, operation, status, duration_ms, details}
 operation_log: list[dict[str, Any]] = []
@@ -206,6 +211,7 @@ class TypeRequest(BaseModel):
 
 class ConnectRequest(BaseModel):
     cdp_url: str | None = None
+    proxy: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +273,23 @@ class ScriptRequest(BaseModel):
 
 class SessionRestoreRequest(BaseModel):
     session: dict
+
+
+# ─── Proxy management models ────────────────────────────────
+
+
+class ProxyEntrySchema(BaseModel):
+    url: str
+    type: str | None = None
+    tags: list[str] = []
+
+
+class AddProxiesRequest(BaseModel):
+    proxies: list[ProxyEntrySchema]
+
+
+class HealthCheckRequest(BaseModel):
+    proxy_id: str | None = None
 
 
 class NewTabRequest(BaseModel):
@@ -487,6 +510,9 @@ class HeadlessLaunchRequest(BaseModel):
     port: int | None = None
     profile: str | None = None
     extensions: list[str] | None = None
+    proxy_url: str | None = None
+    proxy_strategy: str | None = None
+    proxy_group: str | None = None
 
 
 class HeadlessCloseRequest(BaseModel):
@@ -774,6 +800,16 @@ async def connect(body: ConnectRequest | None = None):
     auto-discovers the endpoint via ``http://127.0.0.1:9555/json``.
     """
     cdp_url = body.cdp_url if body else None
+    proxy = body.proxy if body else None
+
+    # If proxy is provided, launch/restart Chrome with --proxy-server
+    if proxy:
+        try:
+            launch_result = await chrome_mgr.launch(proxy=proxy)
+            if launch_result.get("status") != "ok":
+                logger.warning("Chrome launch with proxy returned: %s", launch_result.get("error"))
+        except Exception as exc:
+            logger.warning("Chrome launch with proxy failed: %s", exc)
     # If a CDP HTTP URL is provided (not a tab URL), update the client base URL
     if cdp_url and ("/json" not in cdp_url) and ("/devtools" not in cdp_url):
         # Treat as CDP HTTP base URL (e.g. "http://127.0.0.1:9556")
@@ -2279,6 +2315,12 @@ async def headless_launch(body: HeadlessLaunchRequest | None = None):
             kwargs["profile"] = body.profile
         if body.extensions is not None:
             kwargs["extensions"] = body.extensions
+        if body.proxy_url is not None:
+            kwargs["proxy_url"] = body.proxy_url
+        if body.proxy_strategy is not None:
+            kwargs["proxy_strategy"] = body.proxy_strategy
+        if body.proxy_group is not None:
+            kwargs["proxy_group"] = body.proxy_group
     result = await headless_mgr.launch_session(**kwargs)
     if result.get("status") != "ok":
         return api_error("headless_launch", result.get("code", "launch_failed"), result.get("error", "Launch failed"), result_status(result))
@@ -2541,6 +2583,89 @@ async def remove_extension(name: str, body: ExtensionRequest):
         "status": "ok",
         "extensions": profile_mgr.get_extensions(name),
     }
+
+
+# ---------------------------------------------------------------------------
+# Proxy management REST endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/proxy/pool")
+async def add_proxies(body: AddProxiesRequest):
+    """Add one or more proxies to the pool."""
+    ids = []
+    for proxy in body.proxies:
+        try:
+            pid = proxy_pool.add_proxy(
+                url=proxy.url,
+                proxy_type=proxy.type,
+                tags=proxy.tags,
+            )
+            ids.append(pid)
+        except (ValueError, ProxyParseError) as exc:
+            return api_error("add_proxies", "invalid_proxy_url", str(exc), 400)
+    return api_success("add_proxies", {"ids": ids})
+
+
+@app.get("/proxy/pool")
+async def get_proxies():
+    """List all proxies in the pool."""
+    proxies = proxy_pool.get_pool()
+    return api_success("get_proxies", {"proxies": proxies})
+
+
+@app.get("/proxy/pool/{proxy_id}")
+async def get_proxy(proxy_id: str):
+    """Get a single proxy by ID."""
+    entry = proxy_pool.get_proxy(proxy_id=proxy_id)
+    if entry is None:
+        return api_error("get_proxy", "proxy_not_found", f"Proxy {proxy_id!r} not found", 404)
+    return api_success("get_proxy", entry)
+
+
+@app.delete("/proxy/pool/{proxy_id}")
+async def delete_proxy(proxy_id: str):
+    """Remove a single proxy by ID."""
+    if proxy_pool.remove_proxy(proxy_id):
+        return api_success("delete_proxy", {"proxy_id": proxy_id})
+    return api_error("delete_proxy", "proxy_not_found", f"Proxy {proxy_id!r} not found", 404)
+
+
+@app.delete("/proxy/pool")
+async def clear_pool():
+    """Remove all proxies from the pool."""
+    proxy_pool.clear()
+    return api_success("clear_pool", {"cleared": True})
+
+
+@app.post("/proxy/health")
+async def trigger_health_check(body: HealthCheckRequest):
+    """Run health check on all or a single proxy."""
+    if body.proxy_id:
+        result = proxy_pool.health_check(body.proxy_id)
+        if result is None:
+            return api_error("trigger_health_check", "proxy_not_found", f"Proxy {body.proxy_id!r} not found", 404)
+        return api_success("trigger_health_check", {"results": [result]})
+    results = proxy_pool.health_check_all()
+    return api_success("trigger_health_check", {"results": results})
+
+
+@app.get("/proxy/health")
+async def get_health_status():
+    """Get health summary for all proxies."""
+    stats = proxy_pool.get_stats()
+    return api_success("get_health_status", {
+        "total": stats["total"],
+        "healthy": stats["healthy"],
+        "unhealthy": stats["unhealthy"],
+    })
+
+
+@app.post("/proxy/stats")
+async def get_proxy_stats():
+    """Get proxy usage statistics."""
+    stats = proxy_pool.get_stats()
+    return api_success("get_proxy_stats", stats)
 
 
 # ---------------------------------------------------------------------------

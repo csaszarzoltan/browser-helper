@@ -2022,7 +2022,7 @@ curl -s -X POST http://localhost:8000/settings \
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/headless/launch` | Launch a new headless session |
+| `POST` | `/headless/launch` | Launch a new headless session (supports proxy rotation) |
 | `POST` | `/headless/close` | Close a headless session |
 | `GET` | `/headless/sessions` | List all headless sessions |
 | `POST` | `/headless/navigate` | Navigate a headless session |
@@ -2041,7 +2041,10 @@ Launch a new headless Chrome session.
   "profile_dir": null,
   "port": null,
   "profile": null,
-  "extensions": null
+  "extensions": null,
+  "proxy_url": null,
+  "proxy_strategy": null,
+  "proxy_group": null
 }
 ```
 
@@ -2050,6 +2053,9 @@ Launch a new headless Chrome session.
 - `port` (integer, optional)
 - `profile` (string, optional) — named profile to use
 - `extensions` (array of strings, optional) — extension paths to load
+- `proxy_url` (string, optional) — explicit proxy URL (takes precedence over strategy)
+- `proxy_strategy` (string, optional) — rotation strategy: `round-robin`, `random`, `sticky`, `by-tag`
+- `proxy_group` (string, optional) — tag group filter for `by-tag` strategy
 
 **Response:**
 ```json
@@ -2968,6 +2974,96 @@ curl -s -X POST http://localhost:8000/click/text \
   -H "Authorization: Bearer ***" \
   -d '{"text": "Accept", "container_selector": ".modal", "timeout": 5}'
 ```
+
+### Proxy Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/proxy/pool` | Add one or more proxies to the pool |
+| `GET` | `/proxy/pool` | List all proxies in the pool |
+| `GET` | `/proxy/pool/{proxy_id}` | Get a single proxy by ID |
+| `DELETE` | `/proxy/pool/{proxy_id}` | Remove a single proxy |
+| `DELETE` | `/proxy/pool` | Clear all proxies |
+| `POST` | `/proxy/health` | Run health check on all or a single proxy |
+| `GET` | `/proxy/health` | Get health summary for all proxies |
+| `POST` | `/proxy/stats` | Get proxy usage statistics |
+
+#### POST /proxy/pool
+
+Add one or more proxies to the rotation pool.
+
+**Request body:**
+```json
+{
+  "proxies": [
+    {"url": "socks5://user:pass@proxy.example.com:1080", "type": "SOCKS5", "tags": ["datacenter", "us"]},
+    {"url": "http://user:pass@proxy2.example.com:3128", "type": "HTTP", "tags": ["residential"]}
+  ]
+}
+```
+
+*Fields:*
+- `proxies` (array, required) — list of proxy objects
+- `url` (string, required) — full proxy URL including protocol
+- `type` (string, optional) — proxy type (HTTP, HTTPS, SOCKS5); auto-detected from URL if omitted
+- `tags` (array of strings, optional) — tags for group-based rotation
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "data": {
+    "ids": ["uuid-1", "uuid-2"]
+  }
+}
+```
+
+#### GET /proxy/pool
+
+List all proxies in the pool.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "data": {
+    "proxies": [
+      {
+        "id": "uuid",
+        "url": "socks5://user:pass@proxy.example.com:1080",
+        "type": "SOCKS5",
+        "tags": ["datacenter"],
+        "enabled": true,
+        "healthy": true,
+        "last_checked": 0.0,
+        "latency_ms": 0.0,
+        "success_count": 0,
+        "fail_count": 0,
+        "created_at": 1234567890.0
+      }
+    ]
+  }
+}
+```
+
+#### Rotation Strategies
+
+Proxies support four rotation strategies when retrieving a proxy from the pool:
+
+| Strategy | Description |
+|----------|-------------|
+| `round-robin` | Cycle through healthy proxies sequentially (default) |
+| `random` | Pick a random healthy proxy |
+| `sticky` | Pin a session to the same proxy via `session_id` |
+| `by-tag` | Round-robin within a tag group |
+
+Proxy parameters on `/headless/launch`:
+
+| Field | Description |
+|-------|-------------|
+| `proxy_url` | Explicit proxy URL (takes precedence over strategy) |
+| `proxy_strategy` | Rotation strategy (`round-robin`, `random`, `sticky`, `by-tag`) |
+| `proxy_group` | Tag group filter for `by-tag` strategy |
 
 ### HTTP Methods Reference
 
