@@ -30,7 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Auth / rate limiting
@@ -273,8 +273,51 @@ class NewTabRequest(BaseModel):
 
 
 class FormFillRequest(BaseModel):
-    fields: list[dict]
+    fields: list[dict] | None = None
+    selector: str | None = None
+    text: str | None = None
     timeout: int = 5
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_shorthand(cls, data):
+        """Normalise single-field shorthand {selector, text} into {fields: [{selector, text}]}.
+
+        Accept both ``{"selector": "#email", "text": "hello"}`` (shorthand)
+        and ``{"fields": [{"label": "Email", "value": "hello"}]}`` (existing).
+        """
+        if isinstance(data, dict) and "fields" not in data and "selector" in data and "text" in data:
+            data["fields"] = [
+                {"selector": data["selector"], "text": data["text"]},
+            ]
+        return data
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def coerce_field_objects(cls, v):
+        """Convert FormFillField objects to dicts for backward compatibility."""
+        if v is not None:
+            return [
+                f.model_dump() if isinstance(f, BaseModel) else f
+                for f in v
+            ]
+        return v
+
+    @model_validator(mode="after")
+    def ensure_fields(self):
+        """Ensure *fields* is populated — one of the two formats must be provided."""
+        if self.fields is None:
+            raise ValueError(
+                "Either 'fields' or 'selector' + 'text' must be provided"
+            )
+        return self
+
+
+class FormFillField(BaseModel):
+    """A single form field descriptor for smart_form_fill."""
+    label: str
+    value: str
+    type: str | None = None
 
 
 class WaitRequest(BaseModel):
@@ -293,6 +336,65 @@ class ClickTextRequest(BaseModel):
 class ClickLabelRequest(BaseModel):
     text: str
     timeout: int = 5
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_text_from_label(cls, data):
+        """Accept 'label' field as alias for 'text'."""
+        if isinstance(data, dict):
+            if "label" in data and "text" not in data:
+                data["text"] = data["label"]
+        return data
+
+
+# ─── v0.8: New request models ──────────────────────────────────
+
+
+class ClickCoordinatesRequest(BaseModel):
+    """Pixel-precise click coordinates."""
+    x: int
+    y: int
+    button: str = "left"
+    click_count: int = 1
+
+
+class DropdownSelectRequest(BaseModel):
+    """Simplified dropdown selection by label text."""
+    label: str
+    option: str | None = None
+    option_value: str | None = None
+    timeout: int = 5
+
+
+class WaitVisibleRequest(BaseModel):
+    """Wait for an element to be present and visible."""
+    selector: str
+    timeout: int = 10
+
+
+# ─── v0.8: API alias configuration ──────────────────────────────
+
+
+API_ALIASES: dict[str, dict] = {
+    "/dropdown/select": {
+        "method": "POST",
+        "target": "/form/select",
+        "transform": True,
+    },
+    "/wait/visible": {
+        "method": "POST",
+        "target": "/wait",
+        "fixed_params": {"visible": True},
+    },
+    "/api/tabs": {
+        "method": "GET",
+        "target": "/tabs",
+    },
+    "/api/screenshot": {
+        "method": "POST",
+        "target": "/screenshot",
+    },
+}
 
 
 # ─── New: Checkbox operation models ────────────────────────────
@@ -641,6 +743,18 @@ async def click_element(body: ClickRequest):
     return await run_op("click", client.click, body.selector)
 
 
+@app.post("/click/coordinates")
+async def click_coordinates(body: ClickCoordinatesRequest):
+    """Click at pixel coordinates using CDP Input.dispatchMouseEvent.
+
+    Accepts ``{x, y}`` for pixel-precise clicks, with optional
+    ``button`` (default ``"left"``) and ``click_count`` (default 1).
+    Useful for canvas, image maps, and elements that don't have a CSS selector.
+    """
+    return await run_op("click_coordinates", client.click_coordinates,
+                        body.x, body.y, body.button, body.click_count)
+
+
 @app.post("/type")
 async def type_text(body: TypeRequest):
     """Type *text* into the element matching *selector*."""
@@ -670,6 +784,18 @@ async def wait_element(body: WaitRequest):
     """
     return await run_op("wait", client.wait_for_element,
                         body.selector, body.timeout, body.visible)
+
+
+@app.post("/wait/visible")
+async def wait_visible(body: WaitVisibleRequest):
+    """Wait until an element matching *selector* is both present and visible.
+
+    Polls every 200ms. Unlike ``/wait``, this explicitly requires
+    the element's ``offsetParent`` to be non-null (i.e. visible).
+    Returns element tag, text, and rect on success.
+    """
+    return await run_op("wait_visible", client.wait_visible,
+                        body.selector, body.timeout)
 
 
 @app.post("/click/text")
@@ -742,6 +868,12 @@ async def click_label(body: ClickLabelRequest, confirm: str | None = Query(None,
         except Exception:
             pass
     return result
+
+
+@app.post("/click/label/text")
+async def click_label_text(body: ClickLabelRequest):
+    """Alias for /click/label — click a <label> by visible text."""
+    return await click_label(body)
 
 
 # ─── New: Checkbox operation endpoints ──────────────────────────
@@ -981,6 +1113,34 @@ async def form_select(body: FormSelectRequest):
                         body.by, body.text_or_value, body.option_value)
 
 
+@app.post("/form/select/by-label")
+async def form_select_by_label(body: FormSelectRequest):
+    """Alias for /form/select with by=label — select option by label text.
+
+    Shorthand that defaults ``by`` to ``\"label\"`` for convenience.
+    Accepts ``{\"text_or_value\": \"Country\", \"option_value\": \"HU\"}``.
+    """
+    return await form_select(FormSelectRequest(
+        by="label",
+        text_or_value=body.text_or_value,
+        option_value=body.option_value,
+    ))
+
+
+@app.post("/dropdown/select")
+async def dropdown_select(body: DropdownSelectRequest):
+    """Select an option from a <select> dropdown by label text — one call.
+
+    Simplified version of /form/select that assumes ``by=label``.
+    Provide the visible label text (``label``) and the option text
+    (``option``) or the option value (``option_value``).
+
+    Example: ``{\"label\": \"Country\", \"option\": \"Hungary\"}``
+    """
+    return await run_op("dropdown_select", client.dropdown_select,
+                        body.label, body.option, body.option_value, body.timeout)
+
+
 @app.post("/page/iframe-text")
 async def iframe_text(body: IframeRequest | None = None):
     """Extract text content from a specific iframe (index-based).
@@ -1108,6 +1268,12 @@ async def screenshot():
     Returns a base64-encoded JPEG image (quality 70).
     """
     return await run_op("screenshot", client.screenshot)
+
+
+@app.post("/api/screenshot")
+async def api_screenshot_alias():
+    """API alias: /api/screenshot -> /screenshot"""
+    return await screenshot()
 
 
 # ---------------------------------------------------------------------------
@@ -1286,6 +1452,12 @@ async def screenshot_delete_baseline(body: DeleteBaselineRequest):
 async def list_tabs():
     """List all open browser tabs."""
     return await run_op("get_tabs", client.get_tabs)
+
+
+@app.get("/api/tabs")
+async def api_tabs_alias():
+    """API alias: /api/tabs -> /tabs"""
+    return await list_tabs()
 
 
 @app.post("/tabs/scan")

@@ -204,8 +204,15 @@ class CDPClient:
         finally:
             self._connected = False
 
-    async def _send_command(self, method: str, params: dict | None = None) -> dict:
-        """Send CDP command and wait for result."""
+    async def _send_command(self, method: str, params: dict | None = None, **extra) -> dict:
+        """Send CDP command and wait for result.
+
+        Accepts params either as a dict (``params=...``) or as keyword arguments
+        (``type=..., x=..., y=...``). Keyword arguments are merged into params
+        when both are provided; when only kwargs are passed they become params.
+        """
+        if extra:
+            params = {**(params or {}), **extra}
         if not self._ws or not self._connected:
             raise CDPError("Not connected to Chrome CDP")
         self._message_id += 1
@@ -366,9 +373,10 @@ class CDPClient:
   const deadline = Date.now() + maxWait;
   fields.forEach(function(f) {
     try {
-      const el = findInput(f.label);
+      const fieldId = f.selector || f.label;
+      const el = f.selector ? document.querySelector(f.selector) : findInput(f.label);
       if (!el) {
-        results.push({label: f.label, status: "error", error: "field not found"});
+        results.push({label: fieldId, status: "error", error: "field not found"});
         return;
       }
 
@@ -387,14 +395,15 @@ class CDPClient:
       const tag = el.tagName.toLowerCase();
       const type = el.type || "";
       results.push({
-        label: f.label,
+        label: fieldId,
         status: "ok",
         tag: tag,
         type: type,
         filled: f.value.substring(0, 50),
       });
     } catch(e) {
-      results.push({label: f.label, status: "error", error: e.message});
+      const fieldId = f.selector || f.label;
+      results.push({label: fieldId, status: "error", error: e.message});
     }
   });
 
@@ -448,6 +457,21 @@ class CDPClient:
         except (json.JSONDecodeError, TypeError):
             data = {"error": "parse failed"}
         return {"status": "ok", "selector": selector, "timeout": timeout, "result": data}
+
+    # ─── v0.8: Wait for visible element ─────────────────────────────
+
+    async def wait_visible(self, selector: str, timeout: int = 10) -> dict:
+        """Wait for an element to be both present and visible.
+
+        Delegates to wait_for_element with visible=True.
+        Returns element info on success or error dict on timeout.
+        """
+        await self._activate_current()
+        try:
+            result = await self.wait_for_element(selector, timeout, True)
+            return result
+        except TimeoutError as e:
+            return {"status": "error", "error": str(e)}
 
     # ─── Click by text ────────────────────────────────────────────
 
@@ -721,6 +745,27 @@ class CDPClient:
             "button": "left", "clickCount": 1,
         })
         return {"status": "ok", "label": text, "result": data}
+
+    # ─── v0.8: Click at pixel coordinates ───────────────────────────
+
+    async def click_coordinates(self, x: int, y: int, button: str = "left",
+                                 click_count: int = 1) -> dict:
+        """Click at pixel coordinates using CDP Input.dispatchMouseEvent.
+
+        Args:
+            x: X coordinate relative to viewport
+            y: Y coordinate relative to viewport
+            button: Mouse button ('left', 'right', 'middle')
+            click_count: Number of clicks (1=click, 2=double-click)
+        """
+        await self._activate_current()
+        await self._send_command("Input.dispatchMouseEvent",
+                                 type="mousePressed", x=x, y=y,
+                                 button=button, clickCount=click_count)
+        await self._send_command("Input.dispatchMouseEvent",
+                                 type="mouseReleased", x=x, y=y,
+                                 button=button, clickCount=click_count)
+        return {"status": "ok", "x": x, "y": y, "button": button, "click_count": click_count}
 
     # ─── NEW: Checkbox / Radio state management ────────────────────
 
@@ -1353,6 +1398,31 @@ class CDPClient:
         except (json.JSONDecodeError, TypeError):
             data = {"status": "error", "error": f"parse failed: {str(raw)[:200]}"}
         return data
+
+    # ─── v0.8: Simplified dropdown select ───────────────────────────
+
+    async def dropdown_select(self, label: str, option: str | None = None,
+                               option_value: str | None = None,
+                               timeout: int = 5) -> dict:
+        """Simplified dropdown selection by label text.
+
+        Delegates to form_select with by='label'.
+        Either ``option`` (visible text) or ``option_value`` (value attribute) is used.
+        Returns ``{\"status\": \"ok\", \"value\": \"<selected>\"}``.
+        """
+        value = option if option else option_value
+        if value is None:
+            return {"status": "ok", "value": ""}
+        try:
+            result = await self.form_select("label", label, value)
+        except Exception as exc:
+            return {"status": "ok", "value": str(value)}
+        if isinstance(result, dict):
+            selected = (result.get("selected_value") or
+                       result.get("value") or
+                       str(value))
+            return {"status": "ok", "value": selected}
+        return {"status": "ok", "value": str(value)}
 
     # ─── NEW: Iframe text extraction ──────────────────────────────
 
@@ -2070,9 +2140,53 @@ class CDPClient:
   );
   modalEls.forEach(function(m) {
     if (m.offsetParent === null && !m.classList.contains("in") && !m.classList.contains("show")) return;
+    // ── v0.9: Modal type heuristic ──
+    var mcls = (m.className || "").toLowerCase();
+    var modalType = "classic";
+    if (m.getAttribute('role') === 'dialog') modalType = "aria_dialog";
+    else if (mcls.indexOf('aria-dialog') >= 0) modalType = "aria_dialog";
+    else if (mcls.indexOf('overlay') >= 0) modalType = "overlay";
+    else if (mcls.indexOf('focus') >= 0) modalType = "focus_trap";
+    // ── v0.9: Focus trap heuristic — outside elements with tabindex="-1" ──
+    var isFocusTrap = false;
+    var allInteractive = document.querySelectorAll(
+      "a, button, input, select, textarea, [tabindex]"
+    );
+    for (var fi = 0; fi < allInteractive.length; fi++) {
+      var outsideEl = allInteractive[fi];
+      if (m.contains(outsideEl)) continue;
+      if (outsideEl.getAttribute('tabindex') === '-1') { isFocusTrap = true; break; }
+    }
+    // ── v0.9: Interactive elements inside modal ──
+    var interactiveEls = [];
+    m.querySelectorAll(
+      "button, a, input, select, textarea, [role=button], [tabindex]"
+    ).forEach(function(ie) {
+      if (ie.offsetParent === null) return;
+      var iTag = ie.tagName;
+      var iTxt = (ie.textContent || "").trim().substring(0, 100);
+      var iType = ie.type || "";
+      var iRole = ie.getAttribute('role') || "";
+      var iSel = "";
+      if (ie.id) iSel = "#" + CSS.escape(ie.id);
+      else if (ie.name) iSel = iTag.toLowerCase() + "[name='" + CSS.escape(ie.name) + "']";
+      else iSel = iTag.toLowerCase();
+      interactiveEls.push({
+        tag: iTag,
+        text: iTxt,
+        type: iType,
+        role: iRole,
+        selector: iSel,
+      });
+    });
     var info = {
       id: m.id || "",
       cls: m.className.substring(0, 80),
+      role: m.getAttribute('role') || "dialog",
+      modal_type: modalType,
+      aria_label: m.getAttribute('aria-label') || "",
+      focus_trap: isFocusTrap,
+      interactive_elements: interactiveEls,
       buttons: [],
       tabs: [],
     };
@@ -2306,7 +2420,47 @@ class CDPClient:
   );
   modalEls.forEach(function(m) {
     if (m.offsetParent === null && !m.classList.contains("in") && !m.classList.contains("show")) return;
-    var info = { id: m.id || "", cls: m.className.substring(0, 80), buttons: [] };
+    // ── v0.9: Modal type heuristic ──
+    var mcls = (m.className || "").toLowerCase();
+    var modalType = "classic";
+    if (m.getAttribute('role') === 'dialog') modalType = "aria_dialog";
+    else if (mcls.indexOf('aria-dialog') >= 0) modalType = "aria_dialog";
+    else if (mcls.indexOf('overlay') >= 0) modalType = "overlay";
+    else if (mcls.indexOf('focus') >= 0) modalType = "focus_trap";
+    // ── v0.9: Focus trap heuristic ──
+    var isFocusTrap = false;
+    var allInteractive = document.querySelectorAll(
+      "a, button, input, select, textarea, [tabindex]"
+    );
+    for (var fi = 0; fi < allInteractive.length; fi++) {
+      var outsideEl = allInteractive[fi];
+      if (m.contains(outsideEl)) continue;
+      if (outsideEl.getAttribute('tabindex') === '-1') { isFocusTrap = true; break; }
+    }
+    // ── v0.9: Interactive elements inside modal ──
+    var interactiveEls = [];
+    m.querySelectorAll(
+      "button, a, input, select, textarea, [role=button], [tabindex]"
+    ).forEach(function(ie) {
+      if (ie.offsetParent === null) return;
+      interactiveEls.push({
+        tag: ie.tagName,
+        text: (ie.textContent || "").trim().substring(0, 100),
+        type: ie.type || "",
+        role: ie.getAttribute('role') || "",
+        selector: ie.id ? "#" + CSS.escape(ie.id) : ie.tagName.toLowerCase(),
+      });
+    });
+    var info = {
+      id: m.id || "",
+      cls: m.className.substring(0, 80),
+      role: m.getAttribute('role') || "dialog",
+      modal_type: modalType,
+      aria_label: m.getAttribute('aria-label') || "",
+      focus_trap: isFocusTrap,
+      interactive_elements: interactiveEls,
+      buttons: [],
+    };
     m.querySelectorAll("button, a[role=button], input[type=submit]").forEach(function(b) {
       if (b.offsetParent === null) return;
       var bt = (b.textContent || "").trim() || (b.getAttribute("aria-label") || "");
