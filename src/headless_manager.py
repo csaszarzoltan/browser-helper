@@ -6,6 +6,8 @@ timeout guards, and session lifecycle (launch, navigate, evaluate, screenshot).
 """
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import platform
@@ -16,7 +18,9 @@ import uuid
 from dataclasses import dataclass, field
 
 import httpx
+import websockets
 
+from artifact_store import ArtifactStore
 from resource_monitor import ResourceMonitor
 
 logger = logging.getLogger("browser-helper.headless")
@@ -153,6 +157,8 @@ class HeadlessManager:
         self._chrome_path = chrome_path or _find_chrome_path()
         self._pool = SessionPool(max_sessions)
         self._timeout_task: asyncio.Task | None = None
+        self.artifacts = ArtifactStore()
+        self._command_id = 0
 
     @property
     def pool(self) -> SessionPool:
@@ -377,64 +383,68 @@ class HeadlessManager:
         except (httpx.HTTPError, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
+    async def _tab_websocket_url(self, handle: SessionHandle) -> str:
+        async with httpx.AsyncClient() as http:
+            response = await http.get(f"{handle.cdp_url}/json", timeout=5)
+            response.raise_for_status()
+            tabs = response.json()
+        if not tabs:
+            raise RuntimeError("No tabs found")
+        ws_url = tabs[0].get("webSocketDebuggerUrl")
+        if not ws_url:
+            raise RuntimeError("No WebSocket debugger URL for tab")
+        return ws_url
+
+    async def _cdp_command(self, handle: SessionHandle, method: str, params: dict | None = None) -> dict:
+        self._command_id += 1
+        command_id = self._command_id
+        ws_url = await self._tab_websocket_url(handle)
+        async with websockets.connect(ws_url, open_timeout=5, close_timeout=2, max_size=32 * 1024 * 1024) as ws:
+            await ws.send(json.dumps({"id": command_id, "method": method, "params": params or {}}))
+            while True:
+                message = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
+                if message.get("id") != command_id:
+                    continue
+                if "error" in message:
+                    raise RuntimeError(message["error"].get("message", str(message["error"])))
+                return message.get("result", {})
+
     async def evaluate(self, session_id: str, expression: str) -> dict:
-        """Evaluate JavaScript in a session's tab."""
+        """Evaluate JavaScript through the session tab's CDP WebSocket."""
         handle = self._pool.get(session_id)
         if handle is None:
-            return {"status": "error", "error": f"Session {session_id} not found"}
-
+            return {"status": "error", "code": "session_not_found", "error": f"Session {session_id} not found"}
         handle.last_active = time.time()
-
         try:
-            async with httpx.AsyncClient() as http:
-                tabs_resp = await http.get(f"{handle.cdp_url}/json", timeout=5)
-                tabs = tabs_resp.json()
-                if not tabs:
-                    return {"status": "error", "error": "No tabs found"}
+            result = await self._cdp_command(handle, "Runtime.evaluate", {
+                "expression": expression, "returnByValue": True, "awaitPromise": True,
+            })
+            remote = result.get("result", {})
+            if remote.get("subtype") == "error":
+                return {"status": "error", "code": "javascript_error", "error": remote.get("description", "JavaScript evaluation failed")}
+            return {
+                "status": "ok", "session_id": session_id,
+                "value": remote.get("value"), "type": remote.get("type"),
+                "description": remote.get("description"),
+            }
+        except (OSError, TimeoutError, RuntimeError, websockets.WebSocketException) as exc:
+            return {"status": "error", "code": "cdp_error", "error": str(exc)}
 
-                tab_id = tabs[0]["id"]
-                # Use Runtime.evaluate via WebSocket (simplified: use HTTP activate + eval)
-                await http.put(
-                    f"{handle.cdp_url}/json/activate/{tab_id}",
-                    timeout=5,
-                )
-                # For real eval we'd need WebSocket — return basic info
-                return {
-                    "status": "ok",
-                    "tab_id": tab_id,
-                    "title": tabs[0].get("title", ""),
-                    "url": tabs[0].get("url", ""),
-                }
-        except (httpx.HTTPError, OSError) as exc:
-            return {"status": "error", "error": str(exc)}
-
-    async def screenshot(self, session_id: str) -> dict:
-        """Take a screenshot of a session's current page.
-
-        Returns base64-encoded JPEG data.
-        """
+    async def screenshot(self, session_id: str, quality: int = 80) -> dict:
+        """Capture a real JPEG screenshot and persist it as an artifact."""
         handle = self._pool.get(session_id)
         if handle is None:
-            return {"status": "error", "error": f"Session {session_id} not found"}
-
+            return {"status": "error", "code": "session_not_found", "error": f"Session {session_id} not found"}
         handle.last_active = time.time()
-
         try:
-            async with httpx.AsyncClient() as http:
-                tabs_resp = await http.get(f"{handle.cdp_url}/json", timeout=5)
-                tabs = tabs_resp.json()
-                if not tabs:
-                    return {"status": "error", "error": "No tabs found"}
-                # Return basic screenshot info — real impl uses WebSocket CDP
-                return {
-                    "status": "ok",
-                    "session_id": session_id,
-                    "tab_id": tabs[0]["id"],
-                    "url": tabs[0].get("url", ""),
-                    "title": tabs[0].get("title", ""),
-                }
-        except (httpx.HTTPError, OSError) as exc:
-            return {"status": "error", "error": str(exc)}
+            result = await self._cdp_command(handle, "Page.captureScreenshot", {
+                "format": "jpeg", "quality": min(max(int(quality), 1), 100), "fromSurface": True,
+            })
+            data = base64.b64decode(result["data"], validate=True)
+            artifact = self.artifacts.put(data, "image/jpeg", ".jpg", {"session_id": session_id})
+            return {"status": "ok", "session_id": session_id, "artifact": artifact}
+        except (KeyError, ValueError, OSError, TimeoutError, RuntimeError, websockets.WebSocketException) as exc:
+            return {"status": "error", "code": "cdp_error", "error": str(exc)}
 
     async def batch_screenshot(self, session_id: str, urls: list[str]) -> dict:
         """Navigate to each URL and take a screenshot.

@@ -6,6 +6,17 @@ Remote Chrome control proxy via CDP — Hermes skill for browser automation. Pro
 
 Use when you need to control a Chrome browser programmatically — navigate, click, type, extract page content, manage tabs, take screenshots, fill forms, or automate any web interaction at scale.
 
+## LLM Agent API (v1.0)
+
+Prefer this compact interface for LLM tool use:
+
+- `GET /agent/capabilities` discovers supported actions and observation features.
+- `POST /agent/observe` returns token-budgeted observations, stable `snapshot_id` and `element_id` references, cursor pagination, and optional differential state.
+- `POST /agent/act` performs high-level navigate, click, fill, select, wait, evaluate, capture, and workflow actions.
+- `GET /artifacts/{artifact_id}` downloads screenshot artifacts.
+
+All new endpoints use the `browser-helper-envelope-v1` response shape. Errors use non-2xx HTTP status codes. Headless evaluation uses `Runtime.evaluate`; headless screenshots use `Page.captureScreenshot` and return artifact metadata. See `docs/agent-api.md` for request examples and stale-snapshot behavior.
+
 ## Setup
 
 ### Prerequisites
@@ -18,7 +29,7 @@ Use when you need to control a Chrome browser programmatically — navigate, cli
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8080` | HTTP server port |
+| `PORT` | `8000` | HTTP server port |
 | `API_TOKEN` | `""` (disabled) | Bearer token for API auth |
 | `CDP_PORT` | `9222` | Chrome DevTools Protocol debug port |
 | `CHROME_PATH` | platform-default | Path to Chrome binary |
@@ -38,16 +49,16 @@ Then configure the API to connect via `POST /connect` with `{"cdp_url": "http://
 
 ```bash
 # From the browser-helper directory
-python run.py --port 8080
+python run.py --port 8000
 
 # Or directly via uvicorn
-cd src && uvicorn main:app --host 0.0.0.0 --port 8080
+cd src && uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Testing Connectivity
 
 ```bash
-curl -s http://localhost:8080/health | python3 -m json.tool
+curl -s http://localhost:8000/health | python3 -m json.tool
 ```
 
 ### API Token Configuration
@@ -56,13 +67,13 @@ Set `API_TOKEN` environment variable to enable authentication:
 
 ```bash
 export API_TOKEN="your-secret-token"
-python run.py --port 8080
+python run.py --port 8000
 ```
 
 Then include the token in all requests:
 
 ```bash
-curl -s -H "Authorization: Bearer your-secret-token" http://localhost:8080/health
+curl -s -H "Authorization: Bearer your-secret-token" http://localhost:8000/health
 ```
 
 ## Endpoints
@@ -105,7 +116,7 @@ Establish a CDP link to a Chrome instance. If no `cdp_url` is provided, the serv
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/connect \
+curl -s -X POST http://localhost:8000/connect \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"cdp_url": "http://localhost:9222"}' | python3 -m json.tool
@@ -128,7 +139,7 @@ Close the CDP connection and release resources.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/disconnect \
+curl -s -X POST http://localhost:8000/disconnect \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -149,7 +160,7 @@ Return current connection status, tab count, last operation, and CDP URL.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/status \
+curl -s http://localhost:8000/status \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -167,7 +178,7 @@ Simple health check endpoint — no authentication required.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/health
+curl -s http://localhost:8000/health
 ```
 
 #### GET /ready
@@ -186,7 +197,7 @@ Readiness check — returns whether CDP is connected and operational.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/ready
+curl -s http://localhost:8000/ready
 ```
 
 ---
@@ -218,7 +229,7 @@ Navigate to a URL in the current active tab. Waits for page load to complete.
 
 **Example:**
 ```bash
-curl -s -X POST "http://localhost:8080/navigate?url=https://example.com" \
+curl -s -X POST "http://localhost:8000/navigate?url=https://example.com" \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -264,7 +275,7 @@ Click an element identified by CSS selector.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/click \
+curl -s -X POST http://localhost:8000/click \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": "#submit-btn"}' | python3 -m json.tool
@@ -306,7 +317,7 @@ Click the first element containing the specified visible text.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/click/text \
+curl -s -X POST http://localhost:8000/click/text \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "Submit", "timeout": 5}' | python3 -m json.tool
@@ -343,7 +354,7 @@ Click a `<label>` element by its visible text, which in turn activates the assoc
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/click/label \
+curl -s -X POST http://localhost:8000/click/label \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "Email", "timeout": 5}' | python3 -m json.tool
@@ -385,7 +396,7 @@ Click at specified pixel coordinates on the page. Useful for canvas, SVG, video 
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/click/coordinates \
+curl -s -X POST http://localhost:8000/click/coordinates \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"x": 450, "y": 320}' | python3 -m json.tool
@@ -421,7 +432,7 @@ Type text into an input field identified by CSS selector.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/type \
+curl -s -X POST http://localhost:8000/type \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": "#email", "text": "user@example.com"}' | python3 -m json.tool
@@ -476,7 +487,7 @@ Fill one or more form fields identified by associated label text. Each field spe
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/form/fill \
+curl -s -X POST http://localhost:8000/form/fill \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"fields": [{"label": "Email", "value": "user@example.com"}], "timeout": 5}' | python3 -m json.tool
@@ -515,7 +526,7 @@ Select an option from a `<select>` dropdown by label, name, or CSS selector.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/form/select \
+curl -s -X POST http://localhost:8000/form/select \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"by": "label", "text_or_value": "Country", "option_value": "US"}' | python3 -m json.tool
@@ -556,7 +567,7 @@ Simplified dropdown selection interface — pass the label text and the visible 
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/dropdown/select \
+curl -s -X POST http://localhost:8000/dropdown/select \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"label": "Country", "option": "United States"}' | python3 -m json.tool
@@ -600,7 +611,7 @@ Check a checkbox or radio button identified by label text.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/checkbox/select \
+curl -s -X POST http://localhost:8000/checkbox/select \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "I agree to terms"}' | python3 -m json.tool
@@ -619,7 +630,7 @@ Uncheck a checkbox or radio button by label text. Supports the same single/batch
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/checkbox/deselect \
+curl -s -X POST http://localhost:8000/checkbox/deselect \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "Notify me"}' | python3 -m json.tool
@@ -671,7 +682,7 @@ Wait for an element matching a CSS selector to appear in the DOM.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/wait \
+curl -s -X POST http://localhost:8000/wait \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": "#content", "timeout": 10}' | python3 -m json.tool
@@ -709,7 +720,7 @@ Dedicated endpoint for waiting until an element is both present in the DOM and v
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/wait/visible \
+curl -s -X POST http://localhost:8000/wait/visible \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": "#content", "timeout": 10}' | python3 -m json.tool
@@ -749,7 +760,7 @@ Wait for specified text content to appear (or disappear) from the page.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/wait/text \
+curl -s -X POST http://localhost:8000/wait/text \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "Welcome", "timeout": 10}' | python3 -m json.tool
@@ -786,7 +797,7 @@ Wait for a page navigation event to complete. Useful after clicking links or sub
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/wait/navigation \
+curl -s -X POST http://localhost:8000/wait/navigation \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"timeout": 10}' | python3 -m json.tool
@@ -818,7 +829,7 @@ Wait until the browser's network activity has ceased for a specified quiet perio
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/wait/network-idle \
+curl -s -X POST http://localhost:8000/wait/network-idle \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"timeout": 10}' | python3 -m json.tool
@@ -867,11 +878,11 @@ Take a structured snapshot of the current page, including modals, buttons, links
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/page/analyze \
+curl -s -X POST http://localhost:8000/page/analyze \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 
 # Condensed mode:
-curl -s -X POST "http://localhost:8080/page/analyze?condensed=true" \
+curl -s -X POST "http://localhost:8000/page/analyze?condensed=true" \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -895,7 +906,7 @@ Extract all visible text content from the current page.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/page/text \
+curl -s -X POST http://localhost:8000/page/text \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -931,7 +942,7 @@ Search for elements containing specific text on the page.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/page/find \
+curl -s -X POST http://localhost:8000/page/find \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "Submit", "tag": "button"}' | python3 -m json.tool
@@ -960,7 +971,7 @@ Get a simplified HTML outline of the page structure — headings, sections, and 
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/page/outline \
+curl -s -X POST http://localhost:8000/page/outline \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -988,7 +999,7 @@ Compare the current page state against the previous snapshot captured by the las
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/page/diff \
+curl -s -X POST http://localhost:8000/page/diff \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1028,7 +1039,7 @@ Extract all visible text from an iframe on the page.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/page/iframe-text \
+curl -s -X POST http://localhost:8000/page/iframe-text \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"index": 0}' | python3 -m json.tool
@@ -1056,7 +1067,7 @@ Switch the execution context to an iframe by index. All subsequent operations ru
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/page/iframe/switch \
+curl -s -X POST http://localhost:8000/page/iframe/switch \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"index": 1}' | python3 -m json.tool
@@ -1095,7 +1106,7 @@ Capture a screenshot of the current viewport as a base64-encoded JPEG.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/screenshot \
+curl -s -X POST http://localhost:8000/screenshot \
   -H "Authorization: Bearer $API_TOKEN" \
   -o screenshot.json
 ```
@@ -1129,7 +1140,7 @@ Capture a full-page screenshot by scrolling through the entire page and stitchin
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/full_screenshot \
+curl -s -X POST http://localhost:8000/full_screenshot \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"quality": 80}' -o screenshot.json
@@ -1166,7 +1177,7 @@ Capture a screenshot of a specific element identified by CSS selector.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/element_screenshot \
+curl -s -X POST http://localhost:8000/element_screenshot \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": "#main-content"}' -o element-screenshot.json
@@ -1197,7 +1208,7 @@ Generate a PDF of the current page using Chrome's built-in PDF rendering.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/pdf \
+curl -s -X POST http://localhost:8000/pdf \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{}' -o page.pdf
@@ -1239,7 +1250,7 @@ List all open tabs with their IDs, titles, and URLs.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/tabs \
+curl -s http://localhost:8000/tabs \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1251,7 +1262,7 @@ Refresh the tab list by re-discovering all tabs via CDP.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/tabs/scan \
+curl -s -X POST http://localhost:8000/tabs/scan \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1263,7 +1274,7 @@ Perform a deep scan of a specific tab, enumerating frames, resources, and JavaSc
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/tabs/deep-scan/tab-1 \
+curl -s -X POST http://localhost:8000/tabs/deep-scan/tab-1 \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1295,7 +1306,7 @@ Open a new browser tab with an optional URL.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/tab/new \
+curl -s -X POST http://localhost:8000/tab/new \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"url": "https://example.com"}' | python3 -m json.tool
@@ -1318,7 +1329,7 @@ Close a specific tab by its ID.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/tab/close/tab-2 \
+curl -s -X POST http://localhost:8000/tab/close/tab-2 \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1339,7 +1350,7 @@ Switch to a tab by its ID, making it the active tab.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/switch_tab/tab-1 \
+curl -s -X POST http://localhost:8000/switch_tab/tab-1 \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1351,7 +1362,7 @@ Activate a tab by ID (alias for `/switch_tab/{tab_id}` with auto-activation beha
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/activate-tab/tab-1 \
+curl -s -X POST http://localhost:8000/activate-tab/tab-1 \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1395,7 +1406,7 @@ Query elements in the DOM by CSS selector and optionally extract a specific attr
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/dom_query \
+curl -s -X POST http://localhost:8000/dom_query \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": "a.nav-link", "attribute": "href"}' | python3 -m json.tool
@@ -1428,7 +1439,7 @@ Click every element matching a CSS selector.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/dom_click_all \
+curl -s -X POST http://localhost:8000/dom_click_all \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": ".like-button"}' | python3 -m json.tool
@@ -1479,7 +1490,7 @@ Execute a sequence of scripted steps (workflow). Each step specifies an action a
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/script \
+curl -s -X POST http://localhost:8000/script \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"steps": [{"action": "navigate", "params": {"url": "https://example.com"}}]}' | python3 -m json.tool
@@ -1515,7 +1526,7 @@ Execute raw JavaScript in the context of the current page.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/eval \
+curl -s -X POST http://localhost:8000/eval \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"js": "document.title"}' | python3 -m json.tool
@@ -1553,7 +1564,7 @@ Retrieve all cookies for the current page's domain.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/cookies \
+curl -s http://localhost:8000/cookies \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1592,7 +1603,7 @@ Set a cookie on the current page's domain.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/set_cookie \
+curl -s -X POST http://localhost:8000/set_cookie \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"name": "session", "value": "abc123"}' | python3 -m json.tool
@@ -1615,7 +1626,7 @@ Clear all cookies for the current page's domain.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/clear_cookies \
+curl -s -X POST http://localhost:8000/clear_cookies \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1647,7 +1658,7 @@ Start capturing network requests and responses.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/network/start \
+curl -s -X POST http://localhost:8000/network/start \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1668,7 +1679,7 @@ Stop capturing network requests.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/network/stop \
+curl -s -X POST http://localhost:8000/network/stop \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1692,7 +1703,7 @@ Get all captured network log entries (requests, responses, timing).
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/network/log \
+curl -s http://localhost:8000/network/log \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1713,7 +1724,7 @@ Clear all captured network log entries.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/network/clear \
+curl -s -X POST http://localhost:8000/network/clear \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1746,7 +1757,7 @@ Save the current browser session state (tabs, cookies, local storage) for later 
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/session/save \
+curl -s -X POST http://localhost:8000/session/save \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1775,9 +1786,9 @@ Restore a previously saved session.
 **Example:**
 ```bash
 # Capture session, then restore it
-SESSION=$(curl -s -X POST http://localhost:8080/session/save -H "Authorization: Bearer $API_TOKEN")
+SESSION=$(curl -s -X POST http://localhost:8000/session/save -H "Authorization: Bearer $API_TOKEN")
 echo "$SESSION" | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps({'session': d['result']}))" | \
-  curl -s -X POST http://localhost:8080/session/restore \
+  curl -s -X POST http://localhost:8000/session/restore \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_TOKEN" \
     -d @- | python3 -m json.tool
@@ -1825,7 +1836,7 @@ Launch a new Chrome/Chromium instance with optional profile and debug port.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/browser/launch \
+curl -s -X POST http://localhost:8000/browser/launch \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"port": 9222}' | python3 -m json.tool
@@ -1855,7 +1866,7 @@ Stop a running Chrome instance by PID.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/browser/stop \
+curl -s -X POST http://localhost:8000/browser/stop \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{}' | python3 -m json.tool
@@ -1881,7 +1892,7 @@ Return the status of managed Chrome processes.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/browser/status \
+curl -s http://localhost:8000/browser/status \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1912,7 +1923,7 @@ Retrieve the current configuration settings.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/settings \
+curl -s http://localhost:8000/settings \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -1944,7 +1955,7 @@ Update configuration settings.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/settings \
+curl -s -X POST http://localhost:8000/settings \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"chrome_debug_port": 9333}' | python3 -m json.tool
@@ -1999,7 +2010,7 @@ Launch a new headless Chrome session.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/headless/launch \
+curl -s -X POST http://localhost:8000/headless/launch \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{}' | python3 -m json.tool
@@ -2029,7 +2040,7 @@ Close a headless session by its session ID.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/headless/close \
+curl -s -X POST http://localhost:8000/headless/close \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"session_id": "hs_abc123"}' | python3 -m json.tool
@@ -2052,7 +2063,7 @@ List all active headless sessions with resource usage.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/headless/sessions \
+curl -s http://localhost:8000/headless/sessions \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2074,7 +2085,7 @@ Navigate a headless session to a URL.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/headless/navigate \
+curl -s -X POST http://localhost:8000/headless/navigate \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"session_id": "hs_abc123", "url": "https://example.com"}' | python3 -m json.tool
@@ -2098,7 +2109,7 @@ Evaluate JavaScript in a headless session.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/headless/eval \
+curl -s -X POST http://localhost:8000/headless/eval \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"session_id": "hs_abc123", "expression": "document.title"}' | python3 -m json.tool
@@ -2117,7 +2128,7 @@ Take a screenshot of a headless session's current page.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/headless/screenshot \
+curl -s -X POST http://localhost:8000/headless/screenshot \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"session_id": "hs_abc123"}' -o headless-screenshot.json
@@ -2141,7 +2152,7 @@ Take multiple screenshots by navigating to each URL in sequence.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/headless/batch-screenshot \
+curl -s -X POST http://localhost:8000/headless/batch-screenshot \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"session_id": "hs_abc123", "urls": ["https://example.com"]}' | python3 -m json.tool
@@ -2163,7 +2174,7 @@ Headless session pool health and stats.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/headless/health \
+curl -s http://localhost:8000/headless/health \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2200,7 +2211,7 @@ List all available browser profiles.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/profiles \
+curl -s http://localhost:8000/profiles \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2240,7 +2251,7 @@ Create a new browser profile.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/profiles \
+curl -s -X POST http://localhost:8000/profiles \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"name": "work", "description": "Work profile"}' | python3 -m json.tool
@@ -2254,7 +2265,7 @@ Get details of a specific profile.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/profiles/work \
+curl -s http://localhost:8000/profiles/work \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2272,7 +2283,7 @@ Update a profile's description, tags, and resource limits.
 
 **Example:**
 ```bash
-curl -s -X PUT http://localhost:8080/profiles/work \
+curl -s -X PUT http://localhost:8000/profiles/work \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"description": "Updated work profile"}' | python3 -m json.tool
@@ -2284,7 +2295,7 @@ Delete a profile and its data directory.
 
 **Example:**
 ```bash
-curl -s -X DELETE http://localhost:8080/profiles/work \
+curl -s -X DELETE http://localhost:8000/profiles/work \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2294,7 +2305,7 @@ Export a profile as a ZIP archive.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/profiles/work/export \
+curl -s -X POST http://localhost:8000/profiles/work/export \
   -H "Authorization: Bearer $API_TOKEN" -o work-profile.zip
 ```
 
@@ -2313,7 +2324,7 @@ Import a profile from a ZIP archive path.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/profiles/import \
+curl -s -X POST http://localhost:8000/profiles/import \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"path": "/tmp/work-profile.zip"}' | python3 -m json.tool
@@ -2325,7 +2336,7 @@ List all extensions installed for a profile.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/profiles/work/extensions \
+curl -s http://localhost:8000/profiles/work/extensions \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2344,7 +2355,7 @@ Add an extension to a profile.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/profiles/work/extensions \
+curl -s -X POST http://localhost:8000/profiles/work/extensions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"path": "/path/to/extension.crx"}' | python3 -m json.tool
@@ -2363,7 +2374,7 @@ Remove an extension from a profile.
 
 **Example:**
 ```bash
-curl -s -X DELETE http://localhost:8080/profiles/work/extensions \
+curl -s -X DELETE http://localhost:8000/profiles/work/extensions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"path": "/path/to/extension.crx"}' | python3 -m json.tool
@@ -2415,7 +2426,7 @@ Create or update a visual regression baseline for a URL.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/screenshot/baseline \
+curl -s -X POST http://localhost:8000/screenshot/baseline \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"url": "https://example.com"}' | python3 -m json.tool
@@ -2457,7 +2468,7 @@ Compare a screenshot of a URL against its stored baseline.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/screenshot/compare \
+curl -s -X POST http://localhost:8000/screenshot/compare \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"url": "https://example.com", "threshold": 0.001}' | python3 -m json.tool
@@ -2481,7 +2492,7 @@ List all stored baselines, optionally filtered by profile.
 
 **Example:**
 ```bash
-curl -s "http://localhost:8080/screenshot/baselines?profile=default" \
+curl -s "http://localhost:8000/screenshot/baselines?profile=default" \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2512,7 +2523,7 @@ Delete a baseline for a specific URL and profile.
 
 **Example:**
 ```bash
-curl -s -X DELETE http://localhost:8080/screenshot/baseline \
+curl -s -X DELETE http://localhost:8000/screenshot/baseline \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"url": "https://example.com"}' | python3 -m json.tool
@@ -2544,7 +2555,7 @@ Disable JavaScript execution in the browser.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/javascript/disable \
+curl -s -X POST http://localhost:8000/javascript/disable \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2554,7 +2565,7 @@ Re-enable JavaScript execution.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/javascript/enable \
+curl -s -X POST http://localhost:8000/javascript/enable \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2587,11 +2598,11 @@ After performing an interactive action, call this to capture a screenshot or ana
 **Example:**
 ```bash
 # Screenshot confirmation
-curl -s -X POST "http://localhost:8080/confirm-action?confirm=screenshot" \
+curl -s -X POST "http://localhost:8000/confirm-action?confirm=screenshot" \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 
 # Analyze confirmation
-curl -s -X POST "http://localhost:8080/confirm-action?confirm=analyze" \
+curl -s -X POST "http://localhost:8000/confirm-action?confirm=analyze" \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2613,7 +2624,7 @@ Serve the GUI dashboard if `static/index.html` exists.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/ | head -20
+curl -s http://localhost:8000/ | head -20
 ```
 
 #### GET /metrics
@@ -2632,7 +2643,7 @@ Get process metrics and resource usage statistics.
 
 **Example:**
 ```bash
-curl -s http://localhost:8080/metrics \
+curl -s http://localhost:8000/metrics \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2666,7 +2677,7 @@ Upload file(s) through a browser file input identified by CSS selector.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/upload \
+curl -s -X POST http://localhost:8000/upload \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"selector": "#file-input", "files": ["/tmp/report.pdf"]}' | python3 -m json.tool
@@ -2678,7 +2689,7 @@ Alias for `/page/text` (deprecated). Extract text from the current page.
 
 **Example:**
 ```bash
-curl -s -X POST http://localhost:8080/get_text \
+curl -s -X POST http://localhost:8000/get_text \
   -H "Authorization: Bearer $API_TOKEN" | python3 -m json.tool
 ```
 
@@ -2695,23 +2706,23 @@ curl -s -X POST http://localhost:8080/get_text \
 
 ```bash
 # 1. Connect
-curl -s -X POST http://localhost:8080/connect \
+curl -s -X POST http://localhost:8000/connect \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"cdp_url": "http://localhost:9222"}'
 
 # 2. Navigate
-curl -s -X POST "http://localhost:8080/navigate?url=https://example.com" \
+curl -s -X POST "http://localhost:8000/navigate?url=https://example.com" \
   -H "Authorization: Bearer $API_TOKEN"
 
 # 3. Interact
-curl -s -X POST http://localhost:8080/click/text \
+curl -s -X POST http://localhost:8000/click/text \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "Learn more"}'
 
 # 4. Disconnect
-curl -s -X POST http://localhost:8080/disconnect \
+curl -s -X POST http://localhost:8000/disconnect \
   -H "Authorization: Bearer $API_TOKEN"
 ```
 
@@ -2760,7 +2771,7 @@ Interactive endpoints (`/click`, `/click/text`, `/click/label`, `/checkbox/selec
 - `?confirm=analyze` — returns a page state analysis after the action
 
 ```bash
-curl -s -X POST "http://localhost:8080/click/text?confirm=screenshot" \
+curl -s -X POST "http://localhost:8000/click/text?confirm=screenshot" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $API_TOKEN" \
   -d '{"text": "Submit"}'
@@ -2833,19 +2844,19 @@ Use the explicit click→wait→click workflow for custom JS dropdowns:
 
 ```bash
 # 1. Click the dropdown trigger (by text)
-curl -s -X POST http://localhost:8080/click/text \
+curl -s -X POST http://localhost:8000/click/text \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ***" \
   -d '{"text": "Country", "timeout": 5}'
 
 # 2. Wait for the option menu to appear
-curl -s -X POST http://localhost:8080/wait/visible \
+curl -s -X POST http://localhost:8000/wait/visible \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ***" \
   -d '{"selector": "[role=option]:first-child", "timeout": 5}'
 
 # 3. Click the option by text
-curl -s -X POST http://localhost:8080/click/text \
+curl -s -X POST http://localhost:8000/click/text \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ***" \
   -d '{"text": "United States", "timeout": 5}'
@@ -2854,7 +2865,7 @@ curl -s -X POST http://localhost:8080/click/text \
 For native `<select>` dropdowns, use the simpler single-call endpoint:
 
 ```bash
-curl -s -X POST http://localhost:8080/dropdown/select \
+curl -s -X POST http://localhost:8000/dropdown/select \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ***" \
   -d '{"label": "Country", "option": "United States"}'
@@ -2872,7 +2883,7 @@ curl -s -X POST http://localhost:8080/dropdown/select \
 Example: double-click on canvas at position (450, 320):
 
 ```bash
-curl -s -X POST http://localhost:8080/click/coordinates \
+curl -s -X POST http://localhost:8000/click/coordinates \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ***" \
   -d '{"x": 450, "y": 320, "button": "left", "click_count": 2}'
@@ -2893,11 +2904,11 @@ This makes it possible to discover and interact with elements inside modals, pop
 
 ```bash
 # 1. Analyze page (includes modal buttons)
-curl -s -X POST http://localhost:8080/page/analyze \
+curl -s -X POST http://localhost:8000/page/analyze \
   -H "Authorization: Bearer ***" | python3 -m json.tool
 
 # 2. Click inside a modal by container
-curl -s -X POST http://localhost:8080/click/text \
+curl -s -X POST http://localhost:8000/click/text \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ***" \
   -d '{"text": "Accept", "container_selector": ".modal", "timeout": 5}'

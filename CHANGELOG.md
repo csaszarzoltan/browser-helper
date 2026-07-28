@@ -2,6 +2,23 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+### [1.0.0] — 2026-07-28
+
+#### Added
+- LLM agent API: `/agent/capabilities`, `/agent/observe`, and `/agent/act`
+- Stable snapshot-scoped element references and stale snapshot detection
+- Token-budgeted cursor pagination and differential observations
+- Artifact store with SHA-256, expiry metadata, and `/artifacts/{artifact_id}` download
+- Dashboard controls for agent observation, discovery, and capture
+- Targeted tests for agent runtime, artifacts, headless CDP execution, API errors, and endpoints
+
+#### Changed
+- Headless evaluation now executes `Runtime.evaluate` over CDP WebSocket
+- Headless screenshots now execute `Page.captureScreenshot` and return artifacts
+- Agent and headless APIs use a unified response envelope and proper non-2xx errors
+- Project version and documented default port are consistently 1.0.0 and 8000
+
+
 ## [0.7.0] — 2026-07-27
 
 ### Added

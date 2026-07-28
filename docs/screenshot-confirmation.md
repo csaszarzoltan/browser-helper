@@ -95,7 +95,7 @@ Note: The standalone endpoint uses whatever `_before_visual_state` was captured 
 ### Click with screenshot confirmation
 
 ```bash
-curl -X POST 'http://localhost:8001/click/text?confirm=screenshot' \
+curl -X POST 'http://localhost:8000/click/text?confirm=screenshot' \
   -H 'Content-Type: application/json' \
   -d '{"text": "Submit"}'
 ```
@@ -103,7 +103,7 @@ curl -X POST 'http://localhost:8001/click/text?confirm=screenshot' \
 ### Select checkbox with analyze confirmation
 
 ```bash
-curl -X POST 'http://localhost:8001/checkbox/select?confirm=analyze' \
+curl -X POST 'http://localhost:8000/checkbox/select?confirm=analyze' \
   -H 'Content-Type: application/json' \
   -d '{"text": "Email notifications"}'
 ```
@@ -112,12 +112,12 @@ curl -X POST 'http://localhost:8001/checkbox/select?confirm=analyze' \
 
 ```bash
 # First, do any action
-curl -X POST http://localhost:8001/click/label \
+curl -X POST http://localhost:8000/click/label \
   -H 'Content-Type: application/json' \
   -d '{"text": "Save settings"}'
 
 # Then confirm with a screenshot
-curl -X POST 'http://localhost:8001/confirm-action?confirm=screenshot'
+curl -X POST 'http://localhost:8000/confirm-action?confirm=screenshot'
 ```
 
 ## Opt-In Design

@@ -62,10 +62,10 @@ Same shape as the regular `/page/analyze` response, with additional summary coun
 
 ```bash
 # Full snapshot (includes nav, sidebar, footer)
-curl -s -X POST http://localhost:8001/page/analyze | python -m json.tool
+curl -s -X POST http://localhost:8000/page/analyze | python -m json.tool
 
 # Condensed snapshot (main content only)
-curl -s -X POST 'http://localhost:8001/page/analyze?condensed=true' | python -m json.tool
+curl -s -X POST 'http://localhost:8000/page/analyze?condensed=true' | python -m json.tool
 ```
 
 ## Notes

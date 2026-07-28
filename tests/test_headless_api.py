@@ -45,7 +45,7 @@ async def test_headless_sessions_empty():
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["sessions"] == []
+        assert data["data"]["sessions"] == []
 
 
 @pytest.mark.asyncio
@@ -71,10 +71,10 @@ async def test_headless_health():
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert "pool" in data
-        assert "limits" in data
-        assert "sessions" in data
-        assert data["pool"]["max_sessions"] == 5
+        assert "pool" in data["data"]
+        assert "limits" in data["data"]
+        assert "sessions" in data["data"]
+        assert data["data"]["pool"]["max_sessions"] == 5
 
 
 @pytest.mark.asyncio
@@ -89,4 +89,4 @@ async def test_headless_navigate_nonexistent():
         assert resp.status_code == 400
         data = resp.json()
         assert data["status"] == "error"
-        assert "not found" in data["error"]
+        assert "not found" in data["error"]["message"]

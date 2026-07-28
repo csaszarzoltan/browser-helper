@@ -93,7 +93,7 @@ Both endpoints support optional post-action confirmation:
 - `?confirm=analyze` — returns a `state_change` with before/after `visual_state` comparison
 
 ```bash
-curl -X POST 'http://localhost:8001/checkbox/select?confirm=screenshot' \
+curl -X POST 'http://localhost:8000/checkbox/select?confirm=screenshot' \
   -H 'Content-Type: application/json' \
   -d '{"text": "Email notifications"}'
 ```
@@ -103,7 +103,7 @@ curl -X POST 'http://localhost:8001/checkbox/select?confirm=screenshot' \
 ### Select a single checkbox
 
 ```bash
-curl -X POST http://localhost:8001/checkbox/select \
+curl -X POST http://localhost:8000/checkbox/select \
   -H 'Content-Type: application/json' \
   -d '{"text": "I agree to the terms", "timeout": 5}'
 ```
@@ -111,7 +111,7 @@ curl -X POST http://localhost:8001/checkbox/select \
 ### Select multiple checkboxes in batch
 
 ```bash
-curl -X POST http://localhost:8001/checkbox/select \
+curl -X POST http://localhost:8000/checkbox/select \
   -H 'Content-Type: application/json' \
   -d '{"texts": ["Subscribe to newsletter", "Email notifications"], "timeout": 5}'
 ```
@@ -119,7 +119,7 @@ curl -X POST http://localhost:8001/checkbox/select \
 ### Deselect a single checkbox
 
 ```bash
-curl -X POST http://localhost:8001/checkbox/deselect \
+curl -X POST http://localhost:8000/checkbox/deselect \
   -H 'Content-Type: application/json' \
   -d '{"text": "SMS notifications"}'
 ```
@@ -127,7 +127,7 @@ curl -X POST http://localhost:8001/checkbox/deselect \
 ### Deselect multiple checkboxes in batch
 
 ```bash
-curl -X POST http://localhost:8001/checkbox/deselect \
+curl -X POST http://localhost:8000/checkbox/deselect \
   -H 'Content-Type: application/json' \
   -d '{"texts": ["SMS", "Marketing emails"]}'
 ```

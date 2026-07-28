@@ -1,6 +1,6 @@
 """Example: Compare condensed vs full page snapshot.
 
-Requires a running Browser Helper instance on localhost:8001.
+Requires a running Browser Helper instance on localhost:8000.
 
 Usage:
     python examples/condensed_comparison.py
@@ -12,7 +12,7 @@ Prerequisites:
 
 import httpx
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = "http://localhost:8000"
 
 
 def print_stats(label: str, page: dict) -> None:

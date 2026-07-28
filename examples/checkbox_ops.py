@@ -1,6 +1,6 @@
 """Example: Batch checkbox selection and deselection.
 
-Requires a running Browser Helper instance on localhost:8001.
+Requires a running Browser Helper instance on localhost:8000.
 
 Usage:
     python examples/checkbox_ops.py
@@ -14,7 +14,7 @@ import json
 
 import httpx
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = "http://localhost:8000"
 
 
 def print_response(label: str, resp: httpx.Response) -> None:

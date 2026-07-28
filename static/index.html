@@ -618,6 +618,18 @@ input[type="text"] { width: 100%; }
 </div><!-- /.grid -->
 
 <!-- ═══════════════ JAVASCRIPT ═══════════════ -->
+
+<section class="card" id="agent-tools-card">
+  <div class="card-header"><h2><i class="fas fa-robot"></i> LLM Agent Tools</h2></div>
+  <div class="card-body">
+    <div class="btn-row">
+      <button class="btn primary" onclick="agentObserve()"><i class="fas fa-eye"></i> Observe</button>
+      <button class="btn" onclick="agentCapabilities()"><i class="fas fa-list-check"></i> Capabilities</button>
+      <button class="btn" onclick="agentCapture()"><i class="fas fa-camera"></i> Capture artifact</button>
+    </div>
+    <pre id="agent-output" style="max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:12px">Agent API ready.</pre>
+  </div>
+</section>
 <script>
 // ============================================================
 //  STATE & CONFIG
@@ -1370,6 +1382,20 @@ function stopPeriodicRefresh() {
     clearInterval(statusInterval);
     statusInterval = null;
   }
+}
+
+
+async function agentObserve() {
+  const data = await apiPost('/agent/observe', {condensed:true,max_chars:6000,max_elements:80});
+  document.getElementById('agent-output').textContent = JSON.stringify(data, null, 2);
+}
+async function agentCapabilities() {
+  const data = await apiGet('/agent/capabilities');
+  document.getElementById('agent-output').textContent = JSON.stringify(data, null, 2);
+}
+async function agentCapture() {
+  const data = await apiPost('/agent/act', {action:'capture',quality:80,observe_after:false});
+  document.getElementById('agent-output').textContent = JSON.stringify(data, null, 2);
 }
 
 // ============================================================

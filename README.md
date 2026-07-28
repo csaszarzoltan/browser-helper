@@ -12,6 +12,19 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 ## Features
 
+### v1.0 — LLM Agent Reliability
+
+- Real CDP WebSocket execution for headless JavaScript evaluation and screenshots
+- Unified response envelope with non-2xx HTTP errors
+- Stable `snapshot_id` + `element_id` references with stale-state detection
+- Token-budgeted, paginated `POST /agent/observe`
+- Differential observations via `since_snapshot_id`
+- High-level `POST /agent/act` actions and `GET /agent/capabilities`
+- Artifact-based screenshots with SHA-256 and expiry metadata
+- Dashboard controls for observation, capabilities, and capture
+
+See [LLM Agent API](docs/agent-api.md).
+
 ### v0.7 — What's New
 
 | Feature | Endpoint | Description |
@@ -116,7 +129,7 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 ### GUI Dashboard
 
-Open **http://localhost:8001** in any browser to see:
+Open **http://localhost:8000** in any browser to see:
 - **Real-time status** — connection indicator, tabs count, last operation
 - **Operation log** — timestamped history with durations
 - **Screenshot viewer** — viewport + full page screenshots
@@ -169,20 +182,20 @@ Launch and manage headless Chrome instances with resource limits and timeout gua
 
 ```bash
 # Launch a headless session
-curl -s -X POST http://localhost:8001/headless/launch | python -m json.tool
+curl -s -X POST http://localhost:8000/headless/launch | python -m json.tool
 
 # Navigate it
-curl -s -X POST http://localhost:8001/headless/navigate \
+curl -s -X POST http://localhost:8000/headless/navigate \
   -H 'Content-Type: application/json' \
   -d '{"session_id": "abc123", "url": "https://example.com"}'
 
 # Take a screenshot
-curl -s -X POST http://localhost:8001/headless/screenshot \
+curl -s -X POST http://localhost:8000/headless/screenshot \
   -H 'Content-Type: application/json' \
   -d '{"session_id": "abc123"}'
 
 # Check pool health
-curl -s http://localhost:8001/headless/health | python -m json.tool
+curl -s http://localhost:8000/headless/health | python -m json.tool
 ```
 
 ### Multi-Profile Session Management (v0.4+)
@@ -226,7 +239,7 @@ Pass a `profile` parameter to `/headless/launch` — the headless Chrome instanc
 
 ```bash
 # Create a profile
-curl -X POST http://localhost:8001/profiles \
+curl -X POST http://localhost:8000/profiles \
   -H "Content-Type: application/json" \
   -d '{
     "name": "work",
@@ -236,28 +249,28 @@ curl -X POST http://localhost:8001/profiles \
   }'
 
 # List profiles
-curl http://localhost:8001/profiles
+curl http://localhost:8000/profiles
 
 # Get profile details
-curl http://localhost:8001/profiles/work
+curl http://localhost:8000/profiles/work
 
 # Update profile metadata
-curl -X PUT http://localhost:8001/profiles/work \
+curl -X PUT http://localhost:8000/profiles/work \
   -H "Content-Type: application/json" \
   -d '{"description": "Updated work profile", "tags": ["work", "prod"]}'
 
 # Add extension to a profile
-curl -X POST http://localhost:8001/profiles/work/extensions \
+curl -X POST http://localhost:8000/profiles/work/extensions \
   -H "Content-Type: application/json" \
   -d '{"path": "/home/user/extensions/ublock"}'
 
 # Launch headless session WITH profile (uses its data dir + extensions)
-curl -X POST http://localhost:8001/headless/launch \
+curl -X POST http://localhost:8000/headless/launch \
   -H "Content-Type: application/json" \
   -d '{"profile": "work"}'
 
 # Launch headless session with profile + extra extensions
-curl -X POST http://localhost:8001/headless/launch \
+curl -X POST http://localhost:8000/headless/launch \
   -H "Content-Type: application/json" \
   -d '{
     "profile": "work",
@@ -265,15 +278,15 @@ curl -X POST http://localhost:8001/headless/launch \
   }'
 
 # Export profile as ZIP
-curl -X POST http://localhost:8001/profiles/work/export -o work-profile.zip
+curl -X POST http://localhost:8000/profiles/work/export -o work-profile.zip
 
 # Import profile from ZIP (file must be on server)
-curl -X POST http://localhost:8001/profiles/import \
+curl -X POST http://localhost:8000/profiles/import \
   -H "Content-Type: application/json" \
   -d '{"path": "/tmp/work-profile.zip"}'
 
 # Delete profile
-curl -X DELETE http://localhost:8001/profiles/work
+curl -X DELETE http://localhost:8000/profiles/work
 ```
 
 **Per-profile resource limits:** Each profile carries its own `resource_limits` (`max_memory_mb`, `max_cpu_percent`). These limits are stored in the profile metadata and can be used by session management to apply per-profile resource governance (defaults: 512 MB memory, 80% CPU).
@@ -300,23 +313,23 @@ Screenshot diff engine compares page screenshots against stored baselines. REST 
 
 ```bash
 # Capture a baseline
-curl -X POST http://localhost:8001/screenshot/baseline \
+curl -X POST http://localhost:8000/screenshot/baseline \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com", "profile": "work"}'
 
 # Compare against baseline
-curl -X POST http://localhost:8001/screenshot/compare \
+curl -X POST http://localhost:8000/screenshot/compare \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com", "profile": "work", "threshold": 0.001}'
 
 # List stored baselines
-curl http://localhost:8001/screenshot/baselines
+curl http://localhost:8000/screenshot/baselines
 
 # List baselines for a specific profile
-curl "http://localhost:8001/screenshot/baselines?profile=work"
+curl "http://localhost:8000/screenshot/baselines?profile=work"
 
 # Delete a baseline
-curl -X DELETE http://localhost:8001/screenshot/baseline \
+curl -X DELETE http://localhost:8000/screenshot/baseline \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com", "profile": "work"}'
 ```
@@ -461,37 +474,37 @@ python run.py --port 8001
 
 ```bash
 # Check server health
-curl -s http://localhost:8001/health | python -m json.tool
+curl -s http://localhost:8000/health | python -m json.tool
 
 # Navigate to a page
-curl -s -X POST "http://localhost:8001/navigate?url=https://example.com" | python -m json.tool
+curl -s -X POST "http://localhost:8000/navigate?url=https://example.com" | python -m json.tool
 
 # Run JavaScript
-curl -s -X POST http://localhost:8001/eval \
+curl -s -X POST http://localhost:8000/eval \
   -H "Content-Type: application/json" \
   -d '{"js": "document.title"}' | python -m json.tool
 
 # Take a screenshot
-curl -s -X POST http://localhost:8001/screenshot | python -m json.tool
+curl -s -X POST http://localhost:8000/screenshot | python -m json.tool
 
 # Click by text (no selectors needed)
-curl -s -X POST http://localhost:8001/click/text \
+curl -s -X POST http://localhost:8000/click/text \
   -H "Content-Type: application/json" \
   -d '{"text": "More information"}' | python -m json.tool
 
 # Fill a form (find fields by label)
-curl -s -X POST http://localhost:8001/form/fill \
+curl -s -X POST http://localhost:8000/form/fill \
   -H "Content-Type: application/json" \
   -d '{"fields": [{"label": "email", "value": "hello@test.hu"}]}' | python -m json.tool
 
 # Deep scan a tab (all sub-tabs + iframes in one call)
-curl -s -X POST http://localhost:8001/tabs/deep-scan/TAB_ID | python -m json.tool
+curl -s -X POST http://localhost:8000/tabs/deep-scan/TAB_ID | python -m json.tool
 
 # Scan all tabs without switching
-curl -s -X POST http://localhost:8001/tabs/scan | python -m json.tool
+curl -s -X POST http://localhost:8000/tabs/scan | python -m json.tool
 ```
 
-Open **http://localhost:8001** in your browser for the GUI dashboard.
+Open **http://localhost:8000** in your browser for the GUI dashboard.
 
 ## API Authentication
 
@@ -525,7 +538,7 @@ API_TOKEN=my-secret-token python run.py
 No CSS selectors needed. Just the text you see on screen.
 
 ```bash
-curl -X POST http://localhost:8001/click/text \
+curl -X POST http://localhost:8000/click/text \
   -H 'Content-Type: application/json' \
   -d '{"text": "Jelentkezem", "timeout": 5}'
 ```
@@ -540,7 +553,7 @@ curl -X POST http://localhost:8001/click/text \
 Fill any form using the labels you see — the engine finds the right input automatically.
 
 ```bash
-curl -X POST http://localhost:8001/form/fill \
+curl -X POST http://localhost:8000/form/fill \
   -H 'Content-Type: application/json' \
   -d '{"fields": [
     {"label": "Email", "value": "hello@test.hu"},
@@ -562,7 +575,7 @@ curl -X POST http://localhost:8001/form/fill \
 Essential for dynamic pages. Polls every 200ms until the element appears or timeout.
 
 ```bash
-curl -X POST http://localhost:8001/wait \
+curl -X POST http://localhost:8000/wait \
   -H 'Content-Type: application/json' \
   -d '{"selector": ".success-message", "timeout": 10}'
 ```
@@ -572,7 +585,7 @@ curl -X POST http://localhost:8001/wait \
 Extract ALL content from a tab in ONE API call — sub-tab navigation, iframes, and metadata.
 
 ```bash
-curl -X POST http://localhost:8001/tabs/deep-scan/TAB_ID
+curl -X POST http://localhost:8000/tabs/deep-scan/TAB_ID
 ```
 
 **Returns:**
@@ -602,7 +615,7 @@ The deep scan JavaScript engine detects:
 Extracts basic content from ALL open tabs without switching the active tab. Uses parallel WebSocket connections (5 concurrent, configurable).
 
 ```bash
-curl -X POST http://localhost:8001/tabs/scan
+curl -X POST http://localhost:8000/tabs/scan
 ```
 
 Each inactive tab is activated (`Target.activateTarget`) before extraction to wake it from Chrome's memory discard.
@@ -666,12 +679,13 @@ The container bundles the CDP backend. Chrome must still be running on the host 
 cd tests && pytest -v
 ```
 
-Current test suite: **409 tests pass, 4 skipped, 19 pre-existing failures** (432 total). All source files pass `ruff check` cleanly.
+Current test suite: **590 tests passed** on 2026-07-28. Run `pytest -q` for the authoritative result in your environment.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
+| [LLM Agent API](docs/agent-api.md) | Stable references, observations, actions, artifacts |
 | [Getting Started](docs/getting-started.md) | Prerequisites, install, first run |
 | [API Reference](docs/api-reference.md) | Complete endpoint docs with examples |
 | [Docker](docs/docker.md) | Container build and deployment |

@@ -35,6 +35,8 @@ from pydantic import BaseModel, field_validator, model_validator
 # ---------------------------------------------------------------------------
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
+from artifact_store import ArtifactStore
+from agent_runtime import (ElementNotFoundError, SnapshotStore, StaleSnapshotError, diff_snapshots, paginate_snapshot)
 from baseline_manager import BaselineManager
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
@@ -160,6 +162,8 @@ profile_mgr = ProfileManager()
 
 # Baseline manager for visual regression testing
 baseline_mgr = BaselineManager()
+artifact_store = ArtifactStore()
+snapshot_store = SnapshotStore()
 
 # Operation log: list of dicts, max 100 entries
 # Each entry: {timestamp, operation, status, duration_ms, details}
@@ -498,6 +502,37 @@ class HeadlessBatchScreenshotRequest(BaseModel):
     urls: list[str]
 
 
+class AgentObserveRequest(BaseModel):
+    condensed: bool = True
+    max_chars: int = 6000
+    max_elements: int = 80
+    cursor: str | None = None
+    snapshot_id: str | None = None
+    since_snapshot_id: str | None = None
+
+
+class AgentTarget(BaseModel):
+    snapshot_id: str | None = None
+    element_id: str | None = None
+    selector: str | None = None
+    text: str | None = None
+    label: str | None = None
+
+
+class AgentActionRequest(BaseModel):
+    action: str
+    target: AgentTarget | None = None
+    url: str | None = None
+    value: str | None = None
+    fields: list[dict] | None = None
+    option: str | None = None
+    timeout: int = 10
+    expression: str | None = None
+    quality: int = 80
+    steps: list[dict] | None = None
+    observe_after: bool = True
+
+
 # ─── Profile management models ────────────────────────────────
 
 
@@ -581,6 +616,33 @@ async def auth_middleware(request: Request, call_next):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def api_success(operation: str, data: Any = None, status_code: int = 200, meta: dict | None = None):
+    payload = {"status": "ok", "operation": operation, "data": data, "error": None, "meta": meta or {}}
+    # Deprecated alias retained for one release for existing clients.
+    payload["result"] = data
+    return payload
+
+
+def api_error(operation: str, code: str, message: str, status_code: int = 400, details: Any = None):
+    return JSONResponse(status_code=status_code, content={
+        "status": "error", "operation": operation, "data": None,
+        "error": {"code": code, "message": message, "details": details}, "meta": {},
+    })
+
+
+def result_status(result: dict, default: int = 400) -> int:
+    code = result.get("code", "") if isinstance(result, dict) else ""
+    if code in {"session_not_found", "element_not_found", "artifact_not_found"}:
+        return 404
+    if code in {"stale_snapshot", "conflict"}:
+        return 409
+    if code in {"cdp_error", "not_connected"}:
+        return 503
+    if code == "timeout":
+        return 504
+    return default
+
+
 def _get_memory_mb() -> float:
     """Get current RSS memory usage in MB from /proc/self/status."""
     try:
@@ -657,13 +719,14 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
         elapsed = (time.monotonic() - start) * 1000
         log_operation(operation, "success", elapsed, str(result)[:200])
         await broadcast_state()
-        return {"status": "ok", "operation": operation, "result": result}
+        return api_success(operation, result)
     except Exception as exc:
         elapsed = (time.monotonic() - start) * 1000
         logger.exception("Operation '%s' failed", operation)
         log_operation(operation, "error", elapsed, str(exc))
         await broadcast_state()
-        return {"status": "error", "operation": operation, "error": str(exc)}
+        status = 504 if isinstance(exc, TimeoutError) else 503 if "connect" in str(exc).lower() else 400
+        return api_error(operation, "operation_failed", str(exc), status)
 
 
 # ---------------------------------------------------------------------------
@@ -979,9 +1042,18 @@ async def page_analyze(condensed: bool = Query(False, description="Enable conden
 
     Replaces 3-4 separate eval() calls.
     """
-    if condensed:
-        return await run_op("page_analyze_condensed", client.analyze_page_condensed)
-    return await run_op("page_analyze", client.analyze_page)
+    ensure_connected()
+    try:
+        raw = await (client.analyze_page_condensed() if condensed else client.analyze_page())
+        snap = snapshot_store.add(raw)
+        if isinstance(raw, dict):
+            page = raw.get("page", raw)
+            if isinstance(page, dict):
+                page["snapshot_id"] = snap.snapshot_id
+                page["elements"] = snap.elements
+        return api_success("page_analyze_condensed" if condensed else "page_analyze", raw)
+    except Exception as exc:
+        return api_error("page_analyze", "operation_failed", str(exc), 400)
 
 
 @app.post("/wait/text")
@@ -2035,6 +2107,142 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 # ---------------------------------------------------------------------------
+# LLM agent API: stable references, observation, differential state and artifacts
+# ---------------------------------------------------------------------------
+
+AGENT_CAPABILITIES = {
+    "version": "1.0.0",
+    "response_schema": "browser-helper-envelope-v1",
+    "actions": ["navigate", "click", "fill", "select", "wait", "evaluate", "capture", "workflow"],
+    "observation": {"stable_element_refs": True, "pagination": True, "differential": True, "token_budget": True},
+    "artifacts": {"screenshots": True, "ttl_seconds": 86400},
+}
+
+
+async def _capture_agent_snapshot(condensed: bool = True):
+    raw = await (client.analyze_page_condensed() if condensed else client.analyze_page())
+    return snapshot_store.add(raw)
+
+
+@app.get("/agent/capabilities")
+async def agent_capabilities():
+    return api_success("agent_capabilities", AGENT_CAPABILITIES)
+
+
+@app.post("/agent/observe")
+async def agent_observe(body: AgentObserveRequest):
+    ensure_connected()
+    try:
+        if body.snapshot_id:
+            snap = snapshot_store.get(body.snapshot_id)
+        else:
+            snap = await _capture_agent_snapshot(body.condensed)
+        data = paginate_snapshot(snap, body.max_chars, body.max_elements, body.cursor)
+        if body.since_snapshot_id:
+            old = snapshot_store.get(body.since_snapshot_id)
+            data["diff"] = diff_snapshots(old, snap)
+        return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content"})
+    except StaleSnapshotError as exc:
+        return api_error("agent_observe", "stale_snapshot", str(exc), 409)
+    except ValueError as exc:
+        return api_error("agent_observe", "invalid_cursor", str(exc), 422)
+    except Exception as exc:
+        return api_error("agent_observe", "observation_failed", str(exc), 503)
+
+
+async def _resolve_agent_target(target: AgentTarget | None) -> dict:
+    if target is None:
+        return {}
+    if target.snapshot_id and target.element_id:
+        old = snapshot_store.get(target.snapshot_id)
+        current = await _capture_agent_snapshot(True)
+        if current.fingerprint != old.fingerprint:
+            raise StaleSnapshotError("Page changed since the referenced snapshot; observe again")
+        return snapshot_store.resolve(target.snapshot_id, target.element_id)
+    return target.model_dump(exclude_none=True)
+
+
+@app.post("/agent/act")
+async def agent_act(body: AgentActionRequest):
+    ensure_connected()
+    action = body.action.lower().strip()
+    try:
+        target = await _resolve_agent_target(body.target)
+        if action == "navigate":
+            if not body.url:
+                raise ValueError("url is required")
+            result = await client.navigate(body.url)
+        elif action == "click":
+            if target.get("selector"):
+                result = await client.click(target["selector"])
+            else:
+                text = target.get("text") or target.get("name") or target.get("label")
+                if not text:
+                    raise ValueError("click requires an element reference, selector or text")
+                result = await client.click_by_text(text, body.timeout)
+        elif action == "fill":
+            fields = body.fields
+            if fields is None:
+                label = target.get("label") or target.get("name") or target.get("text")
+                if not label or body.value is None:
+                    raise ValueError("fill requires fields or target plus value")
+                fields = [{"label": label, "value": body.value}]
+            result = await client.smart_form_fill(fields, body.timeout)
+        elif action == "select":
+            label = target.get("label") or target.get("name") or target.get("text")
+            if not label or body.option is None:
+                raise ValueError("select requires target and option")
+            result = await client.form_select("label", label, body.option)
+        elif action == "wait":
+            if target.get("selector"):
+                result = await client.wait_for_element(target["selector"], body.timeout, True)
+            else:
+                text = target.get("text") or target.get("name")
+                if not text:
+                    raise ValueError("wait requires selector or text")
+                result = await client.wait_for_text(text, body.timeout, True)
+        elif action == "evaluate":
+            if not body.expression:
+                raise ValueError("expression is required")
+            result = await client.evaluate(body.expression)
+        elif action == "capture":
+            captured = await client.screenshot(quality=body.quality)
+            encoded = captured.get("data") or captured.get("screenshot")
+            if not encoded:
+                raise RuntimeError("Screenshot response did not contain image data")
+            binary = base64.b64decode(encoded)
+            result = {"artifact": artifact_store.put(binary, "image/jpeg", ".jpg")}
+        elif action == "workflow":
+            if not body.steps:
+                raise ValueError("steps are required")
+            result = await client.execute_script(body.steps)
+        else:
+            return api_error("agent_act", "unknown_action", f"Unknown action: {action}", 422)
+        data = {"action": action, "result": result}
+        if body.observe_after and action not in {"evaluate", "capture"}:
+            snap = await _capture_agent_snapshot(True)
+            data["observation"] = paginate_snapshot(snap, 4000, 60)
+        return api_success("agent_act", data)
+    except StaleSnapshotError as exc:
+        return api_error("agent_act", "stale_snapshot", str(exc), 409)
+    except ElementNotFoundError as exc:
+        return api_error("agent_act", "element_not_found", str(exc), 404)
+    except ValueError as exc:
+        return api_error("agent_act", "invalid_request", str(exc), 422)
+    except Exception as exc:
+        return api_error("agent_act", "action_failed", str(exc), 503)
+
+
+@app.get("/artifacts/{artifact_id}")
+async def get_artifact(artifact_id: str):
+    found = artifact_store.get(artifact_id) or headless_mgr.artifacts.get(artifact_id)
+    if not found:
+        return api_error("artifact_get", "artifact_not_found", "Artifact not found", 404)
+    path, record = found
+    return FileResponse(path, media_type=record["mime_type"], filename=path.name)
+
+
+# ---------------------------------------------------------------------------
 # REST endpoints — headless Chrome sessions
 # ---------------------------------------------------------------------------
 
@@ -2058,60 +2266,59 @@ async def headless_launch(body: HeadlessLaunchRequest | None = None):
         if body.extensions is not None:
             kwargs["extensions"] = body.extensions
     result = await headless_mgr.launch_session(**kwargs)
-    status_code = 200 if result.get("status") == "ok" else 400
-    return JSONResponse(status_code=status_code, content=result)
+    if result.get("status") != "ok":
+        return api_error("headless_launch", result.get("code", "launch_failed"), result.get("error", "Launch failed"), result_status(result))
+    return api_success("headless_launch", result)
 
 
 @app.post("/headless/close")
 async def headless_close(body: HeadlessCloseRequest):
-    """Close a headless session by ID."""
     result = await headless_mgr.close_session(body.session_id)
-    status_code = 200 if result.get("status") == "ok" else 404
-    return JSONResponse(status_code=status_code, content=result)
+    if result.get("status") != "ok":
+        return api_error("headless_close", result.get("code", "session_not_found"), result.get("error", "Session not found"), result_status(result, 404))
+    return api_success("headless_close", result)
 
 
 @app.get("/headless/sessions")
 async def headless_sessions():
-    """List all active headless sessions with resource usage."""
-    return {"status": "ok", "sessions": headless_mgr.get_sessions()}
+    return api_success("headless_sessions", {"sessions": headless_mgr.get_sessions()})
 
 
 @app.post("/headless/navigate")
 async def headless_navigate(body: HeadlessNavigateRequest):
-    """Navigate a headless session to a URL."""
     result = await headless_mgr.navigate(body.session_id, body.url)
-    status_code = 200 if result.get("status") == "ok" else 400
-    return JSONResponse(status_code=status_code, content=result)
+    if result.get("status") != "ok":
+        return api_error("headless_navigate", result.get("code", "navigation_failed"), result.get("error", "Navigation failed"), result_status(result))
+    return api_success("headless_navigate", result)
 
 
 @app.post("/headless/eval")
 async def headless_eval(body: HeadlessEvalRequest):
-    """Evaluate JavaScript in a headless session."""
     result = await headless_mgr.evaluate(body.session_id, body.expression)
-    status_code = 200 if result.get("status") == "ok" else 400
-    return JSONResponse(status_code=status_code, content=result)
+    if result.get("status") != "ok":
+        return api_error("headless_eval", result.get("code", "evaluation_failed"), result.get("error", "Evaluation failed"), result_status(result))
+    return api_success("headless_eval", result)
 
 
 @app.post("/headless/screenshot")
 async def headless_screenshot(body: HeadlessScreenshotRequest):
-    """Take a screenshot of a headless session's current page."""
     result = await headless_mgr.screenshot(body.session_id)
-    status_code = 200 if result.get("status") == "ok" else 400
-    return JSONResponse(status_code=status_code, content=result)
+    if result.get("status") != "ok":
+        return api_error("headless_screenshot", result.get("code", "capture_failed"), result.get("error", "Capture failed"), result_status(result))
+    return api_success("headless_screenshot", result)
 
 
 @app.post("/headless/batch-screenshot")
 async def headless_batch_screenshot(body: HeadlessBatchScreenshotRequest):
-    """Take multiple screenshots by navigating to each URL."""
     result = await headless_mgr.batch_screenshot(body.session_id, body.urls)
-    status_code = 200 if result.get("status") == "ok" else 400
-    return JSONResponse(status_code=status_code, content=result)
+    if result.get("status") != "ok":
+        return api_error("headless_batch_screenshot", result.get("code", "capture_failed"), result.get("error", "Capture failed"), result_status(result))
+    return api_success("headless_batch_screenshot", result)
 
 
 @app.get("/headless/health")
 async def headless_health():
-    """Pool stats and per-session resource usage."""
-    return headless_mgr.health_check()
+    return api_success("headless_health", headless_mgr.health_check())
 
 
 # ---------------------------------------------------------------------------
