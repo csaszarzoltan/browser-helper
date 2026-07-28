@@ -318,9 +318,19 @@ class FormFillRequest(BaseModel):
 
 
 class FormFillField(BaseModel):
-    """A single form field descriptor for smart_form_fill."""
-    label: str
+    """A single form field descriptor for smart_form_fill.
+
+    Lookup order (any combination works):
+      1. ``selector`` — direct CSS selector (fastest)
+      2. ``label``    — ``<label>`` text, placeholder, name, aria-label (default)
+      3. ``placeholder`` — exact placeholder match
+      4. ``nth``      — 0-based index among all matching fields (use with label/selector)
+    """
     value: str
+    label: str | None = None
+    selector: str | None = None
+    placeholder: str | None = None
+    nth: int = 0
     type: str | None = None
 
 
@@ -1707,10 +1717,14 @@ async def execute_script(body: ScriptRequest):
     """
     Execute a batch of operations sequentially.
 
-    Body: {"steps": [{"action": "navigate", "params": {"url": "..."}}, ...]}
+    Body: {"steps": [{"action": "...", "params": {...}}, ...]}
 
     Supported actions: navigate, click, type, eval, screenshot,
-    full_page_screenshot, element_screenshot, wait, scroll, get_text, pdf.
+    full_page_screenshot, element_screenshot, wait, wait_for_element,
+    wait_text, wait_for_navigation, wait_for_network_idle, scroll, get_text, pdf,
+    click_text, click_label, form_fill, form_select, analyze_page,
+    upload_files, find_element, get_iframe_text, switch_to_iframe,
+    get_page_outline, page_diff, close.
     """
     return await run_op("execute_script", client.execute_script, body.steps)
 

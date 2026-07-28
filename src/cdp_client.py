@@ -309,104 +309,108 @@ class CDPClient:
     # ─── Smart form fill ──────────────────────────────────────────
 
     async def smart_form_fill(self, fields: list[dict], timeout: int = 5) -> dict:
-        """Fill form fields by label text — no CSS selectors needed.
+        """Fill form fields - no CSS selectors needed.
 
-        *fields* is a list of ``{"label": "...", "value": "..."}``.
-        The method finds each field by label, placeholder, name, or
-        aria-label, types the value, and returns per-field results.
+        Each field descriptor may contain:
+          - label:         match by <label> text, placeholder, name, aria-label
+          - selector:      direct CSS selector (fastest path)
+          - placeholder:   exact placeholder attribute match
+          - nth:           0-based index among matching fields (default 0)
+          - value:         the value to type into the field
         """
         await self._activate_current()
         js = r"""
 (function() {
   const fields = """ + json.dumps(fields) + r""";
   const maxWait = """ + str(int(timeout * 1000)) + r""";
-  const results = [];
 
-  function findInput(label) {
+  function findAllByLabel(label) {
     const low = label.toLowerCase().trim();
-
-    // 1. Label → input via <label for=""> or <label> wrapping
-    const labels = document.querySelectorAll("label");
-    for (let lb of labels) {
+    const found = [];
+    // 1. <label for="id"> or <label> wrapping input
+    for (const lb of document.querySelectorAll("label")) {
       const lbl = (lb.textContent || "").toLowerCase().trim();
       if (!lbl.includes(low)) continue;
-
-      // <label for="id">
       if (lb.getAttribute("for")) {
         const el = document.getElementById(lb.getAttribute("for"));
-        if (el) return el;
+        if (el) { found.push(el); continue; }
       }
-      // <label> wrapping <input>
       const wrapped = lb.querySelector("input, textarea, select");
-      if (wrapped) return wrapped;
+      if (wrapped) { found.push(wrapped); continue; }
     }
-
     // 2. Placeholder match
-    const byPlaceholder = document.querySelector(
+    document.querySelectorAll(
       "input[placeholder*='" + CSS.escape(label) + "'], " +
       "textarea[placeholder*='" + CSS.escape(label) + "']"
-    );
-    if (byPlaceholder) return byPlaceholder;
-
+    ).forEach(el => { if (!found.includes(el)) found.push(el); });
     // 3. Name / aria-label match
-    const byAttr = document.querySelector(
+    document.querySelectorAll(
       "input[name*='" + CSS.escape(label) + "'], " +
       "input[aria-label*='" + CSS.escape(label) + "'], " +
       "textarea[name*='" + CSS.escape(label) + "'], " +
       "textarea[aria-label*='" + CSS.escape(label) + "']"
-    );
-    if (byAttr) return byAttr;
-
+    ).forEach(el => { if (!found.includes(el)) found.push(el); });
     // 4. Adjacent label (previous sibling or parent)
-    const all = document.querySelectorAll("input, textarea");
-    for (let el of all) {
-      let prev = el.previousElementSibling;
-      if (prev && (prev.textContent || "").toLowerCase().includes(low)) return el;
-      let parent = el.parentElement;
-      if (parent && (parent.textContent || "").toLowerCase().includes(low) &&
-          parent.children.length < 4) return el;
+    for (const el of document.querySelectorAll("input, textarea")) {
+      if (found.includes(el)) continue;
+      const prev = el.previousElementSibling;
+      if (prev && (prev.textContent || "").toLowerCase().includes(low)) { found.push(el); continue; }
+      const parent = el.parentElement;
+      if (parent && (parent.textContent || "").toLowerCase().includes(low) && parent.children.length < 4)
+        found.push(el);
     }
-
-    return null;
+    return found;
   }
 
+  const results = [];
   const deadline = Date.now() + maxWait;
-  fields.forEach(function(f) {
-    try {
-      const fieldId = f.selector || f.label;
-      const el = f.selector ? document.querySelector(f.selector) : findInput(f.label);
-      if (!el) {
-        results.push({label: fieldId, status: "error", error: "field not found"});
-        return;
-      }
 
-      // Wait a bit for element to be interactive
+  for (const f of fields) {
+    try {
+      const fieldId = f.selector || f.placeholder || f.label || "(unknown)";
+      let el = null;
+      // 1. Direct CSS selector
+      if (f.selector) {
+        el = document.querySelector(f.selector);
+      }
+      // 2. Exact placeholder match
+      if (!el && f.placeholder) {
+        el = document.querySelector(
+          "input[placeholder='" + CSS.escape(f.placeholder) + "'], " +
+          "textarea[placeholder='" + CSS.escape(f.placeholder) + "']"
+        );
+      }
+      // 3. Label / smart lookup
+      if (!el && f.label) {
+        const matches = findAllByLabel(f.label);
+        const idx = f.nth || 0;
+        el = matches[idx] || null;
+      }
+      if (!el) {
+        results.push({field: fieldId, status: "error", error: "field not found"});
+        continue;
+      }
       while (Date.now() < deadline) {
         if (el.offsetParent !== null) break;
       }
-
       el.focus();
-      el.value = "";
-      el.value = f.value;
+      if (el.getAttribute("contenteditable") === "true") {
+        el.textContent = f.value;
+      } else {
+        el.value = "";
+        el.value = f.value;
+      }
       el.dispatchEvent(new Event("input", {bubbles: true}));
       el.dispatchEvent(new Event("change", {bubbles: true}));
       el.dispatchEvent(new Event("blur", {bubbles: true}));
-
       const tag = el.tagName.toLowerCase();
       const type = el.type || "";
-      results.push({
-        label: fieldId,
-        status: "ok",
-        tag: tag,
-        type: type,
-        filled: f.value.substring(0, 50),
-      });
+      results.push({field: fieldId, status: "ok", tag: tag, type: type, filled: f.value.substring(0, 50)});
     } catch(e) {
-      const fieldId = f.selector || f.label;
-      results.push({label: fieldId, status: "error", error: e.message});
+      const fieldId = f.selector || f.placeholder || f.label || "(unknown)";
+      results.push({field: fieldId, status: "error", error: e.message});
     }
-  });
-
+  }
   return JSON.stringify({fields_filled: results.length, results: results});
 })();
 """

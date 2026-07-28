@@ -2,6 +2,20 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+### [1.1.0] — 2026-07-28
+
+#### Added
+- **`/form/fill` enhanced field lookup** — Fields now support `selector` (direct CSS), `placeholder` (exact match), and `nth` (index among matches) in addition to `label` smart lookup. Shorthand format: `{"selector": "#id", "text": "value"}`
+- **Contenteditable support** — `smart_form_fill` detects `contenteditable` elements and sets `textContent` instead of `.value`
+- **`/script` complete action list** — Documented all 28 supported actions in SKILL.md and endpoint docstring: `navigate`, `click`, `click_text`, `click_label`, `type`, `eval`, `form_fill`, `form_select`, `find_element`, `wait`, `wait_for_element`, `wait_text`, `wait_for_navigation`, `wait_for_network_idle`, `scroll`, `screenshot`, `full_page_screenshot`, `element_screenshot`, `get_text`, `pdf`, `upload_files`, `get_iframe_text`, `switch_to_iframe`, `get_page_outline`, `analyze_page`, `page_diff`, `close`
+- **14 new tests** — `test_v11_features.py`: FormFillField model (selector/placeholder/nth), FormFillRequest backward compat, ScriptRequest, contenteditable detection
+
+#### Changed
+- `FormFillField` model: `label` is now optional (was required); added `selector`, `placeholder`, `nth` fields
+- `smart_form_fill` JS rewritten: uses `findAllByLabel()` returning array + nth indexing, supports direct CSS selector and exact placeholder match
+- SKILL.md `/form/fill` section fully rewritten with new field types and examples
+- SKILL.md `/script` section now lists all 28 actions with params and descriptions
+
 ### [1.0.0] — 2026-07-28
 
 #### Added

@@ -444,7 +444,7 @@ curl -s -X POST http://localhost:8000/type \
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/form/fill` | Fill multiple form fields by label text |
+| `POST` | `/form/fill` | Fill multiple form fields by label, CSS selector, or placeholder **v1.1 enhanced** |
 | `POST` | `/form/select` | Select an option from a dropdown |
 | `POST` | `/form/select/by-label` | Alias for `/form/select` with `by=label` **NEW v0.8** |
 | `POST` | `/dropdown/select` | Simplified dropdown selection by label **NEW v0.8** |
@@ -453,22 +453,34 @@ curl -s -X POST http://localhost:8000/type \
 
 #### POST /form/fill
 
-Fill one or more form fields identified by associated label text. Each field specifies the label text and value to enter.
+Fill one or more form fields. Each field can be identified by:
+- **label** — finds `<label>`, placeholder, name, or aria-label containing the text (smart lookup)
+- **selector** — direct CSS selector (fastest, e.g. `#email`, `.title-input`)
+- **placeholder** — exact placeholder attribute match (e.g. `Enter title`)
+- **nth** — 0-based index when multiple fields match the label (default `0`)
 
 **Request body:**
 ```json
 {
   "fields": [
     {"label": "Email", "value": "user@example.com"},
-    {"label": "Password", "value": "s3cret"}
+    {"selector": "#password", "value": "s3cret"},
+    {"placeholder": "Enter title", "value": "My Project"},
+    {"label": "Name", "value": "Zoltan", "nth": 2}
   ],
   "timeout": 5
 }
 ```
 
 *Fields:*
-- `fields` (array of objects, required) — each object has `label` (string) and `value` (string)
+- `fields` (array of objects, required) — each object may contain:
+  - `value` (string, required) — value to type into the field
+  - `label` (string, optional) — smart lookup by label text
+  - `selector` (string, optional) — direct CSS selector (fastest path)
+  - `placeholder` (string, optional) — exact placeholder match
+  - `nth` (integer, optional, default `0`) — index among matching fields
 - `timeout` (integer, optional, default `5`) — seconds to wait per field
+- Also supports shorthand: `{"selector": "#id", "text": "value"}`
 
 **Response:**
 ```json
@@ -476,10 +488,12 @@ Fill one or more form fields identified by associated label text. Each field spe
   "status": "ok",
   "operation": "form/fill",
   "result": {
-    "filled": 2,
-    "fields": [
-      {"label": "Email", "filled": true},
-      {"label": "Password", "filled": true}
+    "fields_filled": 4,
+    "results": [
+      {"field": "Email", "status": "ok", "tag": "input", "type": "text", "filled": "user@ex"},
+      {"field": "#password", "status": "ok", "tag": "input", "type": "password", "filled": "s3cre"},
+      {"field": "Enter title", "status": "ok", "tag": "textarea", "type": "", "filled": "My Proj"},
+      {"field": "Name", "status": "ok", "tag": "input", "type": "text", "filled": "Zoltan"}
     ]
   }
 }
@@ -489,8 +503,8 @@ Fill one or more form fields identified by associated label text. Each field spe
 ```bash
 curl -s -X POST http://localhost:8000/form/fill \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -d '{"fields": [{"label": "Email", "value": "user@example.com"}], "timeout": 5}' | python3 -m json.tool
+  -H "Authorization: Bearer ***" \
+  -d '{"fields": [{"selector": "#email", "value": "user@example.com"}]}' | python3 -m json.tool
 ```
 
 #### POST /form/select
@@ -1458,13 +1472,51 @@ curl -s -X POST http://localhost:8000/dom_click_all \
 
 Execute a sequence of scripted steps (workflow). Each step specifies an action and parameters.
 
+**Supported actions:**
+
+| Action | Params | Description |
+|--------|--------|-------------|
+| `navigate` | `url` | Navigate to URL |
+| `click` | `selector` | Click element by CSS selector |
+| `click_text` | `text`, `timeout`, `nth` | Click by visible text |
+| `click_label` | `text`, `timeout` | Click `<label>` by text |
+| `type` | `selector`, `text` | Type into input/textarea |
+| `eval` | `js` | Execute JavaScript |
+| `form_fill` | `fields[]`, `timeout` | Smart form fill (label/selector/placeholder/nth) |
+| `form_select` | `by`, `text_or_value`, `option_value` | Select dropdown option |
+| `find_element` | `text`, `tag` | Find element by text |
+| `wait` | `ms` | Sleep for N milliseconds |
+| `wait_for_element` | `selector`, `timeout`, `visible` | Wait for element to appear |
+| `wait_text` | `text`, `timeout`, `present` | Wait for text on page |
+| `wait_for_navigation` | `timeout` | Wait for page navigation |
+| `wait_for_network_idle` | `timeout`, `quiet_ms` | Wait for network to settle |
+| `scroll` | `x`, `y` | Scroll the page |
+| `screenshot` | `quality` | Take JPEG screenshot |
+| `full_page_screenshot` | `quality` | Full-page screenshot |
+| `element_screenshot` | `selector`, `quality` | Screenshot of specific element |
+| `get_text` | — | Get page text content |
+| `pdf` | — | Generate PDF |
+| `upload_files` | `selector`, `files` | Upload files to input |
+| `get_iframe_text` | `iframe_index` | Get text from iframe |
+| `switch_to_iframe` | `iframe_index` | Switch context to iframe |
+| `get_page_outline` | — | Get page structure outline |
+| `analyze_page` | — | Full page analysis |
+| `page_diff` | `previous_snapshot` | Compare with previous snapshot |
+| `close` | — | Close browser |
+
 **Request body:**
 ```json
 {
   "steps": [
     {"action": "navigate", "params": {"url": "https://example.com"}},
-    {"action": "click", "params": {"selector": "#login"}},
-    {"action": "type", "params": {"selector": "#email", "text": "user@example.com"}}
+    {"action": "wait_for_network_idle", "params": {"timeout": 10}},
+    {"action": "form_fill", "params": {"fields": [
+      {"selector": "#email", "value": "user@example.com"},
+      {"placeholder": "Password", "value": "s3cret"}
+    ]}},
+    {"action": "click_text", "params": {"text": "Sign In"}},
+    {"action": "wait", "params": {"ms": 2000}},
+    {"action": "get_text", "params": {}}
   ]
 }
 ```
@@ -1477,11 +1529,14 @@ Execute a sequence of scripted steps (workflow). Each step specifies an action a
   "status": "ok",
   "operation": "script",
   "result": {
-    "completed": 3,
+    "completed": 6,
     "results": [
-      {"step": 1, "status": "ok", "action": "navigate"},
-      {"step": 2, "status": "ok", "action": "click"},
-      {"step": 3, "status": "ok", "action": "type"}
+      {"step": 0, "status": "ok", "action": "navigate"},
+      {"step": 1, "status": "ok", "action": "wait_for_network_idle"},
+      {"step": 2, "status": "ok", "action": "form_fill"},
+      {"step": 3, "status": "ok", "action": "click_text"},
+      {"step": 4, "status": "ok", "action": "wait"},
+      {"step": 5, "status": "ok", "action": "get_text"}
     ],
     "failed": []
   }
@@ -1492,7 +1547,7 @@ Execute a sequence of scripted steps (workflow). Each step specifies an action a
 ```bash
 curl -s -X POST http://localhost:8000/script \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Authorization: Bearer ***" \
   -d '{"steps": [{"action": "navigate", "params": {"url": "https://example.com"}}]}' | python3 -m json.tool
 ```
 
