@@ -3073,3 +3073,7 @@ Proxy parameters on `/headless/launch`:
 | `POST` | Create, execute, or mutate state |
 | `PUT` | Update an existing resource |
 | `DELETE` | Remove a resource |
+
+### Agent Navigation Engine (v1.3)
+
+Prefer `POST /agent/observe` with `mode=accessibility` for complex pages. Use `/agent/forms/discover` and `/agent/forms/fill` instead of manually locating each field, `/agent/extract` for evidence-backed structured data, `/agent/available-actions` when the next step is unclear, and `/agent/execute-task` for bounded form-and-continue workflows. Accessibility refs are snapshot scoped and stale refs must be refreshed.

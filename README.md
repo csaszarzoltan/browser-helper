@@ -698,3 +698,54 @@ Current test suite: **590 tests passed** on 2026-07-28. Run `pytest -q` for the 
 | [Dashboard Demo](examples/dashboard-demo.py) | WebSocket streaming example in Python |
 | [Checkbox Ops Example](examples/checkbox_ops.py) | Batch checkbox selection/deselection |
 | [Condensed vs Full Example](examples/condensed_comparison.py) | Compare condensed and full snapshot modes |
+
+## Agent Navigation Engine (v1.3)
+
+Browser Helper now exposes a semantic browser layer designed for LLMs. It uses Chrome's real accessibility tree as the primary representation, preserving roles, accessible names, hierarchy, values, required/invalid/expanded/selected states, backend DOM node IDs, available actions, and semantic relationships. The legacy condensed observation remains backward compatible.
+
+### Accessibility observation
+
+```bash
+curl -s -X POST http://localhost:8000/agent/observe \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "accessibility",
+    "scope": "main",
+    "include": ["interactive", "headings", "forms", "dialogs"],
+    "max_nodes": 250
+  }'
+```
+
+Use `scope` values `page`, `main`, `dialog`, `form`, `table`, `region`, or a previously returned ref. Set `interactive_only` for the smallest action-oriented snapshot. Pass `since_snapshot_id` and `changed_only` to receive only page changes.
+
+### Semantic form workflow
+
+1. Call `POST /agent/forms/discover`.
+2. Send semantic values to `POST /agent/forms/fill` using the returned `form_ref`.
+3. Inspect `confirmed`, `invalid`, `uncertain`, and `validation` instead of assuming writes succeeded.
+
+```json
+{
+  "form_ref": "f1",
+  "data": {
+    "full_name": "Example User",
+    "postal_code": "8001",
+    "country": "Switzerland"
+  },
+  "validate": true
+}
+```
+
+### Evidence-backed extraction
+
+`POST /agent/extract` accepts a small JSON Schema and returns `data`, per-field source refs in `evidence`, `confidence`, and required fields in `missing`. Missing values are never fabricated.
+
+### Verified actions
+
+`POST /agent/act` accepts `expect` and `recovery`. The server observes the accessibility tree before and after the action, validates URL, dialog, text, or element expectations, and returns `needs_attention` when the outcome cannot be confirmed.
+
+### Bounded task execution
+
+`POST /agent/execute-task` combines semantic form filling and one verified continuation step. It is deliberately bounded by `max_steps` and `stop_before`; ambiguous pages return current `available_actions` rather than pretending the goal succeeded.
+
+See [Agent Navigation Engine](docs/agent-navigation-engine.md) for complete contracts and examples.

@@ -2097,6 +2097,68 @@ class CDPClient:
         return results
 
     # ─── Page analysis: comprehensive page state ─────────────────
+    async def get_accessibility_tree(self) -> dict:
+        """Return Chrome's full accessibility tree with page metadata.
+
+        The returned ``tree`` is the direct CDP payload.  Keeping transport and
+        normalization separate allows the semantic layer to remain deterministic
+        and independently testable.
+        """
+        await self._activate_current()
+        await self._send_command("Accessibility.enable")
+        tree = await self._send_command("Accessibility.getFullAXTree")
+        meta = await self.evaluate(
+            "({url: location.href, title: document.title})"
+        )
+        page = meta.get("result", {}) if meta.get("status") == "ok" else {}
+        return {"status": "ok", "tree": tree, "page": page}
+
+    async def click_backend_node(self, backend_node_id: int) -> dict:
+        """Click a DOM node referenced by an accessibility backend node ID."""
+        await self._activate_current()
+        resolved = await self._send_command(
+            "DOM.resolveNode", {"backendNodeId": int(backend_node_id)}
+        )
+        object_id = resolved.get("object", {}).get("objectId")
+        if not object_id:
+            raise CDPError("Could not resolve accessibility node")
+        result = await self._send_command("Runtime.callFunctionOn", {
+            "objectId": object_id,
+            "functionDeclaration": "function(){this.scrollIntoView({block:'center'});this.click();return true;}",
+            "returnByValue": True,
+            "awaitPromise": True,
+        })
+        return {"status": "ok", "backend_node_id": backend_node_id,
+                "clicked": result.get("result", {}).get("value", False)}
+
+    async def fill_backend_node(self, backend_node_id: int, value: str) -> dict:
+        """Fill a textbox/contenteditable referenced by an AX backend node ID."""
+        await self._activate_current()
+        resolved = await self._send_command(
+            "DOM.resolveNode", {"backendNodeId": int(backend_node_id)}
+        )
+        object_id = resolved.get("object", {}).get("objectId")
+        if not object_id:
+            raise CDPError("Could not resolve accessibility node")
+        result = await self._send_command("Runtime.callFunctionOn", {
+            "objectId": object_id,
+            "functionDeclaration": """function(value){
+                this.scrollIntoView({block:'center'}); this.focus();
+                if (this.isContentEditable) this.textContent=value; else this.value=value;
+                this.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));
+                this.dispatchEvent(new Event('change',{bubbles:true}));
+                this.dispatchEvent(new Event('blur',{bubbles:true}));
+                return this.isContentEditable ? this.textContent : this.value;
+            }""",
+            "arguments": [{"value": value}],
+            "returnByValue": True,
+            "awaitPromise": True,
+        })
+        actual = result.get("result", {}).get("value")
+        return {"status": "ok" if actual == value else "error",
+                "backend_node_id": backend_node_id, "value": actual,
+                "confirmed": actual == value}
+
     async def analyze_page(self) -> dict:
         """Analyze the current page and return structured information.
 

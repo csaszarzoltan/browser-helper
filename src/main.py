@@ -30,13 +30,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
 from artifact_store import ArtifactStore
 from agent_runtime import (ElementNotFoundError, SnapshotStore, StaleSnapshotError, diff_snapshots, paginate_snapshot)
+from agent_navigation import (
+    AccessibilitySnapshot,
+    AccessibilityTreeBuilder,
+    available_actions,
+    discover_forms,
+    extract_by_schema,
+    validate_expectations,
+)
 from baseline_manager import BaselineManager
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
@@ -166,6 +174,8 @@ profile_mgr = ProfileManager()
 baseline_mgr = BaselineManager()
 artifact_store = ArtifactStore()
 snapshot_store = SnapshotStore()
+ax_builder = AccessibilityTreeBuilder()
+ax_snapshots: dict[str, AccessibilitySnapshot] = {}
 
 # Proxy pool for anti-detection proxy rotation
 proxy_pool = ProxyPool()
@@ -540,6 +550,12 @@ class HeadlessBatchScreenshotRequest(BaseModel):
 
 class AgentObserveRequest(BaseModel):
     condensed: bool = True
+    mode: str = "semantic"
+    scope: str = "page"
+    include: list[str] | None = None
+    interactive_only: bool = False
+    changed_only: bool = False
+    max_nodes: int = 250
     max_chars: int = 6000
     max_elements: int = 80
     cursor: str | None = None
@@ -550,6 +566,10 @@ class AgentObserveRequest(BaseModel):
 class AgentTarget(BaseModel):
     snapshot_id: str | None = None
     element_id: str | None = None
+    ref: str | None = None
+    role: str | None = None
+    name: str | None = None
+    within: str | None = None
     selector: str | None = None
     text: str | None = None
     label: str | None = None
@@ -566,7 +586,32 @@ class AgentActionRequest(BaseModel):
     expression: str | None = None
     quality: int = 80
     steps: list[dict] | None = None
+    expect: dict | None = None
+    recovery: dict | None = None
+    strategy: list[str] | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
     observe_after: bool = True
+
+
+class AgentFormFillRequest(BaseModel):
+    form_ref: str
+    data: dict[str, Any]
+    validate_result: bool = Field(default=True, alias="validate")
+
+
+class AgentExtractRequest(BaseModel):
+    extraction_schema: dict[str, Any] = Field(alias="schema")
+    scope: dict[str, Any] | str | None = None
+    include_evidence: bool = True
+    snapshot_id: str | None = None
+
+
+class AgentExecuteTaskRequest(BaseModel):
+    goal: str
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    return_options: dict[str, Any] = Field(default_factory=dict, alias="return")
+
 
 
 # ─── Profile management models ────────────────────────────────
@@ -2161,10 +2206,11 @@ async def websocket_endpoint(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 AGENT_CAPABILITIES = {
-    "version": "1.0.0",
+    "version": "1.3.0",
     "response_schema": "browser-helper-envelope-v1",
-    "actions": ["navigate", "click", "fill", "select", "wait", "evaluate", "capture", "workflow"],
-    "observation": {"stable_element_refs": True, "pagination": True, "differential": True, "token_budget": True},
+    "actions": ["navigate", "click", "fill", "select", "wait", "evaluate", "capture", "workflow", "fill_form", "extract", "execute_task", "dismiss_overlay", "open_menu", "expand_section", "load_all_items", "extract_table", "switch_context"],
+    "observation": {"stable_element_refs": True, "pagination": True, "differential": True, "token_budget": True, "accessibility_tree": True, "semantic_graph": True, "scopes": ["page", "main", "dialog", "form", "table", "region", "ref"]},
+    "navigation_engine": {"form_discovery": True, "schema_extraction": True, "post_action_expectations": True, "available_actions": True, "backend_node_actions": True},
     "artifacts": {"screenshots": True, "ttl_seconds": 86400},
 }
 
@@ -2174,6 +2220,21 @@ async def _capture_agent_snapshot(condensed: bool = True):
     return snapshot_store.add(raw)
 
 
+async def _capture_accessibility_snapshot(
+    *, scope: str = "page", include: list[str] | None = None,
+    interactive_only: bool = False,
+) -> AccessibilitySnapshot:
+    raw = await client.get_accessibility_tree()
+    snap = ax_builder.build(
+        raw["tree"], page=raw.get("page", {}), scope=scope,
+        include=include, interactive_only=interactive_only,
+    )
+    ax_snapshots[snap.snapshot_id] = snap
+    if len(ax_snapshots) > 50:
+        del ax_snapshots[next(iter(ax_snapshots))]
+    return snap
+
+
 @app.get("/agent/capabilities")
 async def agent_capabilities():
     return api_success("agent_capabilities", AGENT_CAPABILITIES)
@@ -2181,8 +2242,37 @@ async def agent_capabilities():
 
 @app.post("/agent/observe")
 async def agent_observe(body: AgentObserveRequest):
+    """Observe the page as either the legacy semantic snapshot or a real AX tree."""
     ensure_connected()
     try:
+        if body.mode.lower() in {"accessibility", "ax"}:
+            if body.snapshot_id:
+                snap = ax_snapshots.get(body.snapshot_id)
+                if not snap:
+                    raise StaleSnapshotError(f"Accessibility snapshot {body.snapshot_id!r} is missing")
+            else:
+                snap = await _capture_accessibility_snapshot(
+                    scope=body.scope, include=body.include,
+                    interactive_only=body.interactive_only,
+                )
+            data = snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
+            if body.since_snapshot_id:
+                old = ax_snapshots.get(body.since_snapshot_id)
+                if not old:
+                    raise StaleSnapshotError(f"Accessibility snapshot {body.since_snapshot_id!r} is missing")
+                old_refs = {n.ref: n.as_dict() for n in old.nodes}
+                new_refs = {n.ref: n.as_dict() for n in snap.nodes}
+                changed = [v for k, v in new_refs.items() if old_refs.get(k) != v]
+                data["diff"] = {
+                    "from_snapshot_id": old.snapshot_id,
+                    "to_snapshot_id": snap.snapshot_id,
+                    "changed": old.fingerprint != snap.fingerprint,
+                    "nodes_changed": changed,
+                    "refs_removed": sorted(set(old_refs) - set(new_refs)),
+                }
+                if body.changed_only:
+                    data["nodes"] = changed
+            return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility"})
         if body.snapshot_id:
             snap = snapshot_store.get(body.snapshot_id)
         else:
@@ -2191,11 +2281,11 @@ async def agent_observe(body: AgentObserveRequest):
         if body.since_snapshot_id:
             old = snapshot_store.get(body.since_snapshot_id)
             data["diff"] = diff_snapshots(old, snap)
-        return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content"})
+        return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "semantic"})
     except StaleSnapshotError as exc:
         return api_error("agent_observe", "stale_snapshot", str(exc), 409)
     except ValueError as exc:
-        return api_error("agent_observe", "invalid_cursor", str(exc), 422)
+        return api_error("agent_observe", "invalid_observation", str(exc), 422)
     except Exception as exc:
         return api_error("agent_observe", "observation_failed", str(exc), 503)
 
@@ -2203,6 +2293,17 @@ async def agent_observe(body: AgentObserveRequest):
 async def _resolve_agent_target(target: AgentTarget | None) -> dict:
     if target is None:
         return {}
+    if target.snapshot_id and target.ref:
+        snap = ax_snapshots.get(target.snapshot_id)
+        if not snap:
+            raise StaleSnapshotError(f"Accessibility snapshot {target.snapshot_id!r} is missing")
+        current = await _capture_accessibility_snapshot()
+        if current.fingerprint != snap.fingerprint:
+            raise StaleSnapshotError("Page changed since the AX snapshot; observe again")
+        node = next((n for n in snap.nodes if n.ref == target.ref), None)
+        if not node:
+            raise ElementNotFoundError(f"Accessibility ref {target.ref!r} not found")
+        return node.as_dict()
     if target.snapshot_id and target.element_id:
         old = snapshot_store.get(target.snapshot_id)
         current = await _capture_agent_snapshot(True)
@@ -2218,12 +2319,15 @@ async def agent_act(body: AgentActionRequest):
     action = body.action.lower().strip()
     try:
         target = await _resolve_agent_target(body.target)
+        before_ax = await _capture_accessibility_snapshot() if body.expect else None
         if action == "navigate":
             if not body.url:
                 raise ValueError("url is required")
             result = await client.navigate(body.url)
         elif action == "click":
-            if target.get("selector"):
+            if target.get("backend_node_id"):
+                result = await client.click_backend_node(target["backend_node_id"])
+            elif target.get("selector"):
                 result = await client.click(target["selector"])
             else:
                 text = target.get("text") or target.get("name") or target.get("label")
@@ -2232,12 +2336,16 @@ async def agent_act(body: AgentActionRequest):
                 result = await client.click_by_text(text, body.timeout)
         elif action == "fill":
             fields = body.fields
+            if fields is None and target.get("backend_node_id") and body.value is not None:
+                result = await client.fill_backend_node(target["backend_node_id"], body.value)
+                fields = []
             if fields is None:
                 label = target.get("label") or target.get("name") or target.get("text")
                 if not label or body.value is None:
                     raise ValueError("fill requires fields or target plus value")
                 fields = [{"label": label, "value": body.value}]
-            result = await client.smart_form_fill(fields, body.timeout)
+            if fields:
+                result = await client.smart_form_fill(fields, body.timeout)
         elif action == "select":
             label = target.get("label") or target.get("name") or target.get("text")
             if not label or body.option is None:
@@ -2266,9 +2374,71 @@ async def agent_act(body: AgentActionRequest):
             if not body.steps:
                 raise ValueError("steps are required")
             result = await client.execute_script(body.steps)
+        elif action in {"open_menu", "expand_section"}:
+            name = target.get("name") or target.get("text") or body.parameters.get("name")
+            if not name:
+                raise ValueError(f"{action} requires a target name")
+            result = await client.click_by_text(str(name), body.timeout)
+        elif action == "dismiss_overlay":
+            result = await client.evaluate("""(() => {
+                const words=/accept|agree|close|dismiss|not now|no thanks/i;
+                const roots=[...document.querySelectorAll('[role=dialog],dialog,[class*=cookie],[class*=modal],[class*=overlay]')]
+                  .filter(el => el.offsetParent !== null);
+                for (const root of roots) {
+                  const button=[...root.querySelectorAll('button,[role=button]')]
+                    .find(el => words.test((el.innerText||el.getAttribute('aria-label')||'').trim()));
+                  if (button) { button.click(); return {dismissed:true,text:(button.innerText||button.getAttribute('aria-label')||'').trim()}; }
+                }
+                return {dismissed:false,reason:'no supported overlay control found'};
+            })()""")
+        elif action == "load_all_items":
+            limit = min(max(int(body.parameters.get("limit", 100)), 1), 1000)
+            result = await client.evaluate(f"""(async () => {{
+                let clicks=0, previous=-1;
+                while (clicks < 20 && document.querySelectorAll('*').length < {limit}) {{
+                  const candidates=[...document.querySelectorAll('button,a,[role=button]')].filter(el => /load more|show more|more results/i.test(el.innerText||'') && el.offsetParent !== null);
+                  if (!candidates.length) break;
+                  candidates[0].click(); clicks++; await new Promise(r => setTimeout(r, 250));
+                  const count=document.querySelectorAll('*').length; if (count===previous) break; previous=count;
+                }}
+                return {{clicks,element_count:document.querySelectorAll('*').length}};
+            }})()""")
+        elif action == "extract_table":
+            result = await client.evaluate("""(() => [...document.querySelectorAll('table,[role=grid]')].map((table,index)=>({
+                index, name:table.getAttribute('aria-label')||table.querySelector('caption')?.innerText||'',
+                rows:[...table.querySelectorAll('tr,[role=row]')].map(row=>[...row.querySelectorAll('th,td,[role=cell],[role=columnheader],[role=rowheader]')].map(cell=>(cell.innerText||'').trim()))
+            })))()""")
+        elif action == "switch_context":
+            tab_id = body.parameters.get("tab_id") or body.parameters.get("target")
+            if not tab_id:
+                raise ValueError("switch_context requires parameters.tab_id")
+            result = await client.switch_tab(str(tab_id))
         else:
             return api_error("agent_act", "unknown_action", f"Unknown action: {action}", 422)
         data = {"action": action, "result": result}
+        if before_ax is not None:
+            after_ax = await _capture_accessibility_snapshot()
+            verification = validate_expectations(before_ax, after_ax, body.expect)
+            data["verification"] = verification
+            if not verification["satisfied"] and int((body.recovery or {}).get("retry", 0)) > 0:
+                if action == "click" and target.get("backend_node_id"):
+                    data["retry_result"] = await client.click_backend_node(target["backend_node_id"])
+                    after_ax = await _capture_accessibility_snapshot()
+                    data["verification"] = validate_expectations(before_ax, after_ax, body.expect)
+                data["replanned"] = True
+            if not data["verification"]["satisfied"]:
+                data["status"] = "needs_attention"
+                strategies = body.strategy or []
+                if "element_screenshot" in strategies and target.get("selector"):
+                    captured = await client.element_screenshot(target["selector"], body.quality)
+                    encoded = captured.get("data") or captured.get("screenshot")
+                    if encoded:
+                        data["visual_fallback"] = {"strategy": "element_screenshot", "artifact": artifact_store.put(base64.b64decode(encoded), "image/jpeg", ".jpg")}
+                elif "viewport_screenshot" in strategies:
+                    captured = await client.screenshot(quality=body.quality)
+                    encoded = captured.get("data") or captured.get("screenshot")
+                    if encoded:
+                        data["visual_fallback"] = {"strategy": "viewport_screenshot", "artifact": artifact_store.put(base64.b64decode(encoded), "image/jpeg", ".jpg")}
         if body.observe_after and action not in {"evaluate", "capture"}:
             snap = await _capture_agent_snapshot(True)
             data["observation"] = paginate_snapshot(snap, 4000, 60)
@@ -2281,6 +2451,157 @@ async def agent_act(body: AgentActionRequest):
         return api_error("agent_act", "invalid_request", str(exc), 422)
     except Exception as exc:
         return api_error("agent_act", "action_failed", str(exc), 503)
+
+
+@app.post("/agent/forms/discover")
+async def agent_forms_discover():
+    """Discover forms, semantic field types, constraints and current state."""
+    ensure_connected()
+    try:
+        snap = await _capture_accessibility_snapshot(include=["forms", "headings", "dialogs"])
+        return api_success("agent_forms_discover", {
+            "snapshot_id": snap.snapshot_id,
+            "forms": discover_forms(snap),
+        })
+    except Exception as exc:
+        return api_error("agent_forms_discover", "discovery_failed", str(exc), 503)
+
+
+async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: dict[str, Any]) -> dict:
+    forms = discover_forms(snap)
+    form = next((item for item in forms if item["form_ref"] == form_ref), None)
+    if not form:
+        raise ValueError(f"Unknown form_ref: {form_ref}")
+    nodes = {node.ref: node for node in snap.nodes}
+    filled, confirmed, invalid, uncertain = [], [], [], []
+    normalized_data = {key.lower().replace(" ", "_"): value for key, value in data.items()}
+    for field in form["fields"]:
+        key = field["semantic_type"]
+        value = normalized_data.get(key)
+        if value is None:
+            label_key = field["label"].lower().replace(" ", "_")
+            value = normalized_data.get(label_key)
+        if value is None:
+            if field["required"] and not field.get("current_value"):
+                invalid.append({"field": field["label"], "reason": "required_value_missing"})
+            continue
+        node = nodes[field["ref"]]
+        if node.backend_node_id is None:
+            uncertain.append({"field": field["label"], "reason": "no_backend_node"})
+            continue
+        if node.role == "combobox":
+            result = await client.form_select("label", node.name, str(value))
+            ok = result.get("status") == "ok"
+        else:
+            result = await client.fill_backend_node(node.backend_node_id, str(value))
+            ok = bool(result.get("confirmed"))
+        filled.append({"field": field["label"], "ref": field["ref"], "result": result})
+        if ok:
+            confirmed.append(field["ref"])
+        else:
+            invalid.append({"field": field["label"], "reason": "value_not_confirmed", "result": result})
+    status = "ok" if not invalid and not uncertain else "needs_attention"
+    return {"status": status, "filled": len(filled), "confirmed": len(confirmed),
+            "results": filled, "uncertain": uncertain, "invalid": invalid,
+            "next_action": "continue" if status == "ok" else "correct_validation_errors"}
+
+
+@app.post("/agent/forms/fill")
+async def agent_forms_fill(body: AgentFormFillRequest):
+    """Fill a discovered form from semantic key/value data and confirm writes."""
+    ensure_connected()
+    try:
+        snap = await _capture_accessibility_snapshot(include=["forms", "dialogs"])
+        result = await _fill_semantic_form(snap, body.form_ref, body.data)
+        if body.validate_result:
+            after = await _capture_accessibility_snapshot(include=["forms", "alerts", "dialogs"])
+            result["validation"] = discover_forms(after)
+        return api_success("agent_forms_fill", result)
+    except ValueError as exc:
+        return api_error("agent_forms_fill", "invalid_form", str(exc), 422)
+    except Exception as exc:
+        return api_error("agent_forms_fill", "fill_failed", str(exc), 503)
+
+
+@app.post("/agent/extract")
+async def agent_extract(body: AgentExtractRequest):
+    """Extract schema-shaped data with source refs and field confidence."""
+    ensure_connected()
+    try:
+        if body.snapshot_id:
+            snap = ax_snapshots.get(body.snapshot_id)
+            if not snap:
+                raise StaleSnapshotError(f"Accessibility snapshot {body.snapshot_id!r} is missing")
+        else:
+            scope = body.scope if isinstance(body.scope, str) else (body.scope or {}).get("role", "page")
+            snap = await _capture_accessibility_snapshot(scope=scope)
+        return api_success("agent_extract", extract_by_schema(
+            snap, body.extraction_schema, include_evidence=body.include_evidence,
+        ))
+    except StaleSnapshotError as exc:
+        return api_error("agent_extract", "stale_snapshot", str(exc), 409)
+    except ValueError as exc:
+        return api_error("agent_extract", "invalid_schema", str(exc), 422)
+    except Exception as exc:
+        return api_error("agent_extract", "extraction_failed", str(exc), 503)
+
+
+@app.post("/agent/available-actions")
+async def agent_available_actions():
+    """Return actions that are currently possible and their blocking reasons."""
+    ensure_connected()
+    try:
+        snap = await _capture_accessibility_snapshot()
+        result = available_actions(snap)
+        result["snapshot_id"] = snap.snapshot_id
+        return api_success("agent_available_actions", result)
+    except Exception as exc:
+        return api_error("agent_available_actions", "observation_failed", str(exc), 503)
+
+
+@app.post("/agent/execute-task")
+async def agent_execute_task(body: AgentExecuteTaskRequest):
+    """Execute a bounded deterministic form-and-navigation micro-task.
+
+    The engine deliberately supports only inspectable operations: semantic form
+    filling and a single verified continuation click.  Unsupported or ambiguous
+    goals return ``needs_attention`` with current candidate actions.
+    """
+    ensure_connected()
+    max_steps = min(max(int(body.constraints.get("max_steps", 20)), 1), 50)
+    stop_before = {str(item).lower() for item in body.constraints.get("stop_before", [])}
+    try:
+        snap = await _capture_accessibility_snapshot()
+        steps: list[dict] = []
+        forms = discover_forms(snap)
+        if body.inputs and forms and len(steps) < max_steps:
+            fill_result = await _fill_semantic_form(snap, forms[0]["form_ref"], body.inputs)
+            steps.append({"action": "fill_form", "result": fill_result})
+            snap = await _capture_accessibility_snapshot()
+        blocked_terms = {"purchase", "buy", "pay", "submit payment", *stop_before}
+        goal = body.goal.lower()
+        candidates = [n for n in snap.nodes if "click" in n.actions]
+        continue_words = ("continue", "next", "proceed", "save and continue")
+        target = next((n for n in candidates if any(word in n.name.lower() for word in continue_words)), None)
+        if target and len(steps) < max_steps and not any(term in target.name.lower() for term in blocked_terms):
+            before = snap
+            result = await client.click_backend_node(target.backend_node_id) if target.backend_node_id else await client.click_by_text(target.name)
+            after = await _capture_accessibility_snapshot()
+            verification = validate_expectations(before, after, None)
+            steps.append({"action": "click", "target": target.ref, "result": result, "verification": verification})
+            snap = after
+        status = "ok" if steps and all(step.get("result", {}).get("status") == "ok" for step in steps) else "needs_attention"
+        if any(term in goal for term in stop_before):
+            status = "stopped_by_constraint"
+        data = {"status": status, "goal": body.goal, "steps": steps,
+                "step_count": len(steps), "final_snapshot_id": snap.snapshot_id}
+        if status != "ok":
+            data["available_actions"] = available_actions(snap)
+        if body.return_options.get("final_observation", True):
+            data["final_observation"] = snap.as_dict(max_nodes=100)
+        return api_success("agent_execute_task", data)
+    except Exception as exc:
+        return api_error("agent_execute_task", "task_failed", str(exc), 503)
 
 
 @app.get("/artifacts/{artifact_id}")
