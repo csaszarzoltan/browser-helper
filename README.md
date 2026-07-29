@@ -786,3 +786,57 @@ If the text is absent from the legacy snapshot, the response uses the accessibil
 ### Workflow record and replay
 
 Start recording with `POST /agent/record`, execute normal observe and act calls, then stop with `POST /agent/record/stop`. Replay captured actions with `POST /agent/replay`. Recordings are process-local and are intended for repeatable personal workflows, not durable storage.
+
+## Verified publishing and advanced workflows (v1.5)
+
+### Verify an action outcome
+
+`POST /agent/act` accepts `verify_after`. The action response includes `verified`, `actual_text`, and detailed timing evidence.
+
+```json
+{
+  "action": "click",
+  "target": {"backend_node_id": 3596},
+  "verify_after": {
+    "type": "text_visible",
+    "text": "Browser Helper",
+    "timeout_ms": 5000
+  }
+}
+```
+
+`element_visible` verification is also supported with a CSS `selector`.
+
+### Autocomplete fields
+
+Use a structured form value to fill and resolve an autocomplete popup in one request:
+
+```json
+{
+  "form_ref": "f1",
+  "data": {
+    "skills_and_deliverables": {
+      "value": "Python",
+      "resolver": "autocomplete"
+    }
+  }
+}
+```
+
+The resolver emits browser input/change events, waits 500 ms for the popup, then polls visible ARIA, Angular Material, and common autocomplete options before clicking the first textual match.
+
+### Hidden accessibility nodes and tabs
+
+Set `include_hidden: true` in accessibility observations to retain ignored AX nodes. Use `select_tab` when a tab is only discoverable through DOM text:
+
+```json
+{"action":"select_tab","target":{"text":"Published"}}
+```
+
+### Deterministic waits
+
+`wait_for_element` supports text or selector targets and returns `found`, `elapsed_ms`, and `actual_text` instead of requiring a fixed sleep.
+
+### History-aware discovery and replay overrides
+
+`POST /agent/forms/discover` with `scope: page_with_history` performs bounded scroll/lazy-load passes before observation. Record with `POST /agent/record {"start": true}` and replay with `recorded_id`, `on_error`, and `data_overrides` to reuse long workflows with new field values.

@@ -149,6 +149,7 @@ class AccessibilityTreeBuilder:
         include: Iterable[str] | None = None,
         scope: str = "page",
         interactive_only: bool = False,
+        include_hidden: bool = False,
     ) -> AccessibilitySnapshot:
         raw_nodes = list(raw.get("nodes", []))
         parent_of: dict[str, str] = {}
@@ -162,7 +163,7 @@ class AccessibilityTreeBuilder:
         requested = {x.lower() for x in include or []}
 
         for raw_node in raw_nodes:
-            if raw_node.get("ignored"):
+            if raw_node.get("ignored") and not include_hidden:
                 continue
             role = str(_value(raw_node.get("role"), "generic") or "generic").lower()
             name = str(_value(raw_node.get("name"), "") or "").strip()

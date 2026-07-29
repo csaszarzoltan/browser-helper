@@ -419,6 +419,93 @@ class CDPClient:
             data = {"error": "parse failed", "raw": str(raw)[:200]}
         return {"status": "ok", "fields": fields, "result": data}
 
+    async def fill_autocomplete(self, label: str, value: str, timeout_ms: int = 5000) -> dict:
+        """Fill an autocomplete field and click the first matching visible option."""
+        await self._activate_current()
+        js = f"""
+(async function() {{
+  const label = {json.dumps(label)}.toLowerCase().replaceAll('_', ' ');
+  const value = {json.dumps(value)};
+  const deadline = Date.now() + {int(timeout_ms)};
+  const fields = [...document.querySelectorAll('input,textarea,[contenteditable=true]')];
+  const field = fields.find(el => {{
+    const text = [el.getAttribute('aria-label'), el.placeholder, el.name,
+      document.querySelector(`label[for="${{el.id}}"]`)?.innerText].filter(Boolean).join(' ').toLowerCase();
+    return text.includes(label);
+  }});
+  if (!field) return {{status:'error', error:'autocomplete field not found', field:label}};
+  field.focus();
+  if (field.isContentEditable) field.textContent=value; else field.value=value;
+  field.dispatchEvent(new InputEvent('input', {{bubbles:true,inputType:'insertText',data:value}}));
+  field.dispatchEvent(new Event('change', {{bubbles:true}}));
+  await new Promise(r => setTimeout(r, 500));
+  while (Date.now() < deadline) {{
+    const options=[...document.querySelectorAll('[role=option],mat-option,.ng-option,[data-option-index]')]
+      .filter(el => el.offsetParent !== null && (el.innerText||el.textContent||'').toLowerCase().includes(value.toLowerCase()));
+    if (options.length) {{
+      const actual=(options[0].innerText||options[0].textContent||'').trim(); options[0].click();
+      return {{status:'ok', field:label, value, selected:actual}};
+    }}
+    await new Promise(r => setTimeout(r, 100));
+  }}
+  return {{status:'error', error:'autocomplete option not found', field:label, value}};
+}})()
+"""
+        result = await self.evaluate(js)
+        return {"status": "ok", "result": result.get("result", result)}
+
+    async def select_tab_by_text(self, text: str, timeout_ms: int = 5000) -> dict:
+        """Select a DOM tab by role or common tab attributes, including hidden AX tabs."""
+        await self._activate_current()
+        js = f"""
+(async function() {{
+ const target={json.dumps(text)}.toLowerCase().trim(), deadline=Date.now()+{int(timeout_ms)};
+ while(Date.now()<deadline) {{
+  const tabs=[...document.querySelectorAll('[role=tab],[aria-controls][tabindex],button,a')];
+  const tab=tabs.find(el => (el.innerText||el.textContent||el.getAttribute('aria-label')||'').toLowerCase().trim()===target);
+  if(tab) {{ tab.scrollIntoView({{block:'center'}}); tab.click(); return {{status:'ok',selected:text,role:tab.getAttribute('role')}}; }}
+  await new Promise(r=>setTimeout(r,100));
+ }}
+ return {{status:'error',error:'tab not found',text}};
+}})()
+"""
+        result = await self.evaluate(js)
+        return {"status": "ok", "result": result.get("result", result)}
+
+    async def wait_for_text_detailed(self, text: str, timeout_ms: int = 10000) -> dict:
+        """Wait for visible text and report elapsed time plus matched text."""
+        await self._activate_current()
+        js = f"""
+(async function() {{
+ const started=Date.now(), deadline=started+{int(timeout_ms)}, wanted={json.dumps(text)}.toLowerCase();
+ while(Date.now()<deadline) {{
+  const nodes=[...document.querySelectorAll('body *')].filter(el=>el.offsetParent!==null && (el.innerText||'').toLowerCase().includes(wanted));
+  if(nodes.length) return {{found:true,elapsed_ms:Date.now()-started,actual_text:(nodes[0].innerText||'').trim().substring(0,500)}};
+  await new Promise(r=>setTimeout(r,100));
+ }}
+ return {{found:false,elapsed_ms:Date.now()-started,actual_text:''}};
+}})()
+"""
+        result = await self.evaluate(js)
+        value = result.get("result", result)
+        return value if isinstance(value, dict) else {"found": False, "elapsed_ms": timeout_ms, "actual_text": ""}
+
+    async def trigger_lazy_history(self, max_scrolls: int = 12) -> dict:
+        """Scroll through an SPA page to trigger bounded lazy loading, then restore top."""
+        await self._activate_current()
+        js = f"""
+(async function() {{
+ let previous=-1, stable=0, scrolls=0;
+ while(scrolls<{int(max_scrolls)} && stable<2) {{
+  window.scrollTo(0,document.documentElement.scrollHeight); await new Promise(r=>setTimeout(r,250));
+  const height=document.documentElement.scrollHeight; stable=height===previous?stable+1:0; previous=height; scrolls++;
+ }}
+ window.scrollTo(0,0); return {{status:'ok',scrolls,height:previous}};
+}})()
+"""
+        result = await self.evaluate(js)
+        return {"status": "ok", "result": result.get("result", result)}
+
     # ─── Wait for element ─────────────────────────────────────────
 
     async def wait_for_element(self, selector: str, timeout: int = 10,

@@ -2,6 +2,20 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+### [1.5.0] - 2026-07-29
+
+#### Added
+- Post-action `verify_after` checks with visible text or selector verification and `verified`, `actual_text`, and elapsed-time evidence.
+- One-call autocomplete form resolver that fills, emits input/change events, waits for popup options, and selects the first matching option.
+- `include_hidden` accessibility observation for ignored or hidden AX nodes.
+- `select_tab` and detailed `wait_for_element` agent actions.
+- `page_with_history` form discovery, which performs bounded scrolling to trigger SPA lazy loading.
+- Workflow replay contract aliases `recorded_id`, `on_error`, and recursive `data_overrides` while preserving the previous `recording_id` input.
+
+#### Changed
+- Agent Navigation Engine capability version advanced to 1.5.0.
+- Workflow recording accepts the explicit `{"start": true}` contract.
+
 ### [1.4.0] - 2026-07-29
 
 #### Fixed

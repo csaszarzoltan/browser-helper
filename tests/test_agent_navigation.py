@@ -367,3 +367,137 @@ def test_smart_form_fill_uses_literal_placeholder_scan():
     assert 'Array.from(document.querySelectorAll("input, textarea"))' in source
     assert "candidate.placeholder" in source
     assert "CSS.escape(f.placeholder)" not in source
+
+
+def test_observe_include_hidden_returns_ignored_ax_nodes(monkeypatch):
+    api = connected_client(monkeypatch)
+    tree = modal_ax_tree()
+    tree["nodes"].append(
+        {"nodeId": "9", "ignored": True, "role": ax_value("tab"), "name": ax_value("Published")}
+    )
+    main.client.get_accessibility_tree = AsyncMock(
+        return_value={"status": "ok", "tree": tree, "page": {}}
+    )
+    normal = api.post("/agent/observe", json={"mode": "accessibility", "auto_modal": False}).json()[
+        "data"
+    ]
+    hidden = api.post(
+        "/agent/observe",
+        json={"mode": "accessibility", "auto_modal": False, "include_hidden": True},
+    ).json()["data"]
+    assert not any(node["name"] == "Published" for node in normal["nodes"])
+    assert any(node["name"] == "Published" for node in hidden["nodes"])
+
+
+def test_act_verify_after_reports_verified_text(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.client.click_backend_node = AsyncMock(return_value={"status": "ok"})
+    main.client.wait_for_text_detailed = AsyncMock(
+        return_value={"found": True, "elapsed_ms": 220, "actual_text": "Browser Helper"}
+    )
+    response = api.post(
+        "/agent/act",
+        json={
+            "action": "click",
+            "target": {"backend_node_id": 3596},
+            "verify_after": {"type": "text_visible", "text": "Browser Helper", "timeout_ms": 5000},
+            "observe_after": False,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["verified"] is True
+    assert data["actual_text"] == "Browser Helper"
+
+
+def test_select_tab_and_wait_for_element_actions(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.client.select_tab_by_text = AsyncMock(return_value={"status": "ok"})
+    main.client.wait_for_text_detailed = AsyncMock(
+        return_value={"found": True, "elapsed_ms": 2340, "actual_text": "Browser Helper"}
+    )
+    assert (
+        api.post(
+            "/agent/act",
+            json={"action": "select_tab", "target": {"text": "Published"}, "observe_after": False},
+        ).status_code
+        == 200
+    )
+    waited = api.post(
+        "/agent/act",
+        json={
+            "action": "wait_for_element",
+            "target": {"text": "Browser Helper"},
+            "timeout_ms": 10000,
+            "observe_after": False,
+        },
+    ).json()["data"]["result"]
+    assert waited == {"found": True, "elapsed_ms": 2340, "actual_text": "Browser Helper"}
+
+
+def test_forms_fill_autocomplete_resolver(monkeypatch):
+    api = connected_client(monkeypatch)
+    tree = modal_ax_tree()
+    tree["nodes"][3]["name"] = ax_value("Skills and deliverables")
+    main.client.get_accessibility_tree = AsyncMock(
+        return_value={"status": "ok", "tree": tree, "page": {}}
+    )
+    main.client.fill_autocomplete = AsyncMock(
+        return_value={"status": "ok", "result": {"status": "ok", "selected": "Python"}}
+    )
+    discovered = api.post("/agent/forms/discover").json()["data"]["forms"][0]
+    response = api.post(
+        "/agent/forms/fill",
+        json={
+            "form_ref": discovered["form_ref"],
+            "data": {"skills_and_deliverables": {"value": "Python", "resolver": "autocomplete"}},
+            "validate": False,
+        },
+    )
+    assert response.status_code == 200
+    main.client.fill_autocomplete.assert_awaited_once()
+    assert response.json()["data"]["confirmed"] == 1
+
+
+def test_forms_discover_page_with_history_triggers_lazy_load(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.client.trigger_lazy_history = AsyncMock(
+        return_value={"status": "ok", "result": {"scrolls": 3}}
+    )
+    main.client.get_accessibility_tree = AsyncMock(
+        return_value={"status": "ok", "tree": modal_ax_tree(), "page": {}}
+    )
+    response = api.post("/agent/forms/discover", json={"scope": "page_with_history"})
+    assert response.status_code == 200
+    main.client.trigger_lazy_history.assert_awaited_once()
+    assert response.json()["data"]["history_load"]["status"] == "ok"
+
+
+def test_replay_accepts_new_contract_and_applies_overrides(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.agent_recordings.clear()
+    main.active_recording_id = None
+    main.client.smart_form_fill = AsyncMock(return_value={"status": "ok"})
+    rec = api.post("/agent/record", json={"start": True}).json()["data"]
+    api.post(
+        "/agent/act",
+        json={
+            "action": "fill",
+            "fields": [{"label": "Title", "value": "Old title"}],
+            "observe_after": False,
+        },
+    )
+    api.post("/agent/record/stop")
+    response = api.post(
+        "/agent/replay",
+        json={
+            "recorded_id": rec["recording_id"],
+            "on_error": "stop",
+            "data_overrides": {"value": "Browser Helper v2.0"},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["replayed"] == 1
+    assert (
+        main.client.smart_form_fill.await_args_list[-1].args[0][0]["value"] == "Browser Helper v2.0"
+    )

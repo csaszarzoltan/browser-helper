@@ -568,6 +568,7 @@ class AgentObserveRequest(BaseModel):
     fallback: str | None = None
     search_text: str | None = None
     auto_modal: bool = True
+    include_hidden: bool = False
 
 
 class AgentTarget(BaseModel):
@@ -595,6 +596,8 @@ class AgentActionRequest(BaseModel):
     quality: int = 80
     steps: list[dict] | None = None
     expect: dict | None = None
+    verify_after: dict | None = None
+    timeout_ms: int | None = None
     recovery: dict | None = None
     strategy: list[str] | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -607,6 +610,11 @@ class AgentFormFillRequest(BaseModel):
     form_ref: str
     data: dict[str, Any]
     validate_result: bool = Field(default=True, alias="validate")
+
+
+class AgentFormDiscoverRequest(BaseModel):
+    snapshot_id: str | None = None
+    scope: str = "page"
 
 
 class AgentExtractRequest(BaseModel):
@@ -625,12 +633,26 @@ class AgentExecuteTaskRequest(BaseModel):
 
 
 class AgentRecordRequest(BaseModel):
+    start: bool = True
     name: str | None = None
 
 
 class AgentReplayRequest(BaseModel):
-    recording_id: str
-    stop_on_error: bool = True
+    recording_id: str | None = None
+    recorded_id: str | None = None
+    on_error: str = "stop"
+    data_overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def stop_on_error(self) -> bool:
+        return self.on_error == "stop"
+
+    @property
+    def effective_recording_id(self) -> str:
+        value = self.recorded_id or self.recording_id
+        if not value:
+            raise ValueError("recorded_id is required")
+        return value
 
 
 
@@ -2226,11 +2248,11 @@ async def websocket_endpoint(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 AGENT_CAPABILITIES = {
-    "version": "1.4.0",
+    "version": "1.5.0",
     "response_schema": "browser-helper-envelope-v1",
     "actions": ["navigate", "click", "fill", "select", "wait", "evaluate", "capture", "workflow", "fill_form", "extract", "execute_task", "dismiss_overlay", "open_menu", "expand_section", "load_all_items", "extract_table", "switch_context"],
     "observation": {"stable_element_refs": True, "pagination": True, "differential": True, "token_budget": True, "accessibility_tree": True, "semantic_graph": True, "scopes": ["page", "main", "dialog", "form", "table", "region", "ref"]},
-    "navigation_engine": {"form_discovery": True, "schema_extraction": True, "post_action_expectations": True, "available_actions": True, "backend_node_actions": True, "snapshot_pinning": True, "stale_auto_recovery": True, "modal_aware": True, "workflow_record_replay": True},
+    "navigation_engine": {"form_discovery": True, "schema_extraction": True, "post_action_expectations": True, "available_actions": True, "backend_node_actions": True, "snapshot_pinning": True, "stale_auto_recovery": True, "modal_aware": True, "workflow_record_replay": True, "verify_after": True, "autocomplete_resolver": True, "hidden_nodes": True, "select_tab": True, "wait_for_element": True, "page_history": True},
     "artifacts": {"screenshots": True, "ttl_seconds": 86400},
 }
 
@@ -2242,12 +2264,12 @@ async def _capture_agent_snapshot(condensed: bool = True):
 
 async def _capture_accessibility_snapshot(
     *, scope: str = "page", include: list[str] | None = None,
-    interactive_only: bool = False,
+    interactive_only: bool = False, include_hidden: bool = False,
 ) -> AccessibilitySnapshot:
     raw = await client.get_accessibility_tree()
     snap = ax_builder.build(
         raw["tree"], page=raw.get("page", {}), scope=scope,
-        include=include, interactive_only=interactive_only,
+        include=include, interactive_only=interactive_only, include_hidden=include_hidden,
     )
     ax_snapshots[snap.snapshot_id] = snap
     while len(ax_snapshots) > 200:
@@ -2303,6 +2325,7 @@ async def agent_observe(body: AgentObserveRequest):
                 snap = await _capture_accessibility_snapshot(
                     scope=("dialog" if body.auto_modal and body.scope == "page" else body.scope),
                     include=body.include, interactive_only=body.interactive_only,
+                    include_hidden=body.include_hidden,
                 )
             data = snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
             if body.since_snapshot_id:
@@ -2328,9 +2351,9 @@ async def agent_observe(body: AgentObserveRequest):
         else:
             snap = await _capture_agent_snapshot(body.condensed)
         if body.search_text and not _snapshot_contains_text(snap, body.search_text) and (body.fallback or "").lower() in {"accessibility", "ax"}:
-            ax_snap = await _capture_accessibility_snapshot(scope="dialog" if body.auto_modal else body.scope, include=body.include, interactive_only=body.interactive_only)
+            ax_snap = await _capture_accessibility_snapshot(scope="dialog" if body.auto_modal else body.scope, include=body.include, interactive_only=body.interactive_only, include_hidden=body.include_hidden)
             if not _snapshot_contains_text(ax_snap, body.search_text):
-                ax_snap = await _capture_accessibility_snapshot(scope="page", include=body.include, interactive_only=body.interactive_only)
+                ax_snap = await _capture_accessibility_snapshot(scope="page", include=body.include, interactive_only=body.interactive_only, include_hidden=body.include_hidden)
             data = ax_snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
             data["fallback_from"] = "semantic"
             data["fallback_reason"] = f"search_text_not_found:{body.search_text}"
@@ -2442,6 +2465,22 @@ async def agent_act(body: AgentActionRequest):
                 if not text:
                     raise ValueError("wait requires selector or text")
                 result = await client.wait_for_text(text, body.timeout, True)
+        elif action == "select_tab":
+            text = target.get("text") or target.get("name") or target.get("label")
+            if not text:
+                raise ValueError("select_tab requires target.text")
+            result = await client.select_tab_by_text(text, body.timeout_ms or body.timeout * 1000)
+        elif action == "wait_for_element":
+            text = target.get("text") or target.get("name") or target.get("label")
+            if target.get("selector"):
+                started = time.monotonic()
+                waited = await client.wait_for_element(target["selector"], max(1, (body.timeout_ms or body.timeout * 1000) // 1000), True)
+                inner = waited.get("result", {})
+                result = {"found": inner.get("status") == "ok", "elapsed_ms": round((time.monotonic()-started)*1000), "actual_text": inner.get("text", "")}
+            elif text:
+                result = await client.wait_for_text_detailed(text, body.timeout_ms or body.timeout * 1000)
+            else:
+                raise ValueError("wait_for_element requires selector or text")
         elif action == "evaluate":
             if not body.expression:
                 raise ValueError("expression is required")
@@ -2522,6 +2561,24 @@ async def agent_act(body: AgentActionRequest):
                     encoded = captured.get("data") or captured.get("screenshot")
                     if encoded:
                         data["visual_fallback"] = {"strategy": "viewport_screenshot", "artifact": artifact_store.put(base64.b64decode(encoded), "image/jpeg", ".jpg")}
+        if body.verify_after:
+            verification_type = body.verify_after.get("type")
+            timeout_ms = int(body.verify_after.get("timeout_ms", 5000))
+            if verification_type == "text_visible":
+                verification = await client.wait_for_text_detailed(str(body.verify_after.get("text", "")), timeout_ms)
+            elif verification_type == "element_visible":
+                selector = body.verify_after.get("selector")
+                if not selector:
+                    raise ValueError("element_visible verification requires selector")
+                started = time.monotonic()
+                waited = await client.wait_for_element(selector, max(1, timeout_ms // 1000), True)
+                inner = waited.get("result", {})
+                verification = {"found": inner.get("status") == "ok", "elapsed_ms": round((time.monotonic()-started)*1000), "actual_text": inner.get("text", "")}
+            else:
+                raise ValueError(f"Unsupported verify_after type: {verification_type}")
+            data["verified"] = bool(verification.get("found"))
+            data["actual_text"] = verification.get("actual_text", "")
+            data["verification_after"] = verification
         if body.observe_after and action not in {"evaluate", "capture"}:
             snap = await _capture_agent_snapshot(True)
             data["observation"] = paginate_snapshot(snap, 4000, 60)
@@ -2546,6 +2603,8 @@ async def agent_act(body: AgentActionRequest):
 async def agent_record(body: AgentRecordRequest):
     """Start recording subsequent observe and act calls in memory."""
     global active_recording_id
+    if not body.start:
+        return api_error("agent_record", "recording_not_started", "start must be true", 422)
     recording_id = f"rec_{uuid.uuid4().hex[:16]}"
     agent_recordings[recording_id] = {"recording_id": recording_id, "name": body.name or recording_id, "steps": []}
     active_recording_id = recording_id
@@ -2563,17 +2622,27 @@ async def agent_record_stop():
     return api_success("agent_record_stop", result)
 
 
+def _apply_recording_overrides(value: Any, overrides: dict[str, Any]) -> Any:
+    if isinstance(value, dict):
+        return {key: overrides.get(key, _apply_recording_overrides(item, overrides)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_apply_recording_overrides(item, overrides) for item in value]
+    return value
+
+
 @app.post("/agent/replay")
 async def agent_replay(body: AgentReplayRequest):
     """Replay recorded act requests; observe steps are intentionally informational."""
-    recording = agent_recordings.get(body.recording_id)
+    recording_id = body.effective_recording_id
+    recording = agent_recordings.get(recording_id)
     if not recording:
         return api_error("agent_replay", "recording_not_found", "Recording not found", 404)
     results = []
     for index, step in enumerate(recording["steps"], 1):
         if step["kind"] != "act":
             continue
-        replay_body = AgentActionRequest.model_validate(step["payload"])
+        payload = _apply_recording_overrides(step["payload"], body.data_overrides)
+        replay_body = AgentActionRequest.model_validate(payload)
         replay_body.pin_snapshot = False
         replay_body.auto_recover = True
         response = await agent_act(replay_body)
@@ -2581,18 +2650,28 @@ async def agent_replay(body: AgentReplayRequest):
         results.append({"step": index, "status_code": status})
         if body.stop_on_error and status >= 400:
             break
-    return api_success("agent_replay", {"recording_id": body.recording_id, "results": results, "replayed": len(results)})
+    return api_success("agent_replay", {"recording_id": recording_id, "results": results, "replayed": len(results)})
 
 
 @app.post("/agent/forms/discover")
-async def agent_forms_discover():
-    """Discover forms, semantic field types, constraints and current state."""
+async def agent_forms_discover(body: AgentFormDiscoverRequest | None = None):
+    """Discover forms; page_with_history first triggers bounded SPA lazy loading."""
     ensure_connected()
+    body = body or AgentFormDiscoverRequest()
     try:
-        snap = await _capture_accessibility_snapshot(include=["forms", "headings", "dialogs"])
+        history = None
+        if body.scope == "page_with_history":
+            history = await client.trigger_lazy_history()
+        if body.snapshot_id:
+            snap = ax_snapshots.get(body.snapshot_id)
+            if not snap:
+                raise StaleSnapshotError(f"Accessibility snapshot {body.snapshot_id!r} is missing")
+        else:
+            snap = await _capture_accessibility_snapshot(scope="page", include=["forms", "headings", "dialogs"])
         return api_success("agent_forms_discover", {
             "snapshot_id": snap.snapshot_id,
             "forms": discover_forms(snap),
+            "history_load": history,
         })
     except Exception as exc:
         return api_error("agent_forms_discover", "discovery_failed", str(exc), 503)
@@ -2608,10 +2687,12 @@ async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: 
     normalized_data = {key.lower().replace(" ", "_"): value for key, value in data.items()}
     for field in form["fields"]:
         key = field["semantic_type"]
-        value = normalized_data.get(key)
-        if value is None:
+        value_spec = normalized_data.get(key)
+        if value_spec is None:
             label_key = field["label"].lower().replace(" ", "_")
-            value = normalized_data.get(label_key)
+            value_spec = normalized_data.get(label_key)
+        resolver = value_spec.get("resolver") if isinstance(value_spec, dict) else None
+        value = value_spec.get("value") if isinstance(value_spec, dict) else value_spec
         if value is None:
             if field["required"] and not field.get("current_value"):
                 invalid.append({"field": field["label"], "reason": "required_value_missing"})
@@ -2620,7 +2701,10 @@ async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: 
         if node.backend_node_id is None:
             uncertain.append({"field": field["label"], "reason": "no_backend_node"})
             continue
-        if node.role == "combobox":
+        if resolver == "autocomplete":
+            result = await client.fill_autocomplete(node.name or key, str(value))
+            ok = result.get("result", {}).get("status") == "ok"
+        elif node.role == "combobox":
             result = await client.form_select("label", node.name, str(value))
             ok = result.get("status") == "ok"
         else:

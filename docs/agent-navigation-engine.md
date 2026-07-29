@@ -90,3 +90,13 @@ Legacy observations accept `search_text` and `fallback: accessibility`. This is 
 - `POST /agent/replay` replays recorded act requests and can stop at the first HTTP error.
 
 Observe operations are included as trace context but are not replayed. Replayed actions use stale-ref recovery and do not pin obsolete snapshot IDs.
+
+## Verification, autocomplete, waits and SPA history
+
+Actions can carry `verify_after` with `text_visible` or `element_visible`. Verification is independent from CDP command success and reports observed text and elapsed time. `wait_for_element` exposes the same deterministic polling primitives as a standalone action.
+
+Autocomplete form values use `{value, resolver: autocomplete}`. The browser helper fills the semantic field, sends input/change events, waits for the popup, and selects the first visible matching option.
+
+Accessibility observations exclude ignored nodes by default. `include_hidden` opts into them for unusual tab/portal implementations. `select_tab` searches DOM roles and common tab controls directly.
+
+History-aware form discovery uses bounded scrolling with a stable-height stop condition. Workflow replay accepts recursive overrides keyed by recorded request field names; the older `recording_id` remains accepted alongside `recorded_id`.

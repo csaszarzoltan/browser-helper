@@ -3081,3 +3081,7 @@ Prefer `POST /agent/observe` with `mode=accessibility` for complex pages. Use `/
 ### Reliable SPA and modal operation (v1.4)
 
 For portal or modal controls missing from a semantic snapshot, send `search_text` with `fallback=accessibility`; modal accessibility scope is automatic. Ref-based actions pin their source snapshot by default and can auto-recover once by accessible name. Prefer direct `target.backend_node_id` when an accessibility observation already exposed the target. Use `/agent/record`, `/agent/record/stop`, and `/agent/replay` for repeatable multi-step personal workflows.
+
+### Verified and reusable workflows (v1.5)
+
+Use `verify_after` on actions that must produce visible evidence. Prefer the autocomplete resolver for suggestion fields, `wait_for_element` instead of fixed sleeps, `select_tab` for DOM-only tabs, and `include_hidden` only when normal AX observation omits a known control. Use `page_with_history` before discovering lazy SPA content. Recorded workflows can be replayed with `data_overrides`.
