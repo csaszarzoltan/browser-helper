@@ -338,11 +338,10 @@ class CDPClient:
       const wrapped = lb.querySelector("input, textarea, select");
       if (wrapped) { found.push(wrapped); continue; }
     }
-    // 2. Placeholder match
-    document.querySelectorAll(
-      "input[placeholder*='" + CSS.escape(label) + "'], " +
-      "textarea[placeholder*='" + CSS.escape(label) + "']"
-    ).forEach(el => { if (!found.includes(el)) found.push(el); });
+    // 2. Placeholder match without constructing a fragile CSS attribute selector.
+    for (const el of document.querySelectorAll("input, textarea")) {
+      if ((el.placeholder || "").toLowerCase().includes(low) && !found.includes(el)) found.push(el);
+    }
     // 3. Name / aria-label match
     document.querySelectorAll(
       "input[name*='" + CSS.escape(label) + "'], " +
@@ -375,10 +374,8 @@ class CDPClient:
       }
       // 2. Exact placeholder match
       if (!el && f.placeholder) {
-        el = document.querySelector(
-          "input[placeholder='" + CSS.escape(f.placeholder) + "'], " +
-          "textarea[placeholder='" + CSS.escape(f.placeholder) + "']"
-        );
+        el = Array.from(document.querySelectorAll("input, textarea"))
+          .find(candidate => (candidate.placeholder || "") === f.placeholder) || null;
       }
       // 3. Label / smart lookup
       if (!el && f.label) {

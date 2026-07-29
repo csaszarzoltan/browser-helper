@@ -749,3 +749,40 @@ Use `scope` values `page`, `main`, `dialog`, `form`, `table`, `region`, or a pre
 `POST /agent/execute-task` combines semantic form filling and one verified continuation step. It is deliberately bounded by `max_steps` and `stop_before`; ambiguous pages return current `available_actions` rather than pretending the goal succeeded.
 
 See [Agent Navigation Engine](docs/agent-navigation-engine.md) for complete contracts and examples.
+
+## Reliable snapshot and modal workflows (v1.4)
+
+Version 1.4 makes semantic refs reliable across observe/act sequences and improves SPA modal handling.
+
+### Pinned and recoverable actions
+
+`POST /agent/act` now pins a referenced snapshot for the duration of the action by default. Set `pin_snapshot` to `false` only when the caller does not need ref stability. If a referenced snapshot is already stale, `auto_recover: true` performs one accessibility observation and resolves the target again by its accessible `name`, `text`, or `label`.
+
+Direct backend-node interaction does not need a snapshot:
+
+```json
+{
+  "action": "click",
+  "target": {"backend_node_id": 4023},
+  "observe_after": false
+}
+```
+
+### Legacy observation fallback
+
+Request accessibility fallback when a portal or Angular overlay may be absent from condensed DOM analysis:
+
+```json
+{
+  "mode": "semantic",
+  "search_text": "Add a web link",
+  "fallback": "accessibility",
+  "auto_modal": true
+}
+```
+
+If the text is absent from the legacy snapshot, the response uses the accessibility tree and records the fallback reason. Accessibility page observations automatically prefer an open `dialog`; set `auto_modal` to `false` for the full page.
+
+### Workflow record and replay
+
+Start recording with `POST /agent/record`, execute normal observe and act calls, then stop with `POST /agent/record/stop`. Replay captured actions with `POST /agent/replay`. Recordings are process-local and are intended for repeatable personal workflows, not durable storage.

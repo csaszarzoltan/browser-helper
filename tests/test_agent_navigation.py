@@ -214,3 +214,156 @@ def test_forms_and_extract_api(monkeypatch):
     )
     assert extracted.status_code == 200
     assert extracted.json()["data"]["evidence"]["country"]["ref"]
+
+
+def legacy_page_without_dropdown():
+    return {
+        "page": {
+            "url": "https://example.test",
+            "title": "Demo",
+            "text_preview": "Submit Save",
+            "buttons": [{"text": "Submit", "selector": "#submit"}],
+        }
+    }
+
+
+def modal_ax_tree():
+    return {
+        "nodes": [
+            {"nodeId": "1", "role": ax_value("main"), "name": ax_value("Page"), "childIds": ["2"]},
+            {
+                "nodeId": "2",
+                "role": ax_value("dialog"),
+                "name": ax_value("Add a link"),
+                "childIds": ["3", "4"],
+            },
+            {
+                "nodeId": "3",
+                "backendDOMNodeId": 4023,
+                "role": ax_value("button"),
+                "name": ax_value("Add a web link"),
+            },
+            {
+                "nodeId": "4",
+                "backendDOMNodeId": 4024,
+                "role": ax_value("textbox"),
+                "name": ax_value("Describe what the link is for"),
+                "properties": [{"name": "required", "value": {"value": True}}],
+            },
+        ]
+    }
+
+
+def test_snapshot_store_pin_survives_capacity_pruning():
+    from agent_runtime import SnapshotStore
+
+    store = SnapshotStore(max_snapshots=2)
+    first = store.add(legacy_page_without_dropdown())
+    store.pin(first.snapshot_id)
+    for index in range(5):
+        store.add({"page": {"url": f"https://example.test/{index}", "text": str(index)}})
+    assert store.get(first.snapshot_id).snapshot_id == first.snapshot_id
+    store.unpin(first.snapshot_id)
+    store.add({"page": {"url": "https://example.test/final", "text": "final"}})
+    assert not store.is_pinned(first.snapshot_id)
+
+
+def test_observe_falls_back_to_accessibility_for_missing_text(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.client.analyze_page_condensed = AsyncMock(return_value=legacy_page_without_dropdown())
+    main.client.get_accessibility_tree = AsyncMock(
+        return_value={
+            "status": "ok",
+            "tree": modal_ax_tree(),
+            "page": {"url": "https://example.test", "title": "Demo"},
+        }
+    )
+    response = api.post(
+        "/agent/observe", json={"search_text": "Add a web link", "fallback": "accessibility"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"]["fallback"] is True
+    assert any(node["name"] == "Add a web link" for node in body["data"]["nodes"])
+
+
+def test_direct_backend_node_click_needs_no_snapshot(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.client.click_backend_node = AsyncMock(return_value={"status": "ok", "clicked": True})
+    response = api.post(
+        "/agent/act",
+        json={"action": "click", "target": {"backend_node_id": 4023}, "observe_after": False},
+    )
+    assert response.status_code == 200
+    main.client.click_backend_node.assert_awaited_once_with(4023)
+
+
+def test_modal_scope_is_automatic(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.client.get_accessibility_tree = AsyncMock(
+        return_value={
+            "status": "ok",
+            "tree": modal_ax_tree(),
+            "page": {"url": "https://example.test", "title": "Demo"},
+        }
+    )
+    data = api.post("/agent/observe", json={"mode": "accessibility"}).json()["data"]
+    assert {node["name"] for node in data["nodes"]} == {
+        "Add a link",
+        "Add a web link",
+        "Describe what the link is for",
+    }
+
+
+def test_stale_snapshot_auto_recovers_by_accessible_name(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.client.get_accessibility_tree = AsyncMock(
+        return_value={
+            "status": "ok",
+            "tree": modal_ax_tree(),
+            "page": {"url": "https://example.test", "title": "Demo"},
+        }
+    )
+    main.client.click_backend_node = AsyncMock(return_value={"status": "ok", "clicked": True})
+    response = api.post(
+        "/agent/act",
+        json={
+            "action": "click",
+            "target": {"snapshot_id": "missing", "ref": "e99", "name": "Add a web link"},
+            "auto_recover": True,
+            "observe_after": False,
+        },
+    )
+    assert response.status_code == 200
+    main.client.click_backend_node.assert_awaited_once_with(4023)
+
+
+def test_workflow_record_and_replay(monkeypatch):
+    api = connected_client(monkeypatch)
+    main.agent_recordings.clear()
+    main.active_recording_id = None
+    main.client.click_backend_node = AsyncMock(return_value={"status": "ok", "clicked": True})
+    rec = api.post("/agent/record", json={"name": "modal-link"}).json()["data"]
+    assert (
+        api.post(
+            "/agent/act",
+            json={"action": "click", "target": {"backend_node_id": 4023}, "observe_after": False},
+        ).status_code
+        == 200
+    )
+    stopped = api.post("/agent/record/stop").json()["data"]
+    assert len(stopped["steps"]) == 1
+    replay = api.post("/agent/replay", json={"recording_id": rec["recording_id"]})
+    assert replay.status_code == 200
+    assert replay.json()["data"]["replayed"] == 1
+
+
+def test_smart_form_fill_uses_literal_placeholder_scan():
+    import inspect
+
+    from cdp_client import CDPClient
+
+    source = inspect.getsource(CDPClient.smart_form_fill)
+    assert 'Array.from(document.querySelectorAll("input, textarea"))' in source
+    assert "candidate.placeholder" in source
+    assert "CSS.escape(f.placeholder)" not in source

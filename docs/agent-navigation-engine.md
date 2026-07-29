@@ -74,3 +74,19 @@ The next adapters should implement shadow DOM, iframe aggregation, ARIA autocomp
 ## Complex UI helpers and visual fallback
 
 `POST /agent/act` also supports `dismiss_overlay`, `open_menu`, `expand_section`, `load_all_items`, `extract_table`, and `switch_context`. These are bounded helpers for common web UI patterns. When verified interaction remains uncertain, pass a strategy containing `element_screenshot` or `viewport_screenshot`; the response then contains a short-lived artifact for LLM visual grounding instead of embedding base64 image data.
+
+## Snapshot reliability and accessibility fallback
+
+The semantic store retains up to 200 snapshots and supports reference-counted pinning. `/agent/act` pins a referenced snapshot for the call duration and always releases it in a `finally` block. Target resolution no longer creates a competing snapshot before using the supplied ref.
+
+For stale refs, `auto_recover` performs at most one accessibility refresh and resolves the target by its accessible name. Recovery fails explicitly when no name is supplied or no unique candidate is found.
+
+Legacy observations accept `search_text` and `fallback: accessibility`. This is intended for SPA portals, Angular CDK overlays, menus and dialogs that condensed DOM extraction misses. When a dialog is open, accessibility page scope automatically narrows to the dialog subtree, including modal form fields and dropdown actions.
+
+## Workflow recording
+
+- `POST /agent/record` starts a process-local recording.
+- `POST /agent/record/stop` finalizes and returns it.
+- `POST /agent/replay` replays recorded act requests and can stop at the first HTTP error.
+
+Observe operations are included as trace context but are not replayed. Replayed actions use stale-ref recovery and do not pin obsolete snapshot IDs.

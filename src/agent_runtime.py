@@ -1,4 +1,5 @@
 """LLM-oriented browser observation, stable references, pagination and actions."""
+
 from __future__ import annotations
 
 import base64
@@ -30,10 +31,28 @@ class ElementNotFoundError(ValueError):
 
 
 class SnapshotStore:
-    def __init__(self, max_snapshots: int = 50, ttl_seconds: int = 1800):
+    def __init__(self, max_snapshots: int = 200, ttl_seconds: int = 1800):
         self.max_snapshots = max_snapshots
         self.ttl_seconds = ttl_seconds
         self._items: dict[str, Snapshot] = {}
+        self._pins: dict[str, int] = {}
+
+    def pin(self, snapshot_id: str) -> Snapshot:
+        """Prevent a live snapshot from being pruned until matching ``unpin`` calls."""
+        snap = self.get(snapshot_id)
+        self._pins[snapshot_id] = self._pins.get(snapshot_id, 0) + 1
+        return snap
+
+    def unpin(self, snapshot_id: str) -> None:
+        """Release one pin. Unknown or already released snapshots are harmless."""
+        count = self._pins.get(snapshot_id, 0)
+        if count <= 1:
+            self._pins.pop(snapshot_id, None)
+        else:
+            self._pins[snapshot_id] = count - 1
+
+    def is_pinned(self, snapshot_id: str) -> bool:
+        return self._pins.get(snapshot_id, 0) > 0
 
     def add(self, raw: dict) -> Snapshot:
         page = raw.get("page", raw.get("result", raw)) if isinstance(raw, dict) else {}
@@ -43,7 +62,11 @@ class SnapshotStore:
         title = str(page.get("title", ""))
         text = str(page.get("text", page.get("text_preview", "")))
         elements = self._extract_elements(page)
-        canonical = json.dumps({"url": url, "title": title, "text": text, "elements": elements}, sort_keys=True, ensure_ascii=False)
+        canonical = json.dumps(
+            {"url": url, "title": title, "text": text, "elements": elements},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         fingerprint = hashlib.sha256(canonical.encode()).hexdigest()
         snapshot_id = f"snap_{uuid.uuid4().hex[:16]}"
         for index, element in enumerate(elements, 1):
@@ -58,9 +81,14 @@ class SnapshotStore:
     def _extract_elements(page: dict) -> list[dict]:
         result: list[dict] = []
         groups = {
-            "buttons": "button", "links": "link", "form_fields": "field",
-            "inputs": "field", "checkboxes": "checkbox", "radios": "radio",
-            "selects": "select", "modals": "dialog",
+            "buttons": "button",
+            "links": "link",
+            "form_fields": "field",
+            "inputs": "field",
+            "checkboxes": "checkbox",
+            "radios": "radio",
+            "selects": "select",
+            "modals": "dialog",
         }
         seen: set[str] = set()
         for key, default_role in groups.items():
@@ -72,18 +100,30 @@ class SnapshotStore:
                     item = {"name": item}
                 if not isinstance(item, dict):
                     continue
-                name = str(item.get("name") or item.get("text") or item.get("label") or item.get("placeholder") or "").strip()
+                name = str(
+                    item.get("name")
+                    or item.get("text")
+                    or item.get("label")
+                    or item.get("placeholder")
+                    or ""
+                ).strip()
                 selector = item.get("selector") or item.get("css_selector")
                 role = str(item.get("role") or item.get("type") or default_role)
                 key_sig = json.dumps([role, name, selector], ensure_ascii=False)
                 if key_sig in seen:
                     continue
                 seen.add(key_sig)
-                result.append({
-                    "role": role, "name": name, "selector": selector,
-                    "visible": item.get("visible", True), "enabled": item.get("enabled", True),
-                    "checked": item.get("checked"), "value": item.get("value"),
-                })
+                result.append(
+                    {
+                        "role": role,
+                        "name": name,
+                        "selector": selector,
+                        "visible": item.get("visible", True),
+                        "enabled": item.get("enabled", True),
+                        "checked": item.get("checked"),
+                        "value": item.get("value"),
+                    }
+                )
         return result
 
     def get(self, snapshot_id: str) -> Snapshot:
@@ -102,9 +142,16 @@ class SnapshotStore:
 
     def _prune(self) -> None:
         now = time.time()
-        self._items = {k: v for k, v in self._items.items() if now - v.created_at <= self.ttl_seconds}
+        self._items = {
+            k: v
+            for k, v in self._items.items()
+            if self.is_pinned(k) or now - v.created_at <= self.ttl_seconds
+        }
         while len(self._items) > self.max_snapshots:
-            oldest = min(self._items, key=lambda k: self._items[k].created_at)
+            candidates = [k for k in self._items if not self.is_pinned(k)]
+            if not candidates:
+                break
+            oldest = min(candidates, key=lambda k: self._items[k].created_at)
             del self._items[oldest]
 
 
@@ -123,13 +170,15 @@ def decode_cursor(cursor: str, snapshot_id: str) -> int:
         raise ValueError("Invalid or stale cursor") from exc
 
 
-def paginate_snapshot(snap: Snapshot, max_chars: int, max_elements: int, cursor: str | None = None) -> dict:
+def paginate_snapshot(
+    snap: Snapshot, max_chars: int, max_elements: int, cursor: str | None = None
+) -> dict:
     max_chars = min(max(max_chars, 256), 50000)
     max_elements = min(max(max_elements, 1), 500)
     offset = decode_cursor(cursor, snap.snapshot_id) if cursor else 0
-    text = snap.text[offset: offset + max_chars]
+    text = snap.text[offset : offset + max_chars]
     element_start = min(offset // max_chars * max_elements, len(snap.elements))
-    elements = snap.elements[element_start: element_start + max_elements]
+    elements = snap.elements[element_start : element_start + max_elements]
     next_offset = offset + len(text)
     truncated = next_offset < len(snap.text) or element_start + len(elements) < len(snap.elements)
     return {
@@ -157,6 +206,10 @@ def diff_snapshots(old: Snapshot, new: Snapshot) -> dict:
         "url_changed": old.url != new.url,
         "title_changed": old.title != new.title,
         "text_changed": old.text != new.text,
-        "elements_added": [dict(zip(("role", "name", "selector"), x)) for x in sorted(new_keys - old_keys)],
-        "elements_removed": [dict(zip(("role", "name", "selector"), x)) for x in sorted(old_keys - new_keys)],
+        "elements_added": [
+            dict(zip(("role", "name", "selector"), x)) for x in sorted(new_keys - old_keys)
+        ],
+        "elements_removed": [
+            dict(zip(("role", "name", "selector"), x)) for x in sorted(old_keys - new_keys)
+        ],
     }

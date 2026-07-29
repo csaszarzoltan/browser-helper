@@ -14,6 +14,7 @@ import os
 import tempfile
 import time
 import zipfile
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -176,6 +177,9 @@ artifact_store = ArtifactStore()
 snapshot_store = SnapshotStore()
 ax_builder = AccessibilityTreeBuilder()
 ax_snapshots: dict[str, AccessibilitySnapshot] = {}
+ax_snapshot_pins: dict[str, int] = {}
+agent_recordings: dict[str, dict[str, Any]] = {}
+active_recording_id: str | None = None
 
 # Proxy pool for anti-detection proxy rotation
 proxy_pool = ProxyPool()
@@ -561,6 +565,9 @@ class AgentObserveRequest(BaseModel):
     cursor: str | None = None
     snapshot_id: str | None = None
     since_snapshot_id: str | None = None
+    fallback: str | None = None
+    search_text: str | None = None
+    auto_modal: bool = True
 
 
 class AgentTarget(BaseModel):
@@ -570,6 +577,7 @@ class AgentTarget(BaseModel):
     role: str | None = None
     name: str | None = None
     within: str | None = None
+    backend_node_id: int | None = None
     selector: str | None = None
     text: str | None = None
     label: str | None = None
@@ -590,6 +598,8 @@ class AgentActionRequest(BaseModel):
     recovery: dict | None = None
     strategy: list[str] | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
+    pin_snapshot: bool = True
+    auto_recover: bool = True
     observe_after: bool = True
 
 
@@ -611,6 +621,16 @@ class AgentExecuteTaskRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     constraints: dict[str, Any] = Field(default_factory=dict)
     return_options: dict[str, Any] = Field(default_factory=dict, alias="return")
+
+
+
+class AgentRecordRequest(BaseModel):
+    name: str | None = None
+
+
+class AgentReplayRequest(BaseModel):
+    recording_id: str
+    stop_on_error: bool = True
 
 
 
@@ -2206,11 +2226,11 @@ async def websocket_endpoint(ws: WebSocket):
 # ---------------------------------------------------------------------------
 
 AGENT_CAPABILITIES = {
-    "version": "1.3.0",
+    "version": "1.4.0",
     "response_schema": "browser-helper-envelope-v1",
     "actions": ["navigate", "click", "fill", "select", "wait", "evaluate", "capture", "workflow", "fill_form", "extract", "execute_task", "dismiss_overlay", "open_menu", "expand_section", "load_all_items", "extract_table", "switch_context"],
     "observation": {"stable_element_refs": True, "pagination": True, "differential": True, "token_budget": True, "accessibility_tree": True, "semantic_graph": True, "scopes": ["page", "main", "dialog", "form", "table", "region", "ref"]},
-    "navigation_engine": {"form_discovery": True, "schema_extraction": True, "post_action_expectations": True, "available_actions": True, "backend_node_actions": True},
+    "navigation_engine": {"form_discovery": True, "schema_extraction": True, "post_action_expectations": True, "available_actions": True, "backend_node_actions": True, "snapshot_pinning": True, "stale_auto_recovery": True, "modal_aware": True, "workflow_record_replay": True},
     "artifacts": {"screenshots": True, "ttl_seconds": 86400},
 }
 
@@ -2230,9 +2250,38 @@ async def _capture_accessibility_snapshot(
         include=include, interactive_only=interactive_only,
     )
     ax_snapshots[snap.snapshot_id] = snap
-    if len(ax_snapshots) > 50:
-        del ax_snapshots[next(iter(ax_snapshots))]
+    while len(ax_snapshots) > 200:
+        candidate = next((key for key in ax_snapshots if not ax_snapshot_pins.get(key)), None)
+        if candidate is None:
+            break
+        del ax_snapshots[candidate]
     return snap
+
+
+def _pin_ax_snapshot(snapshot_id: str) -> None:
+    if snapshot_id not in ax_snapshots:
+        raise StaleSnapshotError(f"Accessibility snapshot {snapshot_id!r} is missing")
+    ax_snapshot_pins[snapshot_id] = ax_snapshot_pins.get(snapshot_id, 0) + 1
+
+
+def _unpin_ax_snapshot(snapshot_id: str) -> None:
+    count = ax_snapshot_pins.get(snapshot_id, 0)
+    if count <= 1:
+        ax_snapshot_pins.pop(snapshot_id, None)
+    else:
+        ax_snapshot_pins[snapshot_id] = count - 1
+
+
+def _snapshot_contains_text(snapshot: Any, text: str) -> bool:
+    needle = text.casefold()
+    if isinstance(snapshot, AccessibilitySnapshot):
+        return any(needle in f"{node.name} {node.description} {node.value or ''}".casefold() for node in snapshot.nodes)
+    return needle in snapshot.text.casefold() or any(needle in f"{item.get('name', '')} {item.get('value', '')}".casefold() for item in snapshot.elements)
+
+
+def _record_agent_step(kind: str, payload: dict[str, Any]) -> None:
+    if active_recording_id and active_recording_id in agent_recordings:
+        agent_recordings[active_recording_id]["steps"].append({"kind": kind, "payload": payload})
 
 
 @app.get("/agent/capabilities")
@@ -2252,8 +2301,8 @@ async def agent_observe(body: AgentObserveRequest):
                     raise StaleSnapshotError(f"Accessibility snapshot {body.snapshot_id!r} is missing")
             else:
                 snap = await _capture_accessibility_snapshot(
-                    scope=body.scope, include=body.include,
-                    interactive_only=body.interactive_only,
+                    scope=("dialog" if body.auto_modal and body.scope == "page" else body.scope),
+                    include=body.include, interactive_only=body.interactive_only,
                 )
             data = snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
             if body.since_snapshot_id:
@@ -2272,15 +2321,26 @@ async def agent_observe(body: AgentObserveRequest):
                 }
                 if body.changed_only:
                     data["nodes"] = changed
+            _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope})
             return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility"})
         if body.snapshot_id:
             snap = snapshot_store.get(body.snapshot_id)
         else:
             snap = await _capture_agent_snapshot(body.condensed)
+        if body.search_text and not _snapshot_contains_text(snap, body.search_text) and (body.fallback or "").lower() in {"accessibility", "ax"}:
+            ax_snap = await _capture_accessibility_snapshot(scope="dialog" if body.auto_modal else body.scope, include=body.include, interactive_only=body.interactive_only)
+            if not _snapshot_contains_text(ax_snap, body.search_text):
+                ax_snap = await _capture_accessibility_snapshot(scope="page", include=body.include, interactive_only=body.interactive_only)
+            data = ax_snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
+            data["fallback_from"] = "semantic"
+            data["fallback_reason"] = f"search_text_not_found:{body.search_text}"
+            _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope, "search_text": body.search_text})
+            return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility", "fallback": True})
         data = paginate_snapshot(snap, body.max_chars, body.max_elements, body.cursor)
         if body.since_snapshot_id:
             old = snapshot_store.get(body.since_snapshot_id)
             data["diff"] = diff_snapshots(old, snap)
+        _record_agent_step("observe", {"mode": "semantic"})
         return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "semantic"})
     except StaleSnapshotError as exc:
         return api_error("agent_observe", "stale_snapshot", str(exc), 409)
@@ -2297,18 +2357,11 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
         snap = ax_snapshots.get(target.snapshot_id)
         if not snap:
             raise StaleSnapshotError(f"Accessibility snapshot {target.snapshot_id!r} is missing")
-        current = await _capture_accessibility_snapshot()
-        if current.fingerprint != snap.fingerprint:
-            raise StaleSnapshotError("Page changed since the AX snapshot; observe again")
         node = next((n for n in snap.nodes if n.ref == target.ref), None)
         if not node:
             raise ElementNotFoundError(f"Accessibility ref {target.ref!r} not found")
         return node.as_dict()
     if target.snapshot_id and target.element_id:
-        old = snapshot_store.get(target.snapshot_id)
-        current = await _capture_agent_snapshot(True)
-        if current.fingerprint != old.fingerprint:
-            raise StaleSnapshotError("Page changed since the referenced snapshot; observe again")
         return snapshot_store.resolve(target.snapshot_id, target.element_id)
     return target.model_dump(exclude_none=True)
 
@@ -2317,8 +2370,38 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
 async def agent_act(body: AgentActionRequest):
     ensure_connected()
     action = body.action.lower().strip()
+    pinned_kind: str | None = None
+    pinned_id: str | None = None
+    if body.pin_snapshot and body.target and body.target.snapshot_id:
+        pinned_id = body.target.snapshot_id
+        try:
+            if body.target.ref:
+                _pin_ax_snapshot(pinned_id)
+                pinned_kind = "ax"
+            elif body.target.element_id:
+                snapshot_store.pin(pinned_id)
+                pinned_kind = "semantic"
+        except StaleSnapshotError:
+            if not body.auto_recover:
+                return api_error("agent_act", "stale_snapshot", f"Snapshot {pinned_id!r} is missing or expired", 409)
+            pinned_id = None
     try:
-        target = await _resolve_agent_target(body.target)
+        try:
+            target = await _resolve_agent_target(body.target)
+        except StaleSnapshotError:
+            if not body.auto_recover or not body.target:
+                raise
+            lookup = body.target.name or body.target.text or body.target.label
+            if not lookup:
+                raise
+            recovered = await _capture_accessibility_snapshot(scope="dialog")
+            matches = [item for item in recovered.nodes if lookup.casefold() in item.name.casefold()]
+            if len(matches) != 1:
+                recovered = await _capture_accessibility_snapshot(scope="page")
+                matches = [item for item in recovered.nodes if lookup.casefold() in item.name.casefold()]
+            if len(matches) != 1:
+                raise StaleSnapshotError(f"Could not uniquely recover target {lookup!r}; found {len(matches)} candidates")
+            target = matches[0].as_dict()
         before_ax = await _capture_accessibility_snapshot() if body.expect else None
         if action == "navigate":
             if not body.url:
@@ -2442,6 +2525,7 @@ async def agent_act(body: AgentActionRequest):
         if body.observe_after and action not in {"evaluate", "capture"}:
             snap = await _capture_agent_snapshot(True)
             data["observation"] = paginate_snapshot(snap, 4000, 60)
+        _record_agent_step("act", body.model_dump(mode="json", exclude_none=True, by_alias=True))
         return api_success("agent_act", data)
     except StaleSnapshotError as exc:
         return api_error("agent_act", "stale_snapshot", str(exc), 409)
@@ -2451,6 +2535,53 @@ async def agent_act(body: AgentActionRequest):
         return api_error("agent_act", "invalid_request", str(exc), 422)
     except Exception as exc:
         return api_error("agent_act", "action_failed", str(exc), 503)
+    finally:
+        if pinned_id and pinned_kind == "ax":
+            _unpin_ax_snapshot(pinned_id)
+        elif pinned_id and pinned_kind == "semantic":
+            snapshot_store.unpin(pinned_id)
+
+
+@app.post("/agent/record")
+async def agent_record(body: AgentRecordRequest):
+    """Start recording subsequent observe and act calls in memory."""
+    global active_recording_id
+    recording_id = f"rec_{uuid.uuid4().hex[:16]}"
+    agent_recordings[recording_id] = {"recording_id": recording_id, "name": body.name or recording_id, "steps": []}
+    active_recording_id = recording_id
+    return api_success("agent_record", agent_recordings[recording_id])
+
+
+@app.post("/agent/record/stop")
+async def agent_record_stop():
+    """Stop and return the active workflow recording."""
+    global active_recording_id
+    if not active_recording_id:
+        return api_error("agent_record_stop", "no_active_recording", "No workflow recording is active", 409)
+    result = agent_recordings[active_recording_id]
+    active_recording_id = None
+    return api_success("agent_record_stop", result)
+
+
+@app.post("/agent/replay")
+async def agent_replay(body: AgentReplayRequest):
+    """Replay recorded act requests; observe steps are intentionally informational."""
+    recording = agent_recordings.get(body.recording_id)
+    if not recording:
+        return api_error("agent_replay", "recording_not_found", "Recording not found", 404)
+    results = []
+    for index, step in enumerate(recording["steps"], 1):
+        if step["kind"] != "act":
+            continue
+        replay_body = AgentActionRequest.model_validate(step["payload"])
+        replay_body.pin_snapshot = False
+        replay_body.auto_recover = True
+        response = await agent_act(replay_body)
+        status = getattr(response, "status_code", 200)
+        results.append({"step": index, "status_code": status})
+        if body.stop_on_error and status >= 400:
+            break
+    return api_success("agent_replay", {"recording_id": body.recording_id, "results": results, "replayed": len(results)})
 
 
 @app.post("/agent/forms/discover")

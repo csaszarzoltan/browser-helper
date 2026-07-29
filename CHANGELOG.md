@@ -2,6 +2,21 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+### [1.4.0] - 2026-07-29
+
+#### Fixed
+- Prevented snapshot eviction during `/agent/act` with reference-counted pin/unpin and a 200-snapshot default capacity.
+- Removed the pre-action re-observation race and added one-shot stale-ref recovery by accessible name.
+- Added legacy-to-accessibility fallback for SPA dropdown and portal text missing from condensed snapshots.
+- Exposed direct `target.backend_node_id` click/fill actions without requiring a snapshot.
+- Replaced fragile placeholder CSS construction with literal input/textarea placeholder scanning.
+- Added automatic modal accessibility scope and modal form discovery.
+
+#### Added
+- `pin_snapshot`, `auto_recover`, `fallback`, `search_text`, and `auto_modal` request controls.
+- Process-local workflow record/stop/replay endpoints.
+- Seven focused regressions covering the reported root causes and workflow replay.
+
 ### [1.2.0] — 2026-07-28
 
 #### Added
