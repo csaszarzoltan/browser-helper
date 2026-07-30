@@ -691,6 +691,11 @@ class ImportRequest(BaseModel):
     path: str
 
 
+class FingerprintRequest(BaseModel):
+    """Request body for POST /profile/{name}/fingerprint."""
+    overrides: dict[str, Any] | None = None
+
+
 # ─── Visual regression testing models ────────────────────────
 
 
@@ -2930,7 +2935,7 @@ async def headless_health():
 
 def _profile_to_response(p: Profile) -> dict:
     """Serialize a Profile to a JSON-safe dict for API responses."""
-    return {
+    result = {
         "name": p.name,
         "data_dir": p.data_dir,
         "created_at": p.created_at,
@@ -2940,6 +2945,11 @@ def _profile_to_response(p: Profile) -> dict:
         "tags": list(p.tags),
         "resource_limits": dict(p.resource_limits),
     }
+    if hasattr(p, "fingerprint"):
+        result["fingerprint"] = p.fingerprint
+    if hasattr(p, "fingerprint_config"):
+        result["fingerprint_config"] = p.fingerprint_config
+    return result
 
 
 @app.get("/profiles")
@@ -3129,6 +3139,108 @@ async def remove_extension(name: str, body: ExtensionRequest):
         "status": "ok",
         "extensions": profile_mgr.get_extensions(name),
     }
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint REST endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/profile/{name}/fingerprint", status_code=201)
+async def post_fingerprint(name: str, body: FingerprintRequest | None = None) -> dict:
+    """Generate or update a fingerprint for the given profile.
+
+    Accepts optional JSON body with ``overrides`` dict.
+    Returns ``{"fingerprint": {…}}`` with status 201 on success,
+    or 404 if the profile does not exist, 400/422 for invalid input.
+    """
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    overrides = body.overrides if body else None
+    try:
+        fp = profile_mgr.generate_fingerprint(name, overrides=overrides)
+        return {"fingerprint": fp}
+    except (ValueError, TypeError) as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc)},
+        )
+
+
+@app.get("/profile/{name}/fingerprint")
+async def get_fingerprint(name: str) -> dict:
+    """Return the current fingerprint and fingerprint_config for the profile.
+
+    Returns ``{"fingerprint": {…}, "fingerprint_config": {…}}`` with each
+    field set to ``null`` if not configured.  Returns 404 if the profile
+    does not exist.
+    """
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    fp = profile_mgr.get_fingerprint(name)
+    # fingerprint_config is stored on the profile itself
+    fpc = getattr(profile, "fingerprint_config", None) or profile_mgr.get_fingerprint_config(name)
+    return {"fingerprint": fp, "fingerprint_config": fpc}
+
+
+@app.put("/profile/{name}/fingerprint")
+async def put_fingerprint_config(name: str, body: dict) -> dict:
+    """Set fingerprint_config for the given profile.
+
+    Accepts a JSON body with config fields.  Returns
+    ``{"fingerprint_config": {…}}`` on success, 404 if profile not found,
+    or 400/422 for invalid input.
+    """
+    profile = profile_mgr.get_profile(name)
+    if profile is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    # Validate: body must be a dict
+    if not isinstance(body, dict):
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Request body must be a JSON object"},
+        )
+    # Validate field names — only known fingerprint config fields allowed
+    known_config_fields = {
+        "canvas_noise_seed", "webgl_vendor", "webgl_renderer",
+        "audio_sample_rate", "geolocation", "timezone", "locale",
+        "canvas_offset_x", "canvas_offset_y", "hardware_concurrency",
+        "device_memory", "screen_width", "screen_height",
+        "color_depth", "platform",
+    }
+    for key in body:
+        if key not in known_config_fields:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": f"Unknown fingerprint config field: {key!r}"},
+            )
+
+    # Persist
+    profile_mgr.set_fingerprint_config(name, body)
+    return {"fingerprint_config": body}
+
+
+@app.delete("/profile/{name}")
+async def delete_profile_singular(name: str):
+    """Delete a profile (singular route alias)."""
+    if profile_mgr.get_profile(name) is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Profile {name!r} not found"},
+        )
+    profile_mgr.delete_profile(name)
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

@@ -346,17 +346,32 @@ class FingerprintEngine:
 
     # ── Composite ──────────────────────────────────────────────────────
 
-    def generate_all_scripts(self) -> list[str]:
+    def generate_all_scripts(self=None, config=None) -> list[str]:  # type: ignore[override]
         """Return list of all JS scripts to inject.
 
-        Combines canvas, WebGL, and audio scripts based on the current
-        config. For fields left empty/auto (e.g. empty webgl_vendor), a
+        Can be called as:
+        - Instance method: ``engine.generate_all_scripts()`` — uses ``self._config``
+        - Class method: ``FingerprintEngine.generate_all_scripts(config_dict)``
+        - Class method: ``FingerprintEngine.generate_all_scripts(None)`` → empty list
+
+        Combines canvas, WebGL, and audio scripts based on config.
+        For fields left empty/auto (e.g. empty webgl_vendor), a
         plausible value is chosen from the GPU pool.
 
         Returns:
             A list of JS source strings, one per patch type.
         """
-        cfg = self._config
+        # Detect calling pattern: if self is a dict or None, treat as class-level call
+        if isinstance(self, dict):
+            cfg_dict = self or {}
+            if not cfg_dict:
+                return []
+            cfg = FingerprintConfig.from_dict(cfg_dict) if isinstance(cfg_dict, dict) else FingerprintConfig()
+        elif self is None:
+            return []
+        else:
+            cfg = self._config
+
         scripts: list[str] = []
 
         # Canvas noise — use seed from config (0 = random, generate one)
