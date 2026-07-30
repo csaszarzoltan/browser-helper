@@ -33,6 +33,9 @@ def main():
                         help="Chrome profile directory (only with --launch-chrome)")
     parser.add_argument("--debug-port", type=int, default=None,
                         help="Chrome debug port (only with --launch-chrome; default from settings)")
+    parser.add_argument("--backend", type=str, default="cdp",
+                        choices=["cdp", "playwright"],
+                        help="Automation backend: cdp (default) or playwright")
     args = parser.parse_args()
 
     # Pass launch parameters to the server via environment variables
@@ -47,7 +50,7 @@ def main():
 
     print(f"🚀 Browser Helper starting on http://{args.host}:{args.port}")
     if args.launch_chrome:
-        print(f"   → Auto-launching Chrome with CDP debugging")
+        print("   → Auto-launching Chrome with CDP debugging")
         if args.profile_dir:
             print(f"   → Profile: {args.profile_dir}")
         if args.debug_port:

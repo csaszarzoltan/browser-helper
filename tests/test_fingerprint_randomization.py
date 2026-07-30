@@ -35,8 +35,6 @@ from typing import get_type_hints
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from typing import Any
-
 import pytest
 
 from anti_detection.signal_modules import (
@@ -47,7 +45,6 @@ from anti_detection.signal_modules import (
     TLSFingerprintAligner,
     WebGLSpoofer,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1 — Interface Tests (PASSING — green checkmark)
@@ -326,87 +323,67 @@ class TestTLSFingerprintAlignerInterface:
 class TestCanvasFingerprinterRED:
     """CanvasFingerprinter behavioral tests — RED phase."""
 
-    def test_build_patch_raises_not_implemented(self):
-        """build_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            CanvasFingerprinter.build_patch(canvas_offset=(2, 1))
+    def test_build_patch_returns_js_string(self):
+        """build_patch should return a non-empty JS string (no exception)."""
+        js = CanvasFingerprinter.build_patch(canvas_offset=(2, 1))
+        assert isinstance(js, str)
+        assert len(js) > 0
 
-    def test_measure_entropy_raises_not_implemented(self):
-        """measure_entropy raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            CanvasFingerprinter.measure_entropy(patch_js="(function(){})()")
+    def test_measure_entropy_returns_float(self):
+        """measure_entropy should return a float (no exception)."""
+        entropy = CanvasFingerprinter.measure_entropy(patch_js="(function(){})()")
+        assert isinstance(entropy, float)
+        assert 0.0 <= entropy <= 8.0
 
     def test_build_patch_returns_string(self):
         """build_patch should return a non-empty JS string."""
-        try:
-            js = CanvasFingerprinter.build_patch(canvas_offset=(2, 1))
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = CanvasFingerprinter.build_patch(canvas_offset=(2, 1))
         assert isinstance(js, str)
         assert len(js) > 0
 
     def test_different_offsets_different_output(self):
         """Different canvas offsets produce different JS patches."""
-        try:
-            js1 = CanvasFingerprinter.build_patch(canvas_offset=(0, 0))
-            js2 = CanvasFingerprinter.build_patch(canvas_offset=(3, 2))
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js1 = CanvasFingerprinter.build_patch(canvas_offset=(0, 0))
+        js2 = CanvasFingerprinter.build_patch(canvas_offset=(3, 2))
         assert js1 != js2, (
             "Patches for different offsets should differ"
         )
 
 
 class TestWebGLSpooferRED:
-    """WebGLSpoofer behavioral tests — RED phase."""
-
-    def test_build_patch_raises_not_implemented(self):
-        """build_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            WebGLSpoofer.build_patch(
-                webgl_vendor="Google Inc. (NVIDIA)",
-                webgl_renderer="ANGLE (NVIDIA, RTX 3080)",
-            )
-
-    def test_get_gpu_profiles_raises_not_implemented(self):
-        """get_gpu_profiles raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            WebGLSpoofer.get_gpu_profiles()
+    """WebGLSpoofer behavioral tests — GREEN phase."""
 
     def test_build_patch_returns_string(self):
         """build_patch should return a non-empty JS string."""
-        try:
-            js = WebGLSpoofer.build_patch(
-                webgl_vendor="Google Inc. (NVIDIA)",
-                webgl_renderer="ANGLE (NVIDIA, RTX 3080)",
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = WebGLSpoofer.build_patch(
+            webgl_vendor="Google Inc. (NVIDIA)",
+            webgl_renderer="ANGLE (NVIDIA, RTX 3080)",
+        )
         assert isinstance(js, str) and len(js) > 0
+
+    def test_get_gpu_profiles_returns_dict(self):
+        """get_gpu_profiles should return a dict (no exception)."""
+        profiles = WebGLSpoofer.get_gpu_profiles()
+        assert isinstance(profiles, dict)
+        assert len(profiles) >= 4
 
     def test_vendor_appears_in_js(self):
         """The vendor string should appear in the generated JS."""
         vendor = "Google Inc. (NVIDIA)"
-        try:
-            js = WebGLSpoofer.build_patch(
-                webgl_vendor=vendor,
-                webgl_renderer="ANGLE (NVIDIA, RTX 3080)",
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = WebGLSpoofer.build_patch(
+            webgl_vendor=vendor,
+            webgl_renderer="ANGLE (NVIDIA, RTX 3080)",
+        )
         assert vendor in js
 
     def test_different_vendor_different_output(self):
         """Different vendor strings produce different JS."""
-        try:
-            js1 = WebGLSpoofer.build_patch(
-                webgl_vendor="NVIDIA", webgl_renderer="RTX 4090"
-            )
-            js2 = WebGLSpoofer.build_patch(
-                webgl_vendor="AMD", webgl_renderer="RX 7900 XTX"
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js1 = WebGLSpoofer.build_patch(
+            webgl_vendor="NVIDIA", webgl_renderer="RTX 4090"
+        )
+        js2 = WebGLSpoofer.build_patch(
+            webgl_vendor="AMD", webgl_renderer="RX 7900 XTX"
+        )
         assert js1 != js2
 
     @pytest.mark.parametrize(
@@ -420,18 +397,12 @@ class TestWebGLSpooferRED:
     )
     def test_plausible_gpu_strings(self, vendor, renderer):
         """Should accept various plausible GPU vendor/renderer pairs."""
-        try:
-            js = WebGLSpoofer.build_patch(webgl_vendor=vendor, webgl_renderer=renderer)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = WebGLSpoofer.build_patch(webgl_vendor=vendor, webgl_renderer=renderer)
         assert isinstance(js, str) and len(js) > 0
 
     def test_gpu_profiles_has_vendors(self):
         """get_gpu_profiles returns dict with well-known GPU vendors."""
-        try:
-            profiles = WebGLSpoofer.get_gpu_profiles()
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        profiles = WebGLSpoofer.get_gpu_profiles()
         assert isinstance(profiles, dict)
         assert len(profiles) >= 4, "Should have at least 4 vendor entries"
         for vendor, renderers in profiles.items():
@@ -441,113 +412,59 @@ class TestWebGLSpooferRED:
 
 
 class TestAudioContextRandomizerRED:
-    """AudioContextRandomizer behavioral tests — RED phase."""
-
-    def test_build_patch_raises_not_implemented(self):
-        """build_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            AudioContextRandomizer.build_patch(variance_pct=0.003)
-
-    def test_validate_variance_raises_not_implemented(self):
-        """validate_variance raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            AudioContextRandomizer.validate_variance(variance_pct=0.005)
+    """AudioContextRandomizer behavioral tests — GREEN phase."""
 
     def test_build_patch_returns_string(self):
         """build_patch should return a non-empty JS string."""
-        try:
-            js = AudioContextRandomizer.build_patch(variance_pct=0.003)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = AudioContextRandomizer.build_patch(variance_pct=0.003)
         assert isinstance(js, str) and len(js) > 0
+
+    def test_validate_variance_in_range(self):
+        """validate_variance should accept valid values (no exception)."""
+        assert AudioContextRandomizer.validate_variance(variance_pct=0.005) is True
 
     def test_variance_0_1_pct_accepted(self):
         """variance_pct=0.001 (0.1%) should be valid."""
-        try:
-            js = AudioContextRandomizer.build_patch(variance_pct=0.001)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = AudioContextRandomizer.build_patch(variance_pct=0.001)
         assert isinstance(js, str) and len(js) > 0
 
     def test_variance_1_0_pct_accepted(self):
         """variance_pct=0.01 (1.0%) should be valid."""
-        try:
-            js = AudioContextRandomizer.build_patch(variance_pct=0.01)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = AudioContextRandomizer.build_patch(variance_pct=0.01)
         assert isinstance(js, str) and len(js) > 0
 
     def test_variance_out_of_range_rejected(self):
         """variance_pct outside [0.001, 0.01] should be rejected by validate."""
-        try:
-            valid = AudioContextRandomizer.validate_variance(variance_pct=0.05)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        valid = AudioContextRandomizer.validate_variance(variance_pct=0.05)
         assert valid is False, "variance_pct=0.05 should be out of range"
 
     def test_variance_in_range_accepted(self):
         """variance_pct inside [0.001, 0.01] should pass validate."""
-        try:
-            valid = AudioContextRandomizer.validate_variance(variance_pct=0.005)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        valid = AudioContextRandomizer.validate_variance(variance_pct=0.005)
         assert valid is True
 
 
 class TestNavigatorSpooferRED:
-    """NavigatorSpoofer behavioral tests — RED phase."""
-
-    def test_build_ua_patch_raises_not_implemented(self):
-        """build_ua_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            NavigatorSpoofer.build_ua_patch(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
-            )
-
-    def test_build_language_patch_raises_not_implemented(self):
-        """build_language_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            NavigatorSpoofer.build_language_patch(
-                language="en-US", languages=["en-US", "en"]
-            )
-
-    def test_build_hardware_patch_raises_not_implemented(self):
-        """build_hardware_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            NavigatorSpoofer.build_hardware_patch(concurrency=8, device_memory=8.0)
-
-    def test_build_navigator_patch_raises_not_implemented(self):
-        """build_navigator_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            NavigatorSpoofer.build_navigator_patch(props={"user_agent": "test"})
+    """NavigatorSpoofer behavioral tests — GREEN phase."""
 
     def test_build_ua_patch_returns_string(self):
         """build_ua_patch should return a non-empty JS string."""
         ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
-        try:
-            js = NavigatorSpoofer.build_ua_patch(user_agent=ua)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = NavigatorSpoofer.build_ua_patch(user_agent=ua)
         assert isinstance(js, str) and len(js) > 0
         assert "userAgent" in js or "platform" in js
 
     def test_build_language_patch_returns_string(self):
         """build_language_patch should return a non-empty JS string."""
-        try:
-            js = NavigatorSpoofer.build_language_patch(
-                language="en-US", languages=["en-US", "en"]
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = NavigatorSpoofer.build_language_patch(
+            language="en-US", languages=["en-US", "en"]
+        )
         assert isinstance(js, str) and len(js) > 0
         assert "language" in js or "languages" in js
 
     def test_build_hardware_patch_returns_string(self):
         """build_hardware_patch should return a non-empty JS string."""
-        try:
-            js = NavigatorSpoofer.build_hardware_patch(concurrency=8, device_memory=8.0)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = NavigatorSpoofer.build_hardware_patch(concurrency=8, device_memory=8.0)
         assert isinstance(js, str) and len(js) > 0
         assert "hardwareConcurrency" in js or "deviceMemory" in js
 
@@ -561,94 +478,50 @@ class TestNavigatorSpooferRED:
             "hardware_concurrency": 8,
             "device_memory": 8,
         }
-        try:
-            js = NavigatorSpoofer.build_navigator_patch(props=props)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = NavigatorSpoofer.build_navigator_patch(props=props)
         assert isinstance(js, str) and len(js) > 0
 
     def test_different_ua_different_output(self):
         """Different user agents produce different patches."""
         ua1 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
         ua2 = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15"
-        try:
-            js1 = NavigatorSpoofer.build_ua_patch(user_agent=ua1)
-            js2 = NavigatorSpoofer.build_ua_patch(user_agent=ua2)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js1 = NavigatorSpoofer.build_ua_patch(user_agent=ua1)
+        js2 = NavigatorSpoofer.build_ua_patch(user_agent=ua2)
         assert js1 != js2
 
 
 class TestScreenColorConsistencyRED:
-    """ScreenColorConsistency behavioral tests — RED phase."""
-
-    def test_build_screen_patch_raises_not_implemented(self):
-        """build_screen_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            ScreenColorConsistency.build_screen_patch(
-                width=1920, height=1080, color_depth=24, pixel_ratio=1.0
-            )
-
-    def test_build_timezone_patch_raises_not_implemented(self):
-        """build_timezone_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            ScreenColorConsistency.build_timezone_patch(
-                timezone="America/New_York"
-            )
-
-    def test_build_locale_patch_raises_not_implemented(self):
-        """build_locale_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            ScreenColorConsistency.build_locale_patch(locale="en-US")
-
-    def test_build_color_consistency_patch_raises_not_implemented(self):
-        """build_color_consistency_patch raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            ScreenColorConsistency.build_color_consistency_patch(
-                props={"screen_width": 1920, "screen_height": 1080}
-            )
+    """ScreenColorConsistency behavioral tests — GREEN phase."""
 
     def test_build_screen_patch_returns_string(self):
         """build_screen_patch should return a non-empty JS string."""
-        try:
-            js = ScreenColorConsistency.build_screen_patch(
-                width=1920, height=1080, color_depth=24, pixel_ratio=1.0
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = ScreenColorConsistency.build_screen_patch(
+            width=1920, height=1080, color_depth=24, pixel_ratio=1.0
+        )
         assert isinstance(js, str) and len(js) > 0
         assert "screen" in js.lower()
 
     def test_build_timezone_patch_returns_string(self):
         """build_timezone_patch should return a non-empty JS string."""
-        try:
-            js = ScreenColorConsistency.build_timezone_patch(
-                timezone="America/New_York"
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = ScreenColorConsistency.build_timezone_patch(
+            timezone="America/New_York"
+        )
         assert isinstance(js, str) and len(js) > 0
         assert "timezone" in js.lower() or "getTimezoneOffset" in js
 
     def test_build_locale_patch_returns_string(self):
         """build_locale_patch should return a non-empty JS string."""
-        try:
-            js = ScreenColorConsistency.build_locale_patch(locale="en-US")
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = ScreenColorConsistency.build_locale_patch(locale="en-US")
         assert isinstance(js, str) and len(js) > 0
 
     def test_different_screen_sizes_different_output(self):
         """Different screen dimensions produce different patches."""
-        try:
-            js1 = ScreenColorConsistency.build_screen_patch(
-                width=1920, height=1080, color_depth=24, pixel_ratio=1.0
-            )
-            js2 = ScreenColorConsistency.build_screen_patch(
-                width=390, height=844, color_depth=32, pixel_ratio=3.0
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js1 = ScreenColorConsistency.build_screen_patch(
+            width=1920, height=1080, color_depth=24, pixel_ratio=1.0
+        )
+        js2 = ScreenColorConsistency.build_screen_patch(
+            width=390, height=844, color_depth=32, pixel_ratio=3.0
+        )
         assert js1 != js2
 
     def test_color_consistency_patch_accepts_full_profile(self):
@@ -661,41 +534,22 @@ class TestScreenColorConsistencyRED:
             "timezone": "America/New_York",
             "locale": "en-US",
         }
-        try:
-            js = ScreenColorConsistency.build_color_consistency_patch(props=props)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        js = ScreenColorConsistency.build_color_consistency_patch(props=props)
         assert isinstance(js, str) and len(js) > 0
 
 
 class TestTLSFingerprintAlignerRED:
-    """TLSFingerprintAligner behavioral tests — RED phase (P2 deferred)."""
-
-    def test_build_patch_raises_not_implemented(self):
-        """build_patch raises NotImplementedError (P2 deferred)."""
-        with pytest.raises(NotImplementedError):
-            TLSFingerprintAligner.build_patch()
-
-    def test_align_cipher_suites_raises_not_implemented(self):
-        """align_cipher_suites raises NotImplementedError (P2 deferred)."""
-        with pytest.raises(NotImplementedError):
-            TLSFingerprintAligner.align_cipher_suites(proxy_geo="US-East")
+    """TLSFingerprintAligner behavioral tests — GREEN phase (P2 deferred)."""
 
     def test_build_patch_returns_empty_string(self):
         """build_patch should return an empty string (no JS for TLS)."""
-        try:
-            js = TLSFingerprintAligner.build_patch()
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase (P2)")
+        js = TLSFingerprintAligner.build_patch()
         assert isinstance(js, str)
         assert js == "", "TLS patch should be empty (no JS injection available)"
 
     def test_align_cipher_suites_returns_list(self):
         """align_cipher_suites should return a list of cipher suite strings."""
-        try:
-            suites = TLSFingerprintAligner.align_cipher_suites(proxy_geo="EU-West")
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase (P2)")
+        suites = TLSFingerprintAligner.align_cipher_suites(proxy_geo="EU-West")
         assert isinstance(suites, list)
         assert len(suites) > 0
         for s in suites:
@@ -704,16 +558,13 @@ class TestTLSFingerprintAlignerRED:
     @pytest.mark.parametrize("geo", ["US-East", "EU-West", "Asia-SE", "US-West"])
     def test_different_geo_different_suites(self, geo):
         """Different proxy geolocations should produce different cipher lists."""
-        try:
-            suites1 = TLSFingerprintAligner.align_cipher_suites(proxy_geo="US-East")
-            suites2 = TLSFingerprintAligner.align_cipher_suites(proxy_geo=geo)
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase (P2)")
+        suites1 = TLSFingerprintAligner.align_cipher_suites(proxy_geo="US-East")
+        suites2 = TLSFingerprintAligner.align_cipher_suites(proxy_geo=geo)
         if geo == "US-East":
             return  # Same geo, same suites
-        assert suites1 != suites2, (
-            f"Different geo '{geo}' should produce different suites than US-East"
-        )
+        assert suites1 != suites2
+        for s in suites2:
+            assert isinstance(s, str)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -722,15 +573,12 @@ class TestTLSFingerprintAlignerRED:
 
 
 class TestReRandomizationRED:
-    """Re-randomization on CDP connect and per-navigate — RED phase."""
+    """Re-randomization on CDP connect and per-navigate — GREEN phase."""
 
     def test_re_randomization_trigger_exists(self):
         """Re-randomization should be possible: different offsets per call."""
-        try:
-            patch1 = CanvasFingerprinter.build_patch(canvas_offset=(1, 0))
-            patch2 = CanvasFingerprinter.build_patch(canvas_offset=(3, 2))
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        patch1 = CanvasFingerprinter.build_patch(canvas_offset=(1, 0))
+        patch2 = CanvasFingerprinter.build_patch(canvas_offset=(3, 2))
         assert patch1 != patch2, (
             "Different canvas offsets should produce different patches "
             "(enables per-navigate re-randomization)"
@@ -756,39 +604,36 @@ class TestReRandomizationRED:
             "timezone": "America/New_York",
             "locale": "en-US",
         }
-        try:
-            canvas_js = CanvasFingerprinter.build_patch(
-                canvas_offset=fingerprint["canvas_offset"]
-            )
-            webgl_js = WebGLSpoofer.build_patch(
-                webgl_vendor=fingerprint["webgl_vendor"],
-                webgl_renderer=fingerprint["webgl_renderer"],
-            )
-            audio_js = AudioContextRandomizer.build_patch(
-                variance_pct=fingerprint["audio_variance_pct"]
-            )
-            navigator_js = NavigatorSpoofer.build_navigator_patch(
-                props={
-                    "user_agent": fingerprint["user_agent"],
-                    "platform": fingerprint["platform"],
-                    "language": fingerprint["language"],
-                    "languages": fingerprint["languages"],
-                    "hardware_concurrency": fingerprint["hardware_concurrency"],
-                    "device_memory": fingerprint["device_memory"],
-                }
-            )
-            screen_js = ScreenColorConsistency.build_color_consistency_patch(
-                props={
-                    "screen_width": fingerprint["screen_width"],
-                    "screen_height": fingerprint["screen_height"],
-                    "color_depth": fingerprint["color_depth"],
-                    "pixel_ratio": fingerprint["pixel_ratio"],
-                    "timezone": fingerprint["timezone"],
-                    "locale": fingerprint["locale"],
-                }
-            )
-        except NotImplementedError:
-            pytest.skip("Not implemented yet — RED phase")
+        canvas_js = CanvasFingerprinter.build_patch(
+            canvas_offset=fingerprint["canvas_offset"]
+        )
+        webgl_js = WebGLSpoofer.build_patch(
+            webgl_vendor=fingerprint["webgl_vendor"],
+            webgl_renderer=fingerprint["webgl_renderer"],
+        )
+        audio_js = AudioContextRandomizer.build_patch(
+            variance_pct=fingerprint["audio_variance_pct"]
+        )
+        navigator_js = NavigatorSpoofer.build_navigator_patch(
+            props={
+                "user_agent": fingerprint["user_agent"],
+                "platform": fingerprint["platform"],
+                "language": fingerprint["language"],
+                "languages": fingerprint["languages"],
+                "hardware_concurrency": fingerprint["hardware_concurrency"],
+                "device_memory": fingerprint["device_memory"],
+            }
+        )
+        screen_js = ScreenColorConsistency.build_color_consistency_patch(
+            props={
+                "screen_width": fingerprint["screen_width"],
+                "screen_height": fingerprint["screen_height"],
+                "color_depth": fingerprint["color_depth"],
+                "pixel_ratio": fingerprint["pixel_ratio"],
+                "timezone": fingerprint["timezone"],
+                "locale": fingerprint["locale"],
+            }
+        )
 
         checks = [
             ("canvas", canvas_js),

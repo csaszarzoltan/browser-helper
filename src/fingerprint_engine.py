@@ -14,11 +14,8 @@ Usage:
 
 from __future__ import annotations
 
-import hashlib
 import random
-from dataclasses import dataclass, field
-from typing import Any
-
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
 # Fingerprint Configuration
@@ -37,6 +34,14 @@ class FingerprintConfig:
         geolocation:        Optional {lat, lng} geolocation override.
         timezone:           Optional IANA timezone string (e.g. "America/New_York").
         locale:             Optional locale string (e.g. "en-US").
+        canvas_offset_x:    Canvas 2D noise X offset for profile fingerprints.
+        canvas_offset_y:    Canvas 2D noise Y offset for profile fingerprints.
+        hardware_concurrency: Navigator hardware concurrency override.
+        device_memory:      Navigator deviceMemory override.
+        screen_width:       Screen width override.
+        screen_height:      Screen height override.
+        color_depth:        Screen color depth override.
+        platform:           Navigator platform override.
     """
 
     canvas_noise_seed: int = 0
@@ -46,6 +51,27 @@ class FingerprintConfig:
     geolocation: dict | None = None
     timezone: str | None = None
     locale: str | None = None
+    canvas_offset_x: int = 0
+    canvas_offset_y: int = 0
+    hardware_concurrency: int = 0
+    device_memory: float = 0.0
+    screen_width: int = 0
+    screen_height: int = 0
+    color_depth: int = 0
+    platform: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> FingerprintConfig:
+        """Create config from a dict, ignoring unknown fields."""
+        valid_keys = {
+            "canvas_noise_seed", "webgl_vendor", "webgl_renderer",
+            "audio_sample_rate", "geolocation", "timezone", "locale",
+            "canvas_offset_x", "canvas_offset_y", "hardware_concurrency",
+            "device_memory", "screen_width", "screen_height",
+            "color_depth", "platform",
+        }
+        kwargs = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +211,9 @@ def _webgl_override_js(vendor: str, renderer: str) -> str:
     return f"""(function() {{
     'use strict';
     const getExt = HTMLCanvasElement.prototype.getContext;
+    const WEBGL_DEBUG_RENDERER_INFO = 0x9248;
+    const UNMASKED_VENDOR_WEBGL = 0x9245;
+    const UNMASKED_RENDERER_WEBGL = 0x9246;
     const vendorStr = '{escaped_vendor}';
     const rendererStr = '{escaped_renderer}';
     const origGetParameter = WebGLRenderingContext.prototype.getParameter;

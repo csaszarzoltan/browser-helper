@@ -3222,13 +3222,59 @@ async def get_proxy_stats():
 @app.post("/backend/switch")
 async def switch_backend(req: BackendSwitchRequest):
     """Switch the active automation backend ("cdp" or "playwright")."""
-    return backend_manager.switch(req.backend)
+    from fastapi.responses import JSONResponse
+
+    try:
+        result = backend_manager.switch(req.backend)
+        return result
+    except ValueError:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": f"Backend '{req.backend}' is not available"},
+        )
 
 
 @app.get("/backend/status")
 async def backend_status():
     """Return current backend status, available backends, and versions."""
     return backend_manager.get_status()
+
+
+# ---------------------------------------------------------------------------
+# Mouse Config (P1-2) – behavioral mouse movement
+# ---------------------------------------------------------------------------
+
+
+from behavioral_mouse import MouseConfig as _MouseConfig
+
+_mouse_config_instance = _MouseConfig()
+
+
+class MouseConfigRequest(BaseModel):
+    enabled: bool = True
+    speed: str = "normal"
+
+
+@app.post("/mouse/config")
+async def post_mouse_config(req: MouseConfigRequest):
+    """Update mouse movement configuration."""
+    from fastapi.responses import JSONResponse
+
+    global _mouse_config_instance
+    try:
+        _mouse_config_instance = _MouseConfig(enabled=req.enabled, speed=req.speed)
+        return _mouse_config_instance.to_dict()
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": f"Validation error: {exc}"},
+        )
+
+
+@app.get("/mouse/config")
+async def get_mouse_config():
+    """Return the current mouse configuration."""
+    return _mouse_config_instance.to_dict()
 
 
 # ---------------------------------------------------------------------------

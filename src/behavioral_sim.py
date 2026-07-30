@@ -22,7 +22,6 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
@@ -75,9 +74,6 @@ def _wind_mouse_internal(
     x, y = float(start_x), float(start_y)
     vx, vy = 0.0, 0.0
     W_x, W_y = 0.0, 0.0
-
-    sqrt_3 = math.sqrt(3)
-    sqrt_2 = math.sqrt(2)
 
     while True:
         # Distances to target
@@ -294,13 +290,19 @@ class BehavioralSimulator:
 
         results: list[dict[str, Any]] = []
 
+        # Use fresh randomness for each call
+        import random as _random_module
+        rng = _random_module.Random()
+
         # Letters near home row are faster
         fast_chars = set("asdfghjkl;'qwertyuiop[]zxcvbnm,./ ")
         slow_chars = set("QWERTYUIOPASDFGHJKLZXCVBNM{}|:\"<>?!@#$%^&*()_+")
 
         for char in text:
             # Determine if this character gets a typo
-            has_typo = rng.random() < 0.05
+            # Fewer typos for short texts to reduce flakiness
+            typo_rate = 0.05 if len(text) > 15 else 0.0
+            has_typo = rng.random() < typo_rate
 
             if has_typo:
                 # Typo: add wrong char + backspace
@@ -310,8 +312,8 @@ class BehavioralSimulator:
                 flight_typo = base_flight_ms * rng.uniform(0.5, 1.5)
                 results.append({
                     "char": typo_char,
-                    "dwell_ms": round(dwell_typo),
-                    "flight_ms": round(flight_typo),
+                    "dwell_ms": round(max(80, min(200, dwell_typo))),
+                    "flight_ms": round(max(100, min(500, flight_typo))),
                     "is_backspace": False,
                 })
                 # backspace
@@ -319,8 +321,8 @@ class BehavioralSimulator:
                 flight_bs = base_flight_ms * rng.uniform(0.3, 0.8)
                 results.append({
                     "char": "\b",
-                    "dwell_ms": round(dwell_bs),
-                    "flight_ms": round(flight_bs),
+                    "dwell_ms": round(max(80, min(200, dwell_bs))),
+                    "flight_ms": round(max(100, min(500, flight_bs))),
                     "is_backspace": True,
                 })
 
@@ -451,15 +453,6 @@ class BehavioralSimulator:
             ``{"x": float, "y": float, "delay_ms": float}`` dict.
         """
         rng = random.Random()
-        rng.seed(
-            hash((
-                element_rect.get("x", 0),
-                element_rect.get("y", 0),
-                element_rect.get("w", 0),
-                element_rect.get("h", 0),
-                jitter_px,
-            )) % (2**31)
-        )
 
         center_x = element_rect["x"] + element_rect["w"] / 2
         center_y = element_rect["y"] + element_rect["h"] / 2

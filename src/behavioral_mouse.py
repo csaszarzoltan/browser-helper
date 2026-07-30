@@ -4,8 +4,6 @@ Human Mouse Movement Middleware (P1-2).
 Provides Bezier-curve mouse paths with configurable speed profiles, overshoot,
 and jitter. Wraps ``Input.dispatchMouseEvent`` for human-like pointer motion.
 
-PRE-DEV STUB — All behavioral methods raise NotImplementedError.
-
 Usage::
 
     from behavioral_mouse import BehavioralMouse, MouseConfig
@@ -17,8 +15,10 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any
-
+import math
+import random
+import time
+from typing import Any, ClassVar
 
 # ---------------------------------------------------------------------------
 # Mouse Configuration
@@ -36,7 +36,7 @@ class MouseConfig:
     VALID_SPEEDS = frozenset({"slow", "normal", "fast"})
 
     # Base durations (ms) for each speed profile
-    SPEED_DURATIONS = {
+    SPEED_DURATIONS: ClassVar[dict[str, int]] = {
         "slow": 300,
         "normal": 150,
         "fast": 50,
@@ -138,7 +138,67 @@ class BehavioralMouse:
             each intermediate mouse-move event on the Bezier path.  When
             ``enabled=False``, returns a single immediate-move event.
         """
-        raise NotImplementedError("BehavioralMouse.move_to — not implemented yet")
+        if not self._config.enabled:
+            return self._raw_move_to(x, y)
+
+        # Start position (0, 0) is a reasonable default for a fresh session.
+        start_x: float = 0.0
+        start_y: float = 0.0
+
+        # Compute base number of steps based on distance
+        distance = math.sqrt((x - start_x) ** 2 + (y - start_y) ** 2)
+        num_steps = max(10, min(50, int(distance / 20)))
+
+        # Generate the Bezier path
+        path = self._generate_bezier_path(start_x, start_y, float(x), float(y), num_steps)
+
+        # Optionally apply overshoot
+        if self._should_overshoot():
+            overshoot_target = self._compute_overshoot_target(float(x), float(y))
+            overshoot_path = self._generate_bezier_path(
+                float(x), float(y),
+                overshoot_target[0], overshoot_target[1],
+                num_steps=max(5, num_steps // 2),
+            )
+            # Append overshoot and correct back
+            path = path + overshoot_path
+            correction = self._generate_bezier_path(
+                overshoot_target[0], overshoot_target[1],
+                float(x), float(y),
+                num_steps=max(5, num_steps // 2),
+            )
+            path = path + correction
+
+        # Generate inter-step delays
+        delays = self._inter_step_delays(len(path), self._config.base_duration_ms)
+
+        # Build dispatch events with jittered positions
+        events: list[dict[str, Any]] = []
+        for i, (px, py) in enumerate(path):
+            jx, jy = self._add_jitter((px, py))
+            params = self._make_dispatch_params(
+                "mouseMoved",
+                round(jx),
+                round(jy),
+            )
+            params["_delay"] = delays[i] if i < len(delays) else 0.0
+            events.append(params)
+
+        # If client is provided, dispatch events in real time
+        if client is not None:
+            for evt in events:
+                delay = evt.pop("_delay", 0.0)
+                if delay > 0:
+                    await self._sleep(delay)
+                await client._send_command("Input.dispatchMouseEvent", evt)
+
+        return events
+
+    async def _sleep(self, duration: float) -> None:
+        """Async sleep the given duration in seconds."""
+        import asyncio
+
+        await asyncio.sleep(duration)
 
     async def click(
         self,
@@ -161,7 +221,40 @@ class BehavioralMouse:
                  "move_events": int,
                  "duration_ms": float}
         """
-        raise NotImplementedError("BehavioralMouse.click — not implemented yet")
+        start_time = time.monotonic()
+
+        # First move to the target
+        move_events = await self.move_to(x, y, client=client)
+
+        # Small pre-click pause (human-like)
+        pause_ms = random.uniform(30, 80)
+        if client is not None:
+            await self._sleep(pause_ms / 1000.0)
+
+        # Mouse down
+        press_params = self._make_dispatch_params("mousePressed", x, y)
+        if client is not None:
+            await client._send_command("Input.dispatchMouseEvent", press_params)
+
+        # Inter-click delay
+        release_delay = random.uniform(20, 50) / 1000.0
+        if client is not None:
+            await self._sleep(release_delay)
+
+        # Mouse up
+        release_params = self._make_dispatch_params("mouseReleased", x, y)
+        if client is not None:
+            await client._send_command("Input.dispatchMouseEvent", release_params)
+
+        duration_ms = (time.monotonic() - start_time) * 1000
+
+        return {
+            "status": "ok",
+            "x": x,
+            "y": y,
+            "move_events": len(move_events) if isinstance(move_events, list) else 0,
+            "duration_ms": round(duration_ms, 2),
+        }
 
     # ── Bezier path generation ────────────────────────────────────────
 
@@ -186,9 +279,37 @@ class BehavioralMouse:
         Returns:
             List of (x, y) tuples forming the Bezier path.
         """
-        raise NotImplementedError(
-            "BehavioralMouse._generate_bezier_path — not implemented yet"
-        )
+        # Choose control points with slight natural curvature
+        dx = end_x - start_x
+        dy = end_y - start_y
+        offset = max(abs(dx), abs(dy)) * 0.2
+
+        cp1_x = start_x + dx * 0.25 + random.uniform(-offset, offset)
+        cp1_y = start_y + dy * 0.25 + random.uniform(-offset, offset)
+        cp2_x = start_x + dx * 0.75 + random.uniform(-offset, offset)
+        cp2_y = start_y + dy * 0.75 + random.uniform(-offset, offset)
+
+        # Evaluate cubic Bezier at t in [0, 1]
+        path: list[tuple[float, float]] = []
+        for i in range(num_steps):
+            t = i / (num_steps - 1) if num_steps > 1 else 0.0
+            inv_t = 1.0 - t
+
+            x = (
+                inv_t ** 3 * start_x
+                + 3 * inv_t ** 2 * t * cp1_x
+                + 3 * inv_t * t ** 2 * cp2_x
+                + t ** 3 * end_x
+            )
+            y = (
+                inv_t ** 3 * start_y
+                + 3 * inv_t ** 2 * t * cp1_y
+                + 3 * inv_t * t ** 2 * cp2_y
+                + t ** 3 * end_y
+            )
+            path.append((x, y))
+
+        return path
 
     @staticmethod
     def _add_jitter(
@@ -204,14 +325,14 @@ class BehavioralMouse:
         Returns:
             Jittered (x, y) coordinate.
         """
-        raise NotImplementedError("BehavioralMouse._add_jitter — not implemented yet")
+        jx = point[0] + random.uniform(-amplitude, amplitude)
+        jy = point[1] + random.uniform(-amplitude, amplitude)
+        return (jx, jy)
 
     @staticmethod
     def _should_overshoot() -> bool:
         """Return True ~15% of the time (overshoot probability)."""
-        raise NotImplementedError(
-            "BehavioralMouse._should_overshoot — not implemented yet"
-        )
+        return random.random() < BehavioralMouse.OVERSHOOT_PROBABILITY
 
     @staticmethod
     def _compute_overshoot_target(
@@ -228,9 +349,10 @@ class BehavioralMouse:
         Returns:
             (overshoot_x, overshoot_y) coordinates.
         """
-        raise NotImplementedError(
-            "BehavioralMouse._compute_overshoot_target — not implemented yet"
-        )
+        angle = random.uniform(0, 2 * math.pi)
+        ox = end_x + math.cos(angle) * overshoot_px
+        oy = end_y + math.sin(angle) * overshoot_px
+        return (ox, oy)
 
     # ── Timing ────────────────────────────────────────────────────────
 
@@ -251,9 +373,24 @@ class BehavioralMouse:
         Returns:
             List of *num_steps* delays in seconds.
         """
-        raise NotImplementedError(
-            "BehavioralMouse._inter_step_delays — not implemented yet"
-        )
+        if num_steps <= 1:
+            return [base_duration_ms / 1000.0]
+
+        # Use eased weights (sine easing for acceleration/deceleration)
+        weights: list[float] = []
+        for i in range(num_steps):
+            t = i / (num_steps - 1)
+            # Bell-like curve: low at edges, high in middle
+            weight = math.sin(t * math.pi) + 0.1
+            weights.append(weight)
+
+        total_weight = sum(weights)
+        delays_s: list[float] = []
+        for w in weights:
+            delay_ms = (w / total_weight) * base_duration_ms
+            delays_s.append(delay_ms / 1000.0)
+
+        return delays_s
 
     # ── Raw fallthrough ───────────────────────────────────────────────
 
@@ -263,7 +400,14 @@ class BehavioralMouse:
 
         Used when enabled=False.
         """
-        raise NotImplementedError("BehavioralMouse._raw_move_to — not implemented yet")
+        return [
+            {
+                "type": "mouseMoved",
+                "x": x,
+                "y": y,
+                "button": "none",
+            }
+        ]
 
     @staticmethod
     def _make_dispatch_params(
@@ -285,6 +429,10 @@ class BehavioralMouse:
         Returns:
             CDP-compatible parameter dict.
         """
-        raise NotImplementedError(
-            "BehavioralMouse._make_dispatch_params — not implemented yet"
-        )
+        return {
+            "type": event_type,
+            "x": x,
+            "y": y,
+            "button": button,
+            "clickCount": click_count,
+        }

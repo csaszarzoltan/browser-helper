@@ -49,6 +49,7 @@ class AntiDetectionProfile(Profile):
             resource_limits=data.get("resource_limits", {}),
             profile_type=data.get("profile_type", "standard"),
             fingerprint=data.get("fingerprint", {}),
+            fingerprint_config=data.get("fingerprint_config"),
         )
 
     def to_dict(self) -> dict:
@@ -56,6 +57,7 @@ class AntiDetectionProfile(Profile):
         base = super().to_dict()
         base["profile_type"] = self.profile_type
         base["fingerprint"] = dict(self.fingerprint)
+        base["fingerprint_config"] = self.fingerprint_config
         return base
 
 

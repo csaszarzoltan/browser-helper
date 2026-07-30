@@ -182,8 +182,8 @@ class ProfileManager:
         raw = self._data.get(name)
         if raw is None:
             return None
-        # Return AntiDetectionProfile when stored data includes profile_type
-        if "profile_type" in raw or "fingerprint" in raw:
+        # Return AntiDetectionProfile when stored data includes profile_type or non-null fingerprint
+        if "profile_type" in raw or (raw.get("fingerprint") is not None and raw.get("fingerprint") != {}):
             from anti_detection.profile_types import AntiDetectionProfile
             return AntiDetectionProfile.from_dict(raw)
         return Profile.from_dict(raw)
@@ -192,7 +192,7 @@ class ProfileManager:
         """Return all profiles as a list of Profile or AntiDetectionProfile."""
         result: list = []
         for raw in self._data.values():
-            if "profile_type" in raw or "fingerprint" in raw:
+            if "profile_type" in raw or (raw.get("fingerprint") is not None and raw.get("fingerprint") != {}):
                 from anti_detection.profile_types import AntiDetectionProfile
                 result.append(AntiDetectionProfile.from_dict(raw))
             else:
@@ -371,13 +371,59 @@ class ProfileManager:
         Uses realistic randomized values for all fingerprint fields.
         Optional *overrides* dict selectively overrides individual fields.
 
-        Raises ``ValueError`` if the profile does not exist.
+        Raises ``ValueError`` if the profile does not exist, if *overrides*
+        is not a dict or None, or if any override value fails validation.
 
         Returns the generated fingerprint dict.
         """
         raw = self._data.get(profile_name)
         if raw is None:
             raise ValueError(f"Profile {profile_name!r} does not exist")
+
+        # Validate overrides parameter
+        if overrides is None:
+            overrides = {}
+        if not isinstance(overrides, dict):
+            raise TypeError(
+                f"overrides must be a dict, got {type(overrides).__name__}"
+            )
+
+        # Validate override field names and values
+        known_fields = {
+            "canvas_offset_x", "canvas_offset_y", "webgl_vendor",
+            "webgl_renderer", "hardware_concurrency", "device_memory",
+            "screen_width", "screen_height", "color_depth",
+            "timezone", "platform",
+        }
+        known_platforms = {"Win32", "MacIntel", "Linux x86_64", "Linux armv8l"}
+
+        for fname, value in overrides.items():
+            if fname not in known_fields:
+                raise ValueError(f"Unknown fingerprint field: {fname!r}")
+
+            if fname == "canvas_offset_x":
+                if not isinstance(value, int):
+                    raise TypeError(f"canvas_offset_x must be int, got {type(value).__name__}")
+            elif fname == "canvas_offset_y":
+                if not isinstance(value, int):
+                    raise TypeError(f"canvas_offset_y must be int, got {type(value).__name__}")
+            elif fname == "hardware_concurrency":
+                if not isinstance(value, int) or value <= 0:
+                    raise ValueError(f"hardware_concurrency must be positive int, got {value!r}")
+            elif fname == "device_memory":
+                if not isinstance(value, (int, float)) or value <= 0:
+                    raise ValueError(f"device_memory must be positive number, got {value!r}")
+            elif fname == "color_depth":
+                if value not in (24, 30):
+                    raise ValueError(f"color_depth must be 24 or 30, got {value!r}")
+            elif fname == "timezone":
+                if not isinstance(value, str) or "/" not in value:
+                    raise ValueError(f"timezone must be IANA format (e.g. 'America/New_York'), got {value!r}")
+            elif fname == "platform":
+                if value not in known_platforms:
+                    raise ValueError(f"platform must be one of {known_platforms}, got {value!r}")
+            elif fname == "screen_width" and (not isinstance(value, int) or value < 800):
+                raise ValueError(f"screen_width must be positive int >= 800, got {value!r}")
 
         import random
 
