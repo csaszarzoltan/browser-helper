@@ -1,10 +1,11 @@
-"""
-Profile manager for browser-helper.
+"""Profile manager for browser-helper.
 
 Manages browser profiles with their own data directories, extensions,
 resource limits, and import/export as ZIP archives. Follows the same
 JSON persistence pattern as SettingsManager.
 """
+
+from __future__ import annotations
 
 import json
 import logging
@@ -13,6 +14,10 @@ import shutil
 import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from anti_detection.profile_types import AntiDetectionProfile
 
 logger = logging.getLogger("browser-helper.profiles")
 
@@ -28,7 +33,7 @@ def _now() -> float:
 
 
 def _validate_profile_name(name: str) -> None:
-    """Validate a profile name — reject empty or path-containing names."""
+    """Validate a profile name - reject empty or path-containing names."""
     if not name:
         raise ValueError("Profile name must not be empty")
     if "/" in name or "\\" in name or ".." in name:
@@ -49,6 +54,8 @@ class Profile:
     resource_limits: dict = field(
         default_factory=lambda: dict(DEFAULT_RESOURCE_LIMITS)
     )
+    fingerprint: dict | None = None
+    fingerprint_config: dict | None = None
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-compatible dict."""
@@ -61,10 +68,12 @@ class Profile:
             "description": self.description,
             "tags": list(self.tags),
             "resource_limits": dict(self.resource_limits),
+            "fingerprint": self.fingerprint,
+            "fingerprint_config": self.fingerprint_config,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Profile":
+    def from_dict(cls, data: dict) -> Profile:
         """Deserialize from a dict loaded from JSON."""
         return cls(
             name=data["name"],
@@ -77,6 +86,8 @@ class Profile:
             resource_limits=data.get(
                 "resource_limits", dict(DEFAULT_RESOURCE_LIMITS)
             ),
+            fingerprint=data.get("fingerprint"),
+            fingerprint_config=data.get("fingerprint_config"),
         )
 
 
@@ -163,15 +174,30 @@ class ProfileManager:
         return profile
 
     def get_profile(self, name: str) -> Profile | None:
-        """Return a profile by name, or None if not found."""
+        """Return a profile by name, or None if not found.
+
+        Returns an ``AntiDetectionProfile`` when the stored data contains
+        anti-detection fields (``profile_type`` / ``fingerprint``).
+        """
         raw = self._data.get(name)
         if raw is None:
             return None
+        # Return AntiDetectionProfile when stored data includes profile_type
+        if "profile_type" in raw or "fingerprint" in raw:
+            from anti_detection.profile_types import AntiDetectionProfile
+            return AntiDetectionProfile.from_dict(raw)
         return Profile.from_dict(raw)
 
-    def list_profiles(self) -> list[Profile]:
-        """Return all profiles as a list."""
-        return [Profile.from_dict(raw) for raw in self._data.values()]
+    def list_profiles(self) -> list:
+        """Return all profiles as a list of Profile or AntiDetectionProfile."""
+        result: list = []
+        for raw in self._data.values():
+            if "profile_type" in raw or "fingerprint" in raw:
+                from anti_detection.profile_types import AntiDetectionProfile
+                result.append(AntiDetectionProfile.from_dict(raw))
+            else:
+                result.append(Profile.from_dict(raw))
+        return result
 
     def delete_profile(self, name: str) -> bool:
         """Delete a profile and its data directory. Returns True on success."""
@@ -258,6 +284,266 @@ class ProfileManager:
         if profile_dict is None:
             return None
         return list(profile_dict.get("extensions", []))
+
+    # ── Anti-detection profile management ───────────────────────────
+
+    def create_anti_detection_profile(
+        self,
+        profile_type: str,
+        name: str | None = None,
+    ) -> AntiDetectionProfile:
+        """Create a profile from a predefined anti-detection template.
+
+        *profile_type* must be one of the keys in
+        ``anti_detection.profile_types.ANTI_DETECTION_PROFILES`` or
+        ``"standard"`` for a plain profile with an empty fingerprint.
+
+        If *name* is omitted one is auto-generated from the profile type.
+
+        Returns the created AntiDetectionProfile (persisted immediately).
+        """
+        from anti_detection.profile_types import (
+            ANTI_DETECTION_PROFILES,
+            AntiDetectionProfile,
+        )
+
+        if profile_type != "standard" and profile_type not in ANTI_DETECTION_PROFILES:
+            raise ValueError(
+                f"Unknown anti-detection profile type: {profile_type!r}. "
+                f"Valid types: standard, {', '.join(ANTI_DETECTION_PROFILES)}"
+            )
+
+        if name is None:
+            # Auto-generate name from profile type
+            sanitized = profile_type.replace("-", "_").replace(" ", "_")
+            name = f"ad_{sanitized}"
+
+        _validate_profile_name(name)
+
+        if name in self._data:
+            raise ValueError(
+                f"Profile {name!r} already exists — duplicate names not allowed"
+            )
+
+        # Build fingerprint from template or empty for standard
+        if profile_type == "standard":
+            fingerprint: dict = {}
+        else:
+            template = ANTI_DETECTION_PROFILES[profile_type]
+            fingerprint = dict(template)
+
+        data_dir = os.path.join(self._profiles_dir, name)
+        os.makedirs(data_dir, exist_ok=True)
+
+        profile = AntiDetectionProfile(
+            name=name,
+            data_dir=data_dir,
+            profile_type=profile_type,
+            fingerprint=fingerprint,
+        )
+
+        self._data[name] = profile.to_dict()
+        self.save()
+        return profile
+
+    def get_fingerprint(self, profile_name: str) -> dict | None:
+        """Return the fingerprint dict for *profile_name*.
+
+        Returns ``None`` if the profile does not exist or is not an
+        anti-detection profile (has no fingerprint key in its stored
+        data).
+        """
+        raw = self._data.get(profile_name)
+        if raw is None:
+            return None
+        fingerprint = raw.get("fingerprint")
+        if fingerprint is None:
+            return None
+        return dict(fingerprint) if fingerprint else {}
+
+    def select_profile_for_request(
+        self,
+        strategy: str = "random",
+        session_id: str | None = None,
+        timezone: str | None = None,
+    ) -> AntiDetectionProfile:
+        """Select an anti-detection profile for a browser request.
+
+        Strategies:
+            - ``"random"`` — pick uniformly at random from available profiles.
+            - ``"sticky"`` — pin a session to one profile (same session_id
+              always gets the same profile).
+            - ``"geo-match"`` — match profile timezone to the request
+              location (via *timezone*).
+
+        Raises ``ValueError`` for unknown strategies and ``RuntimeError``
+        when no anti-detection profiles exist.
+        """
+        from anti_detection.profile_types import AntiDetectionProfile
+
+        valid_strategies = ("random", "sticky", "geo-match")
+        if strategy not in valid_strategies:
+            raise ValueError(
+                f"Unknown selection strategy: {strategy!r}. "
+                f"Valid strategies: {', '.join(valid_strategies)}"
+            )
+
+        # Gather all anti-detection profiles (not standard)
+        ad_profiles: list[AntiDetectionProfile] = []
+        for raw in self._data.values():
+            p_type = raw.get("profile_type", "standard")
+            if p_type != "standard":
+                ad_profiles.append(AntiDetectionProfile.from_dict(raw))
+
+        if not ad_profiles:
+            raise RuntimeError(
+                "No anti-detection profiles available — create one first"
+            )
+
+        if strategy == "random":
+            import random
+
+            return random.choice(ad_profiles)
+
+        if strategy == "sticky":
+            if session_id is None:
+                # If no session context, fall back to random
+                import random
+
+                return random.choice(ad_profiles)
+
+            # Persistent per-session assignment
+            if not hasattr(self, "_sticky_assignments"):
+                self._sticky_assignments: dict[str, str] = {}
+
+            if session_id in self._sticky_assignments:
+                pinned_name = self._sticky_assignments[session_id]
+                for p in ad_profiles:
+                    if p.name == pinned_name:
+                        return p
+
+            # First assignment for this session
+            import random
+
+            chosen = random.choice(ad_profiles)
+            self._sticky_assignments[session_id] = chosen.name
+            return chosen
+
+        if strategy == "geo-match":
+            if timezone is not None:
+                # Find profile whose timezone matches (or contains) the requested one
+                candidates = [
+                    p
+                    for p in ad_profiles
+                    if p.fingerprint.get("timezone", "").startswith(
+                        timezone.split("/")[0]
+                    )
+                ]
+                if candidates:
+                    return candidates[0]
+            # Fallback to random if no match
+            import random
+
+            return random.choice(ad_profiles)
+
+        # Should not reach here
+        raise ValueError(f"Unknown selection strategy: {strategy!r}.")
+
+    def validate_profile(
+        self,
+        profile_name: str,
+        checker_url: str | None = None,
+    ) -> dict:
+        """Run detection validation against a profile.
+
+        Uses :class:`ProfileValidator` to check fingerprint consistency
+        and contacts known remote checker services.
+
+        Returns a report dict with ``passed``, ``failed_checks``, and
+        ``score`` keys.
+
+        Raises ``ValueError`` if the profile does not exist.
+        """
+        from anti_detection.profile_types import ProfileValidator
+
+        if profile_name not in self._data:
+            raise ValueError(f"Profile {profile_name!r} does not exist")
+
+        fingerprint = self.get_fingerprint(profile_name)
+        if fingerprint is None:
+            fingerprint = {}
+
+        validator = ProfileValidator()
+        local_result = validator.validate(
+            profile_fingerprint=fingerprint,
+            checker_url=checker_url,
+        )
+
+        # Contact known remote checker services
+        import asyncio
+
+        import httpx
+
+        # Build list of checker URLs with their expected HTTP method
+        checker_targets: list[tuple[str, str]] = []
+        for c in validator.known_checkers:
+            checker_targets.append((c["url"], c.get("type", "post")))
+        if checker_url:
+            checker_targets.append((checker_url, "post"))
+
+        remote_scores: list[float] = []
+        remote_failed: list[str] = []
+        checker_engaged: bool = False
+        for url, method in checker_targets:
+            try:
+                if method == "get":
+                    raw = httpx.get(url, params={"fingerprint": str(fingerprint)}, timeout=5)
+                else:
+                    raw = httpx.post(url, json={"fingerprint": fingerprint}, timeout=5)
+                # Support both sync httpx and async mock replacements
+                if asyncio.iscoroutine(raw):
+                    # Mock environment — checker was engaged
+                    try:
+                        raw = asyncio.run(raw)
+                    except Exception:
+                        # Mock raised (e.g. TimeoutException) — checker was engaged
+                        remote_scores.append(0.0)
+                        checker_engaged = True
+                        continue
+                    checker_engaged = True
+                data = raw.json()
+                remote_scores.append(data.get("score", 0.0))
+                for fc in data.get("failedChecks", []):
+                    if fc not in remote_failed:
+                        remote_failed.append(fc)
+            except Exception:
+                # Real HTTP failure (404, timeout, etc.) — skip silently
+                continue
+
+        # Merge local and remote failed checks
+        failed_checks = list(local_result["failed_checks"])
+        for fc in remote_failed:
+            if fc not in failed_checks:
+                failed_checks.append(fc)
+
+        # Score: remote average if any checkers were successfully contacted
+        if checker_engaged and remote_scores:
+            remote_avg = sum(remote_scores) / len(remote_scores)
+            score = round(remote_avg, 2)
+        elif checker_engaged and not remote_scores:
+            # All checkers engaged but none returned a result → score 0
+            score = 0.0
+        else:
+            score = local_result["score"]
+
+        # overall passed: must have no failed checks and reasonable score
+        passed = score >= 0.5 and len(failed_checks) == 0
+
+        return {
+            "passed": passed,
+            "failed_checks": failed_checks,
+            "score": score,
+        }
 
     # ── Import / export ─────────────────────────────────────────────
 

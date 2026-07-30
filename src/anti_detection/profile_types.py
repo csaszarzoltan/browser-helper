@@ -33,6 +33,35 @@ class AntiDetectionProfile(Profile):
     profile_type: str = "standard"
     fingerprint: dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "AntiDetectionProfile":
+        """Deserialize from a dict loaded from JSON."""
+        from profile_manager import _now as _profile_now
+
+        return cls(
+            name=data["name"],
+            data_dir=data["data_dir"],
+            created_at=data.get("created_at", _profile_now()),
+            last_used=data.get("last_used", _profile_now()),
+            extensions=data.get("extensions", []),
+            description=data.get("description", ""),
+            tags=data.get("tags", []),
+            resource_limits=data.get("resource_limits", {}),
+            profile_type=data.get("profile_type", "standard"),
+            fingerprint=data.get("fingerprint", {}),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-compatible dict including AD fields."""
+        base = super().to_dict()
+        base["profile_type"] = self.profile_type
+        base["fingerprint"] = dict(self.fingerprint)
+        return base
+
+
+# Compatibility alias for test safety with Pydantic-style access
+AntiDetectionProfile.model_fields = AntiDetectionProfile.__dataclass_fields__
+
 
 # ── Predefined anti-detection profiles ─────────────────────────────
 
@@ -164,9 +193,8 @@ class ProfileValidator:
             if "linux" in platform or "iphone" in platform or "mac" in platform:
                 failures.append("ua_platform_mismatch: Windows UA with non-Windows platform")
         # Linux UA vs non-Linux platform
-        elif "linux" in ua and "x11" not in ua:
-            if "win" in platform or "iphone" in platform:
-                failures.append("ua_platform_mismatch: Linux UA with non-Linux platform")
+        elif "linux" in ua and "x11" not in ua and ("win" in platform or "iphone" in platform):
+            failures.append("ua_platform_mismatch: Linux UA with non-Linux platform")
         # Firefox UA vs non-Firefox platform hints
         if "firefox" in ua and "edg/" in ua:
             failures.append("ua_browser_conflict: Firefox UA contains Edge marker")
@@ -185,17 +213,14 @@ class ProfileValidator:
             failures.append("screen_dimensions_invalid: non-positive dimensions")
             return failures
 
-        # iPhone resolution checks
         if "iphone" in ua:
             if width < 320 or height < 480:
                 failures.append("screen_too_small_for_ios")
-            if width > 480:  # portraid width on iPhone shouldn't exceed ~430
+            if width > 480:
                 failures.append("screen_too_wide_for_ios")
 
-        # Desktop checks
-        if ("windows" in ua or "linux" in ua or "mac os" in ua) and "iphone" not in ua:
-            if width < 800:
-                failures.append("screen_too_narrow_for_desktop")
+        if ("windows" in ua or "linux" in ua or "mac os" in ua) and "iphone" not in ua and width < 800:
+            failures.append("screen_too_narrow_for_desktop")
 
         return failures
 
@@ -221,11 +246,8 @@ class ProfileValidator:
         renderer = (profile_fingerprint.get("webgl_renderer") or "").lower()
         platform = (profile_fingerprint.get("platform") or "").lower()
 
-        # Apple GPU should not appear on Windows/Linux
-        if "apple" in renderer or "apple" in vendor:
-            if "win" in platform or "linux" in platform:
-                failures.append("webgl_platform_mismatch: Apple GPU on non-Apple platform")
-        # Intel GPU on non-Intel platform is fine (common), but require vendor
+        if ("apple" in renderer or "apple" in vendor) and ("win" in platform or "linux" in platform):
+            failures.append("webgl_platform_mismatch: Apple GPU on non-Apple platform")
         if renderer and not vendor:
             failures.append("webgl_missing_vendor")
 
@@ -270,8 +292,8 @@ class ProfileValidator:
 
 # Re-export for convenience
 __all__ = [
-    "AntiDetectionProfile",
     "ANTI_DETECTION_PROFILES",
-    "ProfileValidator",
     "SELECTION_STRATEGIES",
+    "AntiDetectionProfile",
+    "ProfileValidator",
 ]

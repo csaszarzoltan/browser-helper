@@ -16,8 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-import pytest
+import typing
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Expected FingerprintConfig field names (mirror existing FINGERPRINT_FIELDS)
@@ -231,7 +232,6 @@ class TestFingerprintConfigPersistence:
     def test_save_persists_fingerprint_config(self, pm, storage_dir):
         """Profile with fingerprint_config should persist it in JSON."""
         pm.create_profile("persist-test")
-        # Set fingerprint_config via internal dict (dev's API may differ)
         pm._data["persist-test"]["fingerprint_config"] = dict(SAMPLE_CONFIG)
         pm.save()
 
@@ -262,7 +262,6 @@ class TestFingerprintConfigPersistence:
     def test_save_without_fingerprint_config_no_error(self, pm, storage_dir):
         """Profile without fingerprint_config should save and reload fine."""
         pm.create_profile("no-config")
-
         from profile_manager import ProfileManager
 
         pm2 = ProfileManager(storage_dir=storage_dir)
@@ -295,11 +294,11 @@ class TestFingerprintConfigImportExport:
 
     def test_export_includes_fingerprint_config(self, pm, tmp_path):
         """Exported ZIP profiles.json should contain fingerprint_config."""
+        import zipfile
+
         pm.create_profile("fp-export")
         pm._data["fp-export"]["fingerprint_config"] = dict(SAMPLE_CONFIG)
         pm.save()
-
-        import zipfile
 
         export_path = str(tmp_path / "fp-export.zip")
         pm.export_profile("fp-export", export_path)
@@ -313,8 +312,9 @@ class TestFingerprintConfigImportExport:
 
     def test_import_restores_fingerprint_config(self, pm, tmp_path, storage_dir):
         """Imported profile should retain fingerprint_config."""
-        pm.create_profile("source")
+
         cfg = {"timezone": "Asia/Shanghai", "screen_width": 2560}
+        pm.create_profile("source")
         pm._data["source"]["fingerprint_config"] = cfg
         pm.save()
 
@@ -329,8 +329,9 @@ class TestFingerprintConfigImportExport:
 
     def test_import_restores_after_reload(self, pm, tmp_path, storage_dir):
         """fingerprint_config should survive import + reload cycle."""
-        pm.create_profile("src")
+
         cfg = {"platform": "MacIntel", "timezone": "US/Eastern"}
+        pm.create_profile("src")
         pm._data["src"]["fingerprint_config"] = cfg
         pm.save()
 
@@ -347,11 +348,11 @@ class TestFingerprintConfigImportExport:
 
     def test_export_without_fingerprint_config(self, pm, tmp_path):
         """Exporting a profile without fingerprint_config should work."""
+        import zipfile
+
         pm.create_profile("plain")
         export_path = str(tmp_path / "plain.zip")
         pm.export_profile("plain", export_path)
-
-        import zipfile
 
         with zipfile.ZipFile(export_path, "r") as zf:
             meta = json.loads(zf.read("profiles.json"))
@@ -361,13 +362,12 @@ class TestFingerprintConfigImportExport:
 
     def test_import_without_fingerprint_config(self, pm, tmp_path):
         """Importing legacy export without fingerprint_config should work."""
-        pm.create_profile("legacy")
+        import zipfile
+
         export_path = str(tmp_path / "legacy.zip")
         pm.export_profile("legacy", export_path)
 
         # Strip fingerprint_config from export
-        import zipfile
-
         stripped_path = str(tmp_path / "legacy-stripped.zip")
         with zipfile.ZipFile(export_path, "r") as zf_src:
             meta = json.loads(zf_src.read("profiles.json"))
@@ -449,21 +449,15 @@ class TestFingerprintConfigSchema:
 
     def test_fingerprint_config_importable(self):
         """FingerprintConfig should be importable from fingerprint_engine."""
-        try:
-            from fingerprint_engine import FingerprintConfig
-        except ImportError:
-            from profile_manager import FingerprintConfig as _F
-            FingerprintConfig = _F
-        # Just being importable is the interface test
-        assert True
+        import importlib
+
+        assert importlib.util.find_spec("fingerprint_engine") is not None, (
+            "FingerprintConfig must exist in fingerprint_engine module"
+        )
 
     def test_fingerprint_config_has_known_fields(self):
         """FingerprintConfig should define all known fingerprint fields."""
-        try:
-            from fingerprint_engine import FingerprintConfig
-        except ImportError:
-            from profile_manager import FingerprintConfig as _F
-            FingerprintConfig = _F
+        from fingerprint_engine import FingerprintConfig
 
         # Check that FingerprintConfig defines the expected fields
         # It could be a TypedDict, dataclass, Pydantic model, or simple list
@@ -491,11 +485,7 @@ class TestFingerprintConfigSchema:
 
     def test_fingerprint_config_validates_dict(self):
         """FingerprintConfig should validate a dict of config values."""
-        try:
-            from fingerprint_engine import FingerprintConfig
-        except ImportError:
-            from profile_manager import FingerprintConfig as _F
-            FingerprintConfig = _F
+        from fingerprint_engine import FingerprintConfig
 
         # Should not raise for valid fields
         valid_config = {"timezone": "Europe/Berlin", "screen_width": 1920}
@@ -516,11 +506,7 @@ class TestFingerprintConfigSchema:
 
     def test_fingerprint_config_rejects_unknown(self):
         """FingerprintConfig should reject unknown field names."""
-        try:
-            from fingerprint_engine import FingerprintConfig
-        except ImportError:
-            from profile_manager import FingerprintConfig as _F
-            FingerprintConfig = _F
+        from fingerprint_engine import FingerprintConfig
 
         invalid_config = {"nonexistent_field": "value"}
         if hasattr(FingerprintConfig, "model_validate"):
@@ -546,10 +532,8 @@ class TestGetFingerprintConfig:
     async def test_get_returns_config(self, pm_with_config, storage_dir):
         """GET should return existing fingerprint_config."""
         from httpx import ASGITransport, AsyncClient
-        from main import app
 
-        # Override profile manager in the app
-        app.dependency_overrides = {}
+        from main import app
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -563,6 +547,7 @@ class TestGetFingerprintConfig:
     async def test_get_unconfigured_returns_empty(self, pm):
         """GET on profile without config should return null/empty."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("fresh")
@@ -579,6 +564,7 @@ class TestGetFingerprintConfig:
     async def test_get_nonexistent_404(self):
         """GET on non-existent profile should return 404."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         transport = ASGITransport(app=app)
@@ -590,6 +576,7 @@ class TestGetFingerprintConfig:
     async def test_get_returns_same_as_profile_list(self, pm_with_config, storage_dir):
         """Profile list should include fingerprint_config field matching GET."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         transport = ASGITransport(app=app)
@@ -611,6 +598,7 @@ class TestGetFingerprintConfig:
     async def test_get_returns_dict(self, pm_with_config, storage_dir):
         """GET response should always return a dict with fingerprint_config key."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         transport = ASGITransport(app=app)
@@ -628,17 +616,18 @@ class TestGetFingerprintConfig:
 class TestPutFingerprintConfig:
     """PUT /profiles/{name}/fingerprint — update fingerprint config."""
 
-    VALID_CONFIG = {"timezone": "Europe/Budapest", "screen_width": 2560}
+    VALID_CONFIG: typing.ClassVar[dict] = {"timezone": "Europe/Budapest", "screen_width": 2560}
 
     @pytest.mark.asyncio
     async def test_put_sets_config(self, pm):
         """PUT should set fingerprint_config on the profile."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("config-me")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http/test") as client:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.put(
                 "/profile/config-me/fingerprint",
                 json=self.VALID_CONFIG,
@@ -651,6 +640,7 @@ class TestPutFingerprintConfig:
     async def test_put_then_get_returns_same(self, pm):
         """PUT then GET should return the same config."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("roundtrip")
@@ -670,6 +660,7 @@ class TestPutFingerprintConfig:
     async def test_put_empty_dict(self, pm):
         """PUT with empty dict should clear/reset the config."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("clear-me")
@@ -694,6 +685,7 @@ class TestPutFingerprintConfig:
     async def test_put_replaces_existing_config(self, pm):
         """PUT should fully replace existing config, not merge."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("replace-me")
@@ -720,6 +712,7 @@ class TestPutFingerprintConfig:
     async def test_put_unknown_field_rejected(self, pm):
         """PUT with unknown field names should be rejected with 422."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("validate-me")
@@ -737,6 +730,7 @@ class TestPutFingerprintConfig:
     async def test_put_non_dict_rejected(self, pm):
         """PUT with non-dict body should be rejected with 422."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("type-check")
@@ -754,6 +748,7 @@ class TestPutFingerprintConfig:
     async def test_put_list_rejected(self, pm):
         """PUT with a JSON array should be rejected."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("array-check")
@@ -769,6 +764,7 @@ class TestPutFingerprintConfig:
     async def test_put_nonexistent_profile_404(self):
         """PUT on non-existent profile should return 404."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         transport = ASGITransport(app=app)
@@ -783,6 +779,7 @@ class TestPutFingerprintConfig:
     async def test_put_persists_restart(self, pm, storage_dir):
         """Config set via PUT should survive ProfileManager reload."""
         from httpx import ASGITransport, AsyncClient
+
         from main import app
 
         pm.create_profile("persist")
@@ -815,19 +812,15 @@ class TestFingerprintEngine:
 
     def test_fingerprint_engine_importable(self):
         """FingerprintEngine should be importable from fingerprint_engine module."""
-        try:
-            from fingerprint_engine import FingerprintEngine
-        except ImportError:
-            # Also accept it in headless_manager
-            from headless_manager import FingerprintEngine
-        assert True
+        import importlib
+
+        assert importlib.util.find_spec("fingerprint_engine") is not None, (
+            "FingerprintEngine must exist in fingerprint_engine module"
+        )
 
     def test_generate_all_scripts_method_exists(self):
         """FingerprintEngine should have generate_all_scripts class/static method."""
-        try:
-            from fingerprint_engine import FingerprintEngine
-        except ImportError:
-            from headless_manager import FingerprintEngine
+        from fingerprint_engine import FingerprintEngine
 
         assert hasattr(FingerprintEngine, "generate_all_scripts"), (
             "FingerprintEngine must have generate_all_scripts method"
@@ -836,10 +829,7 @@ class TestFingerprintEngine:
 
     def test_generate_all_scripts_returns_list(self):
         """generate_all_scripts should return a list of script strings."""
-        try:
-            from fingerprint_engine import FingerprintEngine
-        except ImportError:
-            from headless_manager import FingerprintEngine
+        from fingerprint_engine import FingerprintEngine
 
         config = {"timezone": "America/New_York", "screen_width": 1920}
         scripts = FingerprintEngine.generate_all_scripts(config)
@@ -853,20 +843,14 @@ class TestFingerprintEngine:
 
     def test_generate_all_scripts_empty_config_returns_list(self):
         """Even with empty config, generate_all_scripts should return a list."""
-        try:
-            from fingerprint_engine import FingerprintEngine
-        except ImportError:
-            from headless_manager import FingerprintEngine
+        from fingerprint_engine import FingerprintEngine
 
         scripts = FingerprintEngine.generate_all_scripts({})
         assert isinstance(scripts, list)
 
     def test_generate_all_scripts_none_config_returns_list(self):
         """With None config, generate_all_scripts should return an empty list (no injection)."""
-        try:
-            from fingerprint_engine import FingerprintEngine
-        except ImportError:
-            from headless_manager import FingerprintEngine
+        from fingerprint_engine import FingerprintEngine
 
         scripts = FingerprintEngine.generate_all_scripts(None)
         assert isinstance(scripts, list)
@@ -878,9 +862,6 @@ class TestFingerprintEngineIntegration:
     @pytest.mark.asyncio
     async def test_launch_without_config_no_injection(self, pm):
         """Sessions without fingerprint_config should not inject scripts."""
-        from headless_manager import HeadlessManager
-
-        mgr = HeadlessManager(max_sessions=0)  # Prevent actual launch
         # No config — no fingerprint scripts
         # This interface test just checks the path doesn't crash
         assert True
@@ -980,6 +961,7 @@ class TestCDPScriptInjection:
 
         if method_name:
             import inspect
+
             sig = inspect.signature(getattr(HeadlessManager, method_name))
             params = list(sig.parameters.keys())
             # Should accept at least 'scripts' or 'self' + config/scripts

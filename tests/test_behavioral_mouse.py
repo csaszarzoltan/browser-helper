@@ -4,8 +4,8 @@ Pre-development interface + behavioral tests for Human Mouse Movement Middleware
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  RED-PHASE PRE-DEV TESTS                                           ║
 ║                                                                    ║
-║  Interface tests (green checkmark)    → verify API contracts       ║
-║  Behavioral tests (red X)             → fail with NotImplemented   ║
+║  Interface tests (green checkmark)    verify API contracts         ║
+║  Behavioral tests (red X)             fail with NotImplemented     ║
 ║                                        Error until impl is done    ║
 ║                                                                    ║
 ║  Feature: P1-2 Human Mouse Movement Middleware                     ║
@@ -16,10 +16,9 @@ Pre-development interface + behavioral tests for Human Mouse Movement Middleware
 """
 
 import inspect
-import math
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -27,8 +26,6 @@ import pytest_asyncio
 from httpx import ASGITransport
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-# Shared helpers
 
 ROUTE_EXCLUDE_PREFIXES = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 
@@ -421,7 +418,7 @@ class TestMoveToClick:
 
 
 # ===================================================================
-# SECTION 9 - DISABLED MODE / RAW FALLTHROUGH (red: NotImplementedError)
+# SECTION 9 - DISABLED MODE / RAW FALLTHROUGH (red: NotImplemented)
 # ===================================================================
 
 
@@ -470,7 +467,7 @@ class TestEventDispatch:
             BehavioralMouse, "_make_dispatch_params",
             staticmethod(lambda *a, **kw: mock_ret),
         )
-        result = BehavioralMouse._make_dispatch_params("mouseMoved", 100, 200)  # type: ignore
+        result = BehavioralMouse._make_dispatch_params("mouseMoved", 100, 200)
         assert isinstance(result, dict)
         assert result.get("type") == "mouseMoved"
         assert "x" in result
@@ -483,7 +480,7 @@ class TestEventDispatch:
             BehavioralMouse, "_make_dispatch_params",
             staticmethod(lambda *a, **kw: mock_ret),
         )
-        result = BehavioralMouse._make_dispatch_params("mousePressed", 100, 200)  # type: ignore
+        result = BehavioralMouse._make_dispatch_params("mousePressed", 100, 200)
         assert result.get("type") in ("mouseMoved", "mousePressed", "mouseReleased")
 
 
@@ -493,7 +490,7 @@ class TestEventDispatch:
 
 
 class TestConfigPersistence:
-    """MouseConfig serialization round-trips — should pass."""
+    """MouseConfig serialization round-trips - should pass."""
 
     def test_to_dict_round_trip(self):
         from behavioral_mouse import MouseConfig
@@ -520,13 +517,13 @@ class TestConfigPersistence:
 
 
 # ===================================================================
-# SECTION 12 - API ENDPOINT BEHAVIOR (red: 404 - routes not registered)
+# SECTION 12 - API ENDPOINT BEHAVIOR (red: 404 until routes registered)
 # ===================================================================
 
 
 @pytest.mark.asyncio
 class TestMouseConfigApiBehavior:
-    """Mouse config REST API endpoints — 404 until routes are added."""
+    """Mouse config REST API endpoints - 404 until routes are added."""
 
     async def test_post_mouse_config_response(self, async_client):
         resp = await async_client.post(
@@ -554,7 +551,7 @@ class TestMouseConfigApiBehavior:
             json={"enabled": True, "speed": "turbo"},
         )
         assert resp.status_code in (422, 404), (
-            f"Invalid speed → 422/404, got {resp.status_code}: {resp.text}"
+            f"Invalid speed: {resp.status_code}: {resp.text}"
         )
 
     async def test_post_empty_body(self, async_client):

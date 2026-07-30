@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from cdp_client import CDPClient, CDPDisconnectedError, CDPError
 
-
 # =========================================================================
 # Interface tests — contract existence and signatures
 # These RED-phase tests fail until connect_remote() and connection_type exist.

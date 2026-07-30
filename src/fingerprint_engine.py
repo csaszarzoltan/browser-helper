@@ -4,32 +4,18 @@ FingerprintEngine — Per-session fingerprint noise generation and CDP injection
 Generates per-session seeded noise for Canvas, WebGL, and AudioContext,
 then produces JS patches for CDP ``Page.addScriptToEvaluateOnNewDocument``.
 
-PRE-DEV STUB — All behavioral methods raise NotImplementedError.
-
 Usage:
     from fingerprint_engine import FingerprintConfig, FingerprintEngine
 
     config = FingerprintEngine.get_default_config()
     engine = FingerprintEngine(config)
     scripts = engine.generate_all_scripts()
-
-# === Pre-Development Contract ===
-# Interface tests (pass with stub):
-#   - FingerprintConfig dataclass exists with expected fields
-#   - FingerprintEngine class exists
-#   - All expected methods are present with correct signatures
-# Behavioral tests (fail with NotImplementedError):
-#   - get_default_config() returns FingerprintConfig with defaults
-#   - generate_canvas_noise_script() returns valid JS string
-#   - generate_webgl_override_script() returns valid JS string
-#   - generate_audio_override_script() returns valid JS string
-#   - generate_all_scripts() returns list of scripts
-#   - get_plausible_gpu_pool() returns dict with vendor strings
-#   - Per-session seed: same seed → same noise pattern
 """
 
 from __future__ import annotations
 
+import hashlib
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,6 +46,185 @@ class FingerprintConfig:
     geolocation: dict | None = None
     timezone: str | None = None
     locale: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# GPU vendor / renderer pool (curated from real hardware)
+# ---------------------------------------------------------------------------
+
+_PLAUSIBLE_GPU_POOL: dict[str, list[str]] = {
+    "NVIDIA Corporation": [
+        "ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Ti Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Direct3D11 vs_5_0 ps_5_0)",
+    ],
+    "AMD": [
+        "ANGLE (AMD, AMD Radeon RX 7900 XTX Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (AMD, AMD Radeon RX 7800 XT Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (AMD, AMD Radeon RX 6800 XT Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (AMD, AMD Radeon Graphics Direct3D11 vs_5_0 ps_5_0)",
+    ],
+    "Intel": [
+        "ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (Intel, Intel(R) Arc(TM) A750 Graphics Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (Intel, Intel(R) UHD Graphics 770 Direct3D11 vs_5_0 ps_5_0)",
+        "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0)",
+    ],
+    "Apple": [
+        "Apple M2",
+        "Apple M2 Pro",
+        "Apple M2 Max",
+        "Apple M3",
+        "Apple M3 Pro",
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_seeded_rng(seed: int) -> random.Random:
+    """Return a random.Random instance seeded from an int."""
+    return random.Random(seed)
+
+
+def _pick_gpu(rng: random.Random) -> tuple[str, str]:
+    """Pick a random (vendor, renderer) pair from the pool."""
+    vendor = rng.choice(list(_PLAUSIBLE_GPU_POOL.keys()))
+    renderer = rng.choice(_PLAUSIBLE_GPU_POOL[vendor])
+    return vendor, renderer
+
+
+def _escape_js(s: str) -> str:
+    """Escape a string for safe embedding inside a JS string literal."""
+    return (
+        s.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
+
+# ---------------------------------------------------------------------------
+# JS script templates
+# ---------------------------------------------------------------------------
+
+
+def _canvas_noise_js(seed: int) -> str:
+    """Build a JS snippet that patches canvas toDataURL/toBlob with noise.
+
+    Uses a simple LCG seeded hash to generate deterministic per-pixel
+    offsets so the same seed always produces the same canvas output.
+    """
+    return f"""(function() {{
+    'use strict';
+    const SEED = {seed};
+    function seededHash(x, y) {{
+        let h = (SEED ^ (x * 374761393 + y * 668265263)) | 0;
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        h = h ^ (h >>> 16);
+        return h;
+    }}
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(...args) {{
+        const w = this.width, h = this.height;
+        const ctx = this.getContext('2d');
+        if (ctx) {{
+            const imageData = ctx.getImageData(0, 0, w, h);
+            const data = imageData.data;
+            for (let y = 0; y < h; y++) {{
+                for (let x = 0; x < w; x++) {{
+                    const i = (y * w + x) * 4;
+                    const hash = seededHash(x, y);
+                    data[i]     = Math.max(0, Math.min(255, data[i]     + (hash & 3) - 1));
+                    data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + ((hash >> 2) & 3) - 1));
+                    data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + ((hash >> 4) & 3) - 1));
+                }}
+            }}
+            ctx.putImageData(imageData, 0, 0);
+        }}
+        return origToDataURL.apply(this, args);
+    }};
+    const origToBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function(callback, ...args) {{
+        const self = this;
+        const wrapped = function(blob) {{
+            const w = self.width, h = self.height;
+            const ctx = self.getContext('2d');
+            if (ctx) {{
+                const imageData = ctx.getImageData(0, 0, w, h);
+                const data = imageData.data;
+                for (let y = 0; y < h; y++) {{
+                    for (let x = 0; x < w; x++) {{
+                        const i = (y * w + x) * 4;
+                        const hash = seededHash(x, y);
+                        data[i]     = Math.max(0, Math.min(255, data[i]     + (hash & 3) - 1));
+                        data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + ((hash >> 2) & 3) - 1));
+                        data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + ((hash >> 4) & 3) - 1));
+                    }}
+                }}
+                ctx.putImageData(imageData, 0, 0);
+            }}
+            callback(blob);
+        }};
+        origToBlob.call(self, wrapped, ...args);
+    }};
+}})();"""
+
+
+def _webgl_override_js(vendor: str, renderer: str) -> str:
+    """Build a JS snippet that overrides WEBGL_debug_renderer_info."""
+    escaped_vendor = _escape_js(vendor)
+    escaped_renderer = _escape_js(renderer)
+    return f"""(function() {{
+    'use strict';
+    const getExt = HTMLCanvasElement.prototype.getContext;
+    const vendorStr = '{escaped_vendor}';
+    const rendererStr = '{escaped_renderer}';
+    const origGetParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {{
+        if (p === 37445) return vendorStr;
+        if (p === 37446) return rendererStr;
+        return origGetParameter.call(this, p);
+    }};
+    if (typeof WebGL2RenderingContext !== 'undefined') {{
+        WebGL2RenderingContext.prototype.getParameter = function(p) {{
+            if (p === 37445) return vendorStr;
+            if (p === 37446) return rendererStr;
+            return origGetParameter.call(this, p);
+        }};
+    }}
+}})();"""
+
+
+def _audio_override_js(sample_rate: int) -> str:
+    """Build a JS snippet that overrides AudioContext sampleRate."""
+    return f"""(function() {{
+    'use strict';
+    const targetRate = {sample_rate};
+    const origAC = window.AudioContext || window.webkitAudioContext;
+    if (origAC) {{
+        const origConstructor = function() {{
+            const ctx = new (Function.prototype.bind.apply(origAC, arguments));
+            Object.defineProperty(ctx, 'sampleRate', {{
+                get: function() {{ return targetRate; }}
+            }});
+            return ctx;
+        }};
+        if (window.AudioContext) {{
+            window.AudioContext = origConstructor;
+        }}
+        if (window.webkitAudioContext) {{
+            window.webkitAudioContext = origConstructor;
+        }}
+    }}
+}})();"""
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +261,7 @@ class FingerprintEngine:
     @staticmethod
     def get_default_config() -> FingerprintConfig:
         """Return a FingerprintConfig with all defaults."""
-        raise NotImplementedError(
-            "get_default_config — return default config instance"
-        )
+        return FingerprintConfig()
 
     # ── Script generators ──────────────────────────────────────────────
 
@@ -117,9 +280,7 @@ class FingerprintEngine:
             A JavaScript source string suitable for
             ``Page.addScriptToEvaluateOnNewDocument``.
         """
-        raise NotImplementedError(
-            "generate_canvas_noise_script — seeded per-pixel JS noise"
-        )
+        return _canvas_noise_js(seed)
 
     @staticmethod
     def generate_webgl_override_script(vendor: str, renderer: str) -> str:
@@ -136,9 +297,7 @@ class FingerprintEngine:
         Returns:
             A JavaScript source string.
         """
-        raise NotImplementedError(
-            "generate_webgl_override_script — GPU string spoofing JS"
-        )
+        return _webgl_override_js(vendor, renderer)
 
     @staticmethod
     def generate_audio_override_script(sample_rate: int) -> str:
@@ -154,9 +313,7 @@ class FingerprintEngine:
         Returns:
             A JavaScript source string.
         """
-        raise NotImplementedError(
-            "generate_audio_override_script — AudioContext patch JS"
-        )
+        return _audio_override_js(sample_rate)
 
     # ── Composite ──────────────────────────────────────────────────────
 
@@ -170,9 +327,29 @@ class FingerprintEngine:
         Returns:
             A list of JS source strings, one per patch type.
         """
-        raise NotImplementedError(
-            "generate_all_scripts — composite script generation"
-        )
+        cfg = self._config
+        scripts: list[str] = []
+
+        # Canvas noise — use seed from config (0 = random, generate one)
+        seed = cfg.canvas_noise_seed
+        if seed == 0:
+            seed = random.randint(1, 2**31 - 1)
+        scripts.append(_canvas_noise_js(seed))
+
+        # WebGL override — pick from pool if vendor/renderer are empty
+        vendor = cfg.webgl_vendor
+        renderer = cfg.webgl_renderer
+        if not vendor or not renderer:
+            rng = _make_seeded_rng(seed if seed != 0 else random.randint(1, 2**31 - 1))
+            picked_vendor, picked_renderer = _pick_gpu(rng)
+            vendor = vendor or picked_vendor
+            renderer = renderer or picked_renderer
+        scripts.append(_webgl_override_js(vendor, renderer))
+
+        # Audio override
+        scripts.append(_audio_override_js(cfg.audio_sample_rate))
+
+        return scripts
 
     # ── GPU pool ───────────────────────────────────────────────────────
 
@@ -187,6 +364,4 @@ class FingerprintEngine:
         Returns:
             ``{vendor: [renderer_strings]}`` dict.
         """
-        raise NotImplementedError(
-            "get_plausible_gpu_pool — curated GPU vendor/renderer pool"
-        )
+        return dict(_PLAUSIBLE_GPU_POOL)
