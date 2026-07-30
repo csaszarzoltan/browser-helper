@@ -158,3 +158,11 @@ All notable changes to browser-helper will be documented in this file.
 - Script execution engine
 - PDF export
 - Element and full-page screenshots
+
+## 1.6.0 - 2026-07-30
+
+### Added
+- Zero-trust browser policy primitives with private-network denial.
+- Redacted session replay events, expiring human takeover leases, deterministic workflow export, tenant fleet quotas and evaluation release gates.
+- Six responsive enterprise operations consoles and additive `/api/v1/enterprise` endpoints.
+- Deterministic domain, persistence, security, accessibility and route-contract tests.

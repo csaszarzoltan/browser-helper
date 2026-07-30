@@ -840,3 +840,18 @@ Set `include_hidden: true` in accessibility observations to retain ignored AX no
 ### History-aware discovery and replay overrides
 
 `POST /agent/forms/discover` with `scope: page_with_history` performs bounded scroll/lazy-load passes before observation. Record with `POST /agent/record {"start": true}` and replay with `recorded_id`, `on_error`, and `data_overrides` to reuse long workflows with new field values.
+
+## Enterprise browser-agent operations (v1.6)
+
+Version 1.6 adds six persistent, additive workspaces: `/enterprise/policy`, `/enterprise/replay`, `/enterprise/takeover`, `/enterprise/workflows`, `/enterprise/fleet`, and `/enterprise/evaluation`. The domain service is in `src/enterprise_workspace.py`; legacy endpoints remain unchanged.
+
+Set `ENTERPRISE_DB` to protected persistent storage. Production deployments must use trusted tenant identity, an egress firewall/DNS rebinding protection, rate limits, CSRF protection, and an external secret manager. The bundled SQLite default is local-development only.
+
+Validation:
+```bash
+PYTHONPATH=src pytest -q tests/test_enterprise_workspace.py
+PYTHONPATH=src pytest -q
+ruff check src/enterprise_workspace.py tests/test_enterprise_workspace.py
+python -m compileall -q src tests
+uv build
+```

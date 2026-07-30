@@ -3232,3 +3232,34 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Enterprise browser-agent operations (additive v1 API)
+from enterprise_workspace import EnterpriseWorkspace, render_console
+_enterprise = EnterpriseWorkspace(Path(os.getenv("ENTERPRISE_DB", "/tmp/browser-helper-enterprise.db")))
+
+@app.get("/enterprise/{page}", include_in_schema=False)
+async def enterprise_console(page: str):
+    try:
+        return HTMLResponse(render_console(page, _enterprise))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="WORKSPACE_NOT_FOUND")
+
+@app.post("/api/v1/enterprise/policies")
+async def enterprise_policy(body: dict):
+    return {"id": _enterprise.create_policy(body["tenant"], body["origins"], body["actions"]), "state": "ACTIVE"}
+
+@app.post("/api/v1/enterprise/replays")
+async def enterprise_replay(body: dict):
+    return {"id": _enterprise.start_replay(body["tenant"]), "state": "RECORDING"}
+
+@app.post("/api/v1/enterprise/takeovers")
+async def enterprise_takeover(body: dict):
+    return {"id": _enterprise.request_takeover(body["tenant"], body["run_id"], body["reason"]), "state": "WAITING"}
+
+@app.post("/api/v1/enterprise/workflows")
+async def enterprise_workflow(body: dict):
+    return {"id": _enterprise.create_workflow(body["tenant"], body["name"], body["steps"]), "state": "READY"}
+
+@app.post("/api/v1/enterprise/evaluations")
+async def enterprise_evaluation(body: dict):
+    return {"id": _enterprise.create_evaluation(body["candidate"], body["threshold"]), "state": "RUNNING"}
