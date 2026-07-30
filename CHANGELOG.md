@@ -2,6 +2,20 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+### [1.7.0] — 2026-07-30
+
+#### Added
+- **Anti-Detection Profile Manager (Component 4)** — create, configure, and manage browser fingerprint profiles with per-profile anti-detection settings, fingerprint configuration, and persistent storage.
+- **P1-1/P1-2 Anti-Detection Modules** — behavioral anti-detection modules with full test coverage, preventing browser fingerprinting and automation detection.
+- **Behavioral Simulation Engine (Component 3)** — realistic human-like behavior simulation engine for browser automation, reducing detection risk.
+- **Cloud Browser Provider Integration** — `BrowserbaseProvider`, `SteelProvider`, and `CloudSessionPool` implementations for cloud-hosted browser sessions with proper error handling, lifecycle management, and test coverage.
+- **Fingerprint REST API** — endpoints for fingerprint configuration, `generate_all_scripts` profile method, and `ProfileManager.fingerprint_config` methods.
+
+#### Fixed
+- Restored cloud provider implementations (Browserbase, Steel, CloudSessionPool) from upstream with corrected test suite.
+- Removed duplicated return annotation syntax error in `profile_manager.py` that caused `SyntaxError` on import.
+- Added `generate_fingerprint` method from upstream merge for fingerprint profile compatibility.
+
 ### [1.5.0] - 2026-07-29
 
 #### Added
