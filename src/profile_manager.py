@@ -361,6 +361,25 @@ class ProfileManager:
             return None
         return dict(fingerprint) if fingerprint else {}
 
+    def get_fingerprint_config(self, profile_name: str) -> dict | None:
+        """Return the fingerprint_config dict for *profile_name*.
+
+        Returns ``None`` if the profile does not exist or has no
+        fingerprint_config.
+        """
+        raw = self._data.get(profile_name)
+        if raw is None:
+            return None
+        return raw.get("fingerprint_config")
+
+    def set_fingerprint_config(self, profile_name: str, config: dict) -> None:
+        """Set fingerprint_config on *profile_name* and persist."""
+        raw = self._data.get(profile_name)
+        if raw is None:
+            raise ValueError(f"Profile {profile_name!r} does not exist")
+        raw["fingerprint_config"] = config
+        self.save()
+
     def generate_fingerprint(
         self,
         profile_name: str,
