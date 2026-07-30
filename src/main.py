@@ -36,6 +36,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # ---------------------------------------------------------------------------
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
+from playwright_backend import BackendManager as _BackendManager
+backend_manager = _BackendManager()
+
 from artifact_store import ArtifactStore
 from agent_runtime import (ElementNotFoundError, SnapshotStore, StaleSnapshotError, diff_snapshots, paginate_snapshot)
 from agent_navigation import (
@@ -256,6 +259,13 @@ class SetCookieRequest(BaseModel):
 class DOMQueryRequest(BaseModel):
     selector: str
     attribute: str | None = None
+
+
+# ─── Backend switch model (P1-1) ────────────────────────────────
+
+
+class BackendSwitchRequest(BaseModel):
+    backend: str
 
 
 # ─── Settings & Chrome management models ────────────────────────
@@ -3202,6 +3212,23 @@ async def get_proxy_stats():
     """Get proxy usage statistics."""
     stats = proxy_pool.get_stats()
     return api_success("get_proxy_stats", stats)
+
+
+# ---------------------------------------------------------------------------
+# Backend switch routes (P1-1)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/backend/switch")
+async def switch_backend(req: BackendSwitchRequest):
+    """Switch the active automation backend ("cdp" or "playwright")."""
+    return backend_manager.switch(req.backend)
+
+
+@app.get("/backend/status")
+async def backend_status():
+    """Return current backend status, available backends, and versions."""
+    return backend_manager.get_status()
 
 
 # ---------------------------------------------------------------------------

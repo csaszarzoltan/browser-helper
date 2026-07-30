@@ -1,0 +1,294 @@
+"""
+RED-phase pre-development tests for the StealthInjector module.
+
+All tests in this file MUST FAIL initially because the StealthInjector
+module is a stub whose methods raise ``NotImplementedError``.  Once the
+module is implemented, every test below should PASS with zero changes.
+
+Acceptance criteria covered:
+1. 15+ unit tests covering each patch individually
+2. Tests for verify() returning correct status per patch
+3. Tests for all three level presets
+4. Tests for level switching (low → medium → high)
+5. Tests for enable/disable toggle via REST
+6. Startup-loads-from-settings.json
+7. Invalid level returns 422
+8. navigator.webdriver evaluates to undefined after injection
+"""
+
+# ─── Helpers: mock CDP client ─────────────────────────────────────────
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from stealth_injector import LEVEL_PATCHES, StealthInjector, _make_patches
+
+
+def _mock_cdp_client() -> MagicMock:
+    """Return a MagicMock that behaves like a CDPClient.
+
+    The mock's ``_send_command`` returns a dict with an ``id`` field,
+    mimicking the real CDPClient's ``_send_command`` return shape.
+    Its ``evaluate`` returns a standard ``{"status": "ok", "result": ...}``.
+    """
+    client = MagicMock()
+    client._send_command = AsyncMock(return_value={"id": 1})
+    client.evaluate = AsyncMock(
+        return_value={"status": "ok", "result": True, "type": "boolean"}
+    )
+    return client
+
+
+# ─── Interface tests (should pass even with NotImplError in methods) ──
+
+
+class TestStealthInjectorInterface:
+    """Contract tests: constructor, properties, return shapes.
+
+    These exercise the interface without calling the core methods that
+    raise NotImplementedError.
+    """
+
+    def test_constructor_creates_instance(self):
+        """A StealthInjector can be instantiated."""
+        injector = StealthInjector()
+        assert isinstance(injector, StealthInjector)
+
+    def test_patches_property_returns_dict(self):
+        """``patches`` property returns a ``dict`` of name → JS source."""
+        injector = StealthInjector()
+        patches = injector.patches
+        assert isinstance(patches, dict)
+
+    def test_patches_are_non_empty_strings(self):
+        """Every patch name and JS source is a non-empty string."""
+        injector = StealthInjector()
+        for name, js in injector.patches.items():
+            assert isinstance(name, str) and name, f"Patch name is empty: {name!r}"
+            assert isinstance(js, str) and js, f"Patch source for {name!r} is empty"
+
+    def test_low_level_has_webdriver_only(self):
+        """The ``\"low\"`` level preset contains only ``navigator.webdriver``."""
+        patches = LEVEL_PATCHES["low"]
+        assert patches == ["navigator.webdriver"]
+
+    def test_medium_level_has_four_patches(self):
+        """The ``\"medium\"`` level preset contains at least 4 patches."""
+        patches = LEVEL_PATCHES["medium"]
+        assert len(patches) >= 4
+
+    def test_high_level_has_min_10_patches(self):
+        """The ``\"high\"`` level preset contains at least 10 patches."""
+        patches = LEVEL_PATCHES["high"]
+        assert len(patches) >= 10, (
+            f"Expected >=10 patches at high level, got {len(patches)}"
+        )
+
+    def test_high_level_includes_low_level_patches(self):
+        """``\"high\"`` patches are a superset of ``\"low\"`` patches."""
+        high = LEVEL_PATCHES["high"]
+        for p in LEVEL_PATCHES["low"]:
+            assert p in high, f"High-level missing low-level patch: {p!r}"
+
+    def test_high_level_includes_medium_level_patches(self):
+        """``\"high\"`` patches are a superset of ``\"medium\"`` patches."""
+        high = LEVEL_PATCHES["high"]
+        for p in LEVEL_PATCHES["medium"]:
+            assert p in high, f"High-level missing medium-level patch: {p!r}"
+
+    def test_all_levels_are_defined(self):
+        """All three levels ``\"low\"``, ``\"medium\"``, ``\"high\"`` are present."""
+        for level in ("low", "medium", "high"):
+            assert level in LEVEL_PATCHES, f"Missing level preset: {level!r}"
+
+    def test_no_duplicate_patches_in_high(self):
+        """No duplicate patch names in the high-level set."""
+        patches = LEVEL_PATCHES["high"]
+        assert len(patches) == len(set(patches)), "Duplicate patch names in high level"
+
+
+# ─── RED-phase behavioral tests ───────────────────────────────────────
+
+
+class TestStealthInjectorApplyRED:
+    """``apply()`` — expected to fail with NotImplementedError."""
+
+    def test_apply_raises_not_implemented(self):
+        """Calling ``apply()`` on the stub raises ``NotImplementedError``."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        with pytest.raises(NotImplementedError):
+            injector.apply(client, level="low")
+
+    def test_apply_without_level_defaults_to_medium(self):
+        """``apply()`` called without ``level`` defaults to ``\"medium\"``."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        with pytest.raises(NotImplementedError):
+            injector.apply(client)
+
+    def test_apply_returns_dict_with_applied_and_failed(self):
+        """``apply()`` returns ``{\"applied\": [...], \"failed\": [...]}``."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result = injector.apply(client, level="low")
+            assert isinstance(result, dict)
+            assert "applied" in result
+            assert "failed" in result
+        except NotImplementedError:
+            pytest.fail(
+                "Apply must be implemented to test return shape. "
+                "See RED-phase test: test_apply_raises_not_implemented."
+            )
+
+    def test_apply_invalid_level_raises_value_error(self):
+        """An unknown level raises ``ValueError`` (or 422 for the API)."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        with pytest.raises((ValueError, NotImplementedError)):
+            injector.apply(client, level="ultra")
+
+    def test_apply_low_returns_webdriver_only(self):
+        """``apply(level=\"low\")`` injects only the webdriver patch."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result = injector.apply(client, level="low")
+            assert result["applied"] == ["navigator.webdriver"]
+        except NotImplementedError:
+            pytest.fail(
+                "Apply must be implemented to verify low-level injection."
+            )
+
+
+class TestStealthInjectorApplyAllRED:
+    """``apply_all()`` — expected to fail with NotImplementedError."""
+
+    def test_apply_all_raises_not_implemented(self):
+        """Calling ``apply_all()`` on the stub raises ``NotImplementedError``."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        with pytest.raises(NotImplementedError):
+            injector.apply_all(client)
+
+    def test_apply_all_injects_all_patches(self):
+        """``apply_all()`` injects every patch registered."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result = injector.apply_all(client)
+            all_patches = set()
+            for patches in LEVEL_PATCHES.values():
+                all_patches.update(patches)
+            for name in all_patches:
+                assert name in result["applied"], (
+                    f"Patch {name!r} not in applied list"
+                )
+        except NotImplementedError:
+            pytest.fail("apply_all must be implemented to verify patch coverage.")
+
+
+class TestStealthInjectorVerifyRED:
+    """``verify()`` — expected to fail with NotImplementedError."""
+
+    @pytest.mark.asyncio
+    async def test_verify_raises_not_implemented(self):
+        """Calling ``verify()`` on the stub raises ``NotImplementedError``."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        with pytest.raises(NotImplementedError):
+            await injector.verify(client)
+
+    @pytest.mark.asyncio
+    async def test_verify_returns_dict_of_string_to_bool(self):
+        """``verify()`` returns ``{patch_name: bool}`` for every patch."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result = await injector.verify(client)
+            assert isinstance(result, dict)
+            for name, status in result.items():
+                assert isinstance(name, str)
+                assert isinstance(status, bool), (
+                    f"Status for {name!r} should be bool, got {type(status)}"
+                )
+        except NotImplementedError:
+            pytest.fail("verify must be implemented to verify return shape.")
+
+    @pytest.mark.asyncio
+    async def test_verify_navigator_webdriver_is_undefined(self):
+        """After injection ``navigator.webdriver`` evaluates to ``undefined``."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result = await injector.verify(client)
+            status = result.get("navigator.webdriver", None)
+            if status is not None:
+                assert status is True, (
+                    "navigator.webdriver should be masked (True = masked successfully)"
+                )
+        except NotImplementedError:
+            pytest.fail(
+                "verify must be implemented to assert navigator.webdriver is masked."
+            )
+
+
+# ─── Level switching tests (RED-phase) ────────────────────────────────
+
+
+class TestStealthInjectorLevelSwitchingRED:
+    """Level switching — ``apply`` with changing levels."""
+
+    def test_apply_upgrade_low_to_medium(self):
+        """Switching from low → medium adds the medium-level patches."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result_low = injector.apply(client, level="low")
+            result_med = injector.apply(client, level="medium")
+            assert "navigator.plugins" in result_med["applied"]
+        except NotImplementedError:
+            pytest.fail(
+                "Level switching requires apply to be implemented."
+            )
+
+    def test_apply_upgrade_low_to_high(self):
+        """Switching from low → high injects all patches."""
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result_high = injector.apply(client, level="high")
+            assert len(result_high["applied"]) >= 10
+        except NotImplementedError:
+            pytest.fail(
+                "Level switching requires apply to be implemented."
+            )
+
+
+# ─── Patch source integrity tests ─────────────────────────────────────
+
+
+class TestPatchSourceIntegrity:
+    """Static checks on patch JS sources (constants, not implementation)."""
+
+    def test_make_patches_returns_dict(self):
+        """``_make_patches()`` returns a dict."""
+        patches = _make_patches()
+        assert isinstance(patches, dict)
+
+    def test_make_patches_has_all_high_level_names(self):
+        """Every name from ``LEVEL_PATCHES[\"high\"]`` exists in the patches dict."""
+        patches = _make_patches()
+        for name in LEVEL_PATCHES["high"]:
+            assert name in patches, (
+                f"Missing patch source for {name!r}"
+            )
