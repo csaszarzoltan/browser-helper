@@ -361,6 +361,90 @@ class ProfileManager:
             return None
         return dict(fingerprint) if fingerprint else {}
 
+    def generate_fingerprint(
+        self,
+        profile_name: str,
+        overrides: dict | None = None,
+    ) -> dict:
+        """Generate and persist a fingerprint for *profile_name*.
+
+        Uses realistic randomized values for all fingerprint fields.
+        Optional *overrides* dict selectively overrides individual fields.
+
+        Raises ``ValueError`` if the profile does not exist.
+
+        Returns the generated fingerprint dict.
+        """
+        raw = self._data.get(profile_name)
+        if raw is None:
+            raise ValueError(f"Profile {profile_name!r} does not exist")
+
+        import random
+
+        rng = random.Random()
+        rng.seed(hash(profile_name) % (2**31))
+
+        # Common screen resolutions
+        resolutions = [
+            (1920, 1080),
+            (1366, 768),
+            (1536, 864),
+            (1440, 900),
+            (2560, 1440),
+            (1280, 720),
+        ]
+        screen_width, screen_height = rng.choice(resolutions)
+
+        # Known GPU vendor/renderer pairs
+        gpu_pairs = [
+            ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0)"),
+            ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) UHD Graphics 630)"),
+            ("Google Inc. (AMD)", "ANGLE (AMD, AMD Radeon RX 6800 XT Direct3D11 vs_5_0 ps_5_0)"),
+            ("Apple", "Apple M2"),
+        ]
+        webgl_vendor, webgl_renderer = rng.choice(gpu_pairs)
+
+        # IANA timezones
+        timezones = [
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles",
+            "Europe/London",
+            "Europe/Berlin",
+            "Europe/Paris",
+            "Asia/Tokyo",
+            "Asia/Shanghai",
+            "Australia/Sydney",
+        ]
+
+        # Known platforms
+        platforms = ["Win32", "MacIntel", "Linux x86_64", "Linux armv8l"]
+
+        fingerprint = {
+            "canvas_offset_x": rng.randint(-5, 5),
+            "canvas_offset_y": rng.randint(-5, 5),
+            "webgl_vendor": webgl_vendor,
+            "webgl_renderer": webgl_renderer,
+            "hardware_concurrency": rng.choice([4, 8, 12, 16, 24, 32]),
+            "device_memory": rng.choice([4, 8, 16, 32, 64]),
+            "screen_width": screen_width,
+            "screen_height": screen_height,
+            "color_depth": rng.choice([24, 30]),
+            "timezone": rng.choice(timezones),
+            "platform": rng.choice(platforms),
+        }
+
+        # Apply overrides
+        if overrides:
+            fingerprint.update(overrides)
+
+        # Persist
+        raw["fingerprint"] = fingerprint
+        self.save()
+
+        return fingerprint
+
     def select_profile_for_request(
         self,
         strategy: str = "random",
