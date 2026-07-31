@@ -25,6 +25,23 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 See [LLM Agent API](docs/agent-api.md).
 
+### v1.7 — Anti-Detection & Cloud Providers (Latest)
+
+| Feature | Endpoint / Module | Description |
+|---------|------------------|-------------|
+| ✅ Anti-Detection Profile Manager | `POST /profiles`, `GET /profiles` | Create profiles from 4 predefined fingerprint templates (`stealth-chrome-120`, `mobile-safari-ios`, `firefox-linux`, `edge-windows`) with UA, screen, WebGL, canvas, audio settings |
+| ✅ Profile Selection Strategies | `ProfileManager.select_profile_for_request()` | `random`, `sticky` (session-pinned), `geo-match` (timezone-based) — pick the right fingerprint for each request |
+| ✅ Fingerprint Signal Modules | `anti_detection.signal_modules` | JS patches for canvas, WebGL, navigator, audio, screen, TLS — 6 signal spoofers in total |
+| ✅ Fingerprint Randomizer | `anti_detection.fingerprint_randomizer` | Profile-aware JS generators for canvas offset, WebGL override, audio noise injection |
+| ✅ Fingerprint Engine | `fingerprint_engine.py` | Seeded per-session noise with curated GPU pool (NVIDIA/AMD/Intel/Apple), 14-config-dimension `FingerprintConfig` |
+| ✅ Fingerprint REST API | `POST/GET/PUT /profile/{name}/fingerprint` | Generate, retrieve, and configure per-profile fingerprints with field validation |
+| ✅ Behavioral Simulation — Utility API | `behavioral_sim.BehavioralSimulator` | WindMouse+Bezier mouse, keystroke timing with typos, momentum scroll, Gaussian click jitter |
+| ✅ Behavioral Simulation — CDP Events | `anti_detection.behavioral_simulation` | Actual CDP `Input.dispatchMouseEvent`/`dispatchKeyEvent` — MouseSimulator, TypingSimulator, ScrollSimulator, ClickSimulator, TabFocusSimulator |
+| ✅ Cloud Provider Integration | `browser_providers.*` | `BrowserbaseProvider` + `SteelProvider` + `CloudSessionPool` with warm sessions, TTL expiry, fallback chain, cost tracking |
+| ✅ Profile Validation | `ProfileValidator` | Static fingerprint consistency checks (UA/platform mismatches, missing fields) with remote checker references |
+
+See [Anti-Detection Profile Manager](docs/anti-detection-profile-manager.md), [Fingerprint Randomization](docs/fingerprint-randomization.md), [Behavioral Simulation](docs/behavioral-simulation.md), [Cloud Provider Setup](docs/cloud-provider-setup.md).
+
 ### v0.7 — What's New
 
 | Feature | Endpoint | Description |
@@ -679,7 +696,7 @@ The container bundles the CDP backend. Chrome must still be running on the host 
 cd tests && pytest -v
 ```
 
-Current test suite: **590 tests passed** on 2026-07-28. Run `pytest -q` for the authoritative result in your environment.
+Current test suite: **1,591 tests passed** (release v1.7.0 gate, 2026-07-30). Run `pytest -q` for the authoritative result in your environment.
 
 ## Documentation
 
@@ -698,6 +715,13 @@ Current test suite: **590 tests passed** on 2026-07-28. Run `pytest -q` for the 
 | [Dashboard Demo](examples/dashboard-demo.py) | WebSocket streaming example in Python |
 | [Checkbox Ops Example](examples/checkbox_ops.py) | Batch checkbox selection/deselection |
 | [Condensed vs Full Example](examples/condensed_comparison.py) | Compare condensed and full snapshot modes |
+| [Anti-Detection Profiles Example](examples/anti_detection_profiles.py) | Create/manage anti-detection profiles via REST API |
+| [Fingerprint API Example](examples/fingerprint_api.py) | Generate/retrieve/set per-profile fingerprints |
+| [Cloud Browser Example](examples/cloud_browser.py) | Launch cloud browser sessions (Browserbase, Steel) |
+| [Anti-Detection Profile Manager](docs/anti-detection-profile-manager.md) | Fingerprint templates, profile types, selection strategies, validation |
+| [Fingerprint Randomization](docs/fingerprint-randomization.md) | Signal modules, randomizer, engine, GPU pool, REST API reference |
+| [Behavioral Simulation](docs/behavioral-simulation.md) | Human-like mouse, typing, scroll, click simulation — utility API + CDP events |
+| [Cloud Provider Setup](docs/cloud-provider-setup.md) | Browserbase, Steel, session pool, fallback chain, cost tracking |
 
 ## Agent Navigation Engine (v1.3)
 

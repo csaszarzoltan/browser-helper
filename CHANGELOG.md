@@ -5,16 +5,63 @@ All notable changes to browser-helper will be documented in this file.
 ### [1.7.0] — 2026-07-30
 
 #### Added
-- **Anti-Detection Profile Manager (Component 4)** — create, configure, and manage browser fingerprint profiles with per-profile anti-detection settings, fingerprint configuration, and persistent storage.
-- **P1-1/P1-2 Anti-Detection Modules** — behavioral anti-detection modules with full test coverage, preventing browser fingerprinting and automation detection.
-- **Behavioral Simulation Engine (Component 3)** — realistic human-like behavior simulation engine for browser automation, reducing detection risk.
-- **Cloud Browser Provider Integration** — `BrowserbaseProvider`, `SteelProvider`, and `CloudSessionPool` implementations for cloud-hosted browser sessions with proper error handling, lifecycle management, and test coverage.
-- **Fingerprint REST API** — endpoints for fingerprint configuration, `generate_all_scripts` profile method, and `ProfileManager.fingerprint_config` methods.
+
+**Anti-Detection Profile Manager (Component 4)**
+- Create browser profiles from 4 predefined fingerprint templates: `stealth-chrome-120`, `mobile-safari-ios`, `firefox-linux`, and `edge-windows` — each with realistic user-agent, screen, WebGL, canvas, audio, and timezone settings.
+- `AntiDetectionProfile` dataclass extends the existing `Profile` with `profile_type` and `fingerprint` fields for anti-detection configuration.
+- Profile selection strategies: `random` (uniform), `sticky` (session-pinned), and `geo-match` (timezone-based) — see `ProfileManager.select_profile_for_request()`.
+- `ProfileValidator` static analysis detects inconsistencies (UA vs platform mismatches, missing fields) and provides remote checker references.
+- See [Anti-Detection Profile Manager](docs/anti-detection-profile-manager.md).
+
+**P1-1 Anti-Detection Signal Modules** (`src/anti_detection/signal_modules.py`)
+- `CanvasFingerprinter` — JS patches to inject noise into canvas `toDataURL`/`toBlob`/`getImageData` calls with seeded hashing for deterministic per-session output.
+- `WebGLSpoofer` — overrides `getParameter(37445)` (UNMASKED_VENDOR_WEBGL) and `getParameter(37446)` (UNMASKED_RENDERER_WEBGL) with profile-matched GPU strings.
+- `NavigatorSpoofer` — patches `navigator.userAgent`, `platform`, `language`, `languages`, `hardwareConcurrency`, and `deviceMemory` via `Object.defineProperty`.
+- `AudioContextRandomizer` — adds sub-percent variance to `AudioBuffer.getChannelData()` output to defeat audio fingerprinting.
+- `ScreenColorConsistency` — ensures `screen.colorDepth` and `screen.pixelDepth` match the profile's declared depth.
+- `TLSFingerprintAligner` — TTL and JA3 fingerprint alignment hooks for browser-based fingerprint consistency.
+
+**P1-2 Fingerprint Randomization** (`src/anti_detection/fingerprint_randomizer.py`)
+- `FingerprintRandomizer.build_canvas_patch()` — generates JS that offsets canvas readout RGBA values with profile-specific pixel offsets.
+- `FingerprintRandomizer.build_webgl_patch()` — generates JS that overrides WebGL vendor and renderer strings.
+- `FingerprintRandomizer.build_audio_patch()` — generates JS that adds noise to `AudioContext.createBuffer()` output.
+- Integration with `FingerprintEngine` (`src/fingerprint_engine.py`) — per-session seeded noise generation with curated GPU vendor/renderer pools (NVIDIA, AMD, Intel, Apple) and `FingerprintConfig` dataclass for 14 configurable fingerprint dimensions.
+- See [Fingerprint Randomization](docs/fingerprint-randomization.md).
+
+**Behavioral Simulation Engine (Component 3)**
+- `BehavioralSimulator` (`src/behavioral_sim.py`) — static-method API for generating human-like interaction patterns:
+  - `wind_mouse_bezier()` — WindMouse physics + Bezier micro-correction for smooth mouse trajectories with variable velocity (200-800ms per 200px).
+  - `keystroke_timing()` — per-character dwell/flight timing with ~5% typo+backspace probability, WPM range 40-80.
+  - `scroll_sequence()` — momentum scroll with power-law decay (Incomplete Gamma), overshoot+correction in 30% of calls.
+  - `click_position()` — Gaussian spatial jitter (sigma=4px) around element centre.
+- `anti_detection.behavioral_simulation` — CDP-level simulators with WebSocket dispatch:
+  - `MouseSimulator` — cubic Bezier mouse paths with variable velocity, dispatches `Input.dispatchMouseEvent`.
+  - `TypingSimulator` — per-character dwell (80-250ms), burst variation, ~3% typos with backspace, dispatches `Input.dispatchKeyEvent`.
+  - `ScrollSimulator` — momentum scroll with overshoot/correction, dispatches `Input.dispatchMouseEvent` wheel.
+  - `ClickSimulator` — normal-distribution spatial jitter (sigma=4px), dispatches `Input.dispatchMouseEvent` click.
+  - `TabFocusSimulator` — realistic focus/blur timing (10-60s loss), dispatches `Page.handleJavaScriptDialog`.
+- See [Behavioral Simulation](docs/behavioral-simulation.md).
+
+**Cloud Browser Provider Integration** (`src/browser_providers/`)
+- Abstract `BaseProvider` with full lifecycle: `launch_sandbox()` → `get_cdp_endpoint()` → `mark_warm()` → `close_session()`.
+- `BrowserbaseProvider` — connects to Browserbase API (`https://www.browserbase.com/api/v1`) using `BROWSERBASE_API_KEY` and `BROWSERBASE_PROJECT_ID` env vars. Launches sandboxed browser sessions, retrieves CDP WebSocket URLs.
+- `SteelProvider` — connects to Steel Browser API (`https://api.steelbrowser.com/v1`) using `STEEL_API_KEY` env var. Supports headless browser sandbox sessions with CDP endpoints.
+- `CloudSessionPool` — manages warm session pool with auto-scaling (`min_warm=1`, `max_warm=5`), TTL expiry (300s default), cost tracking, and provider fallback chain.
+- `FallbackResult` tracks the provider chain attempted and per-step errors for observability.
+- See [Cloud Provider Setup](docs/cloud-provider-setup.md).
+
+**Fingerprint REST API** (`/profile/{name}/fingerprint`)
+- `POST /profile/{name}/fingerprint` — generate a randomised fingerprint with 11 dimensions (canvas offset, WebGL, hardware concurrency, device memory, screen resolution, color depth, timezone, platform), optional `overrides` dict to pin specific values.
+- `GET /profile/{name}/fingerprint` — retrieve the current `fingerprint` and `fingerprint_config` for a profile.
+- `PUT /profile/{name}/fingerprint` — set fingerprint configuration (14 known config fields) with field-name validation.
+- `POST /profile` (anti-detection variant) — create profiles from predefined types via `create_anti_detection_profile()`.
+- See [Fingerprint REST API](docs/fingerprint-randomization.md#rest-api).
 
 #### Fixed
-- Restored cloud provider implementations (Browserbase, Steel, CloudSessionPool) from upstream with corrected test suite.
+- Restored `BrowserbaseProvider`, `SteelProvider`, and `CloudSessionPool` implementations from upstream with corrected test suite (102/102 tests passing, ruff clean).
 - Removed duplicated return annotation syntax error in `profile_manager.py` that caused `SyntaxError` on import.
-- Added `generate_fingerprint` method from upstream merge for fingerprint profile compatibility.
+- Added `generate_fingerprint()` method from upstream merge for fingerprint profile compatibility.
+- Cloud provider restore verified with cross-commit diff detection: 4 files, 791 insertions restored, no collateral damage.
 
 ### [1.5.0] - 2026-07-29
 
