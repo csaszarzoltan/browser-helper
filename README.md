@@ -1,5 +1,9 @@
 # Browser Helper 🦎
 
+![Version](https://img.shields.io/badge/version-1.8.0-blue)
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![Tests](https://img.shields.io/badge/tests-1986%20passed-brightgreen)
+
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
 ## Why?
@@ -25,7 +29,19 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 See [LLM Agent API](docs/agent-api.md).
 
-### v1.7 — Anti-Detection & Cloud Providers (Latest)
+### v1.8 — Anti-Detection Platform (Latest)
+
+| Feature | Endpoint / Module | Description |
+|---------|------------------|-------------|
+| ✅ Proxy Rotation Manager | `POST /api/v1/proxy/load-from-env`, `GET/POST /api/v1/proxy/health`, `GET /api/v1/proxy/stats`, `GET/POST/DELETE /api/v1/proxy` | `ProxyRotationManager` (src/proxy_rotation_manager.py) wraps `ProxyPool` with env-var auto-load (`PROXY_LIST` / `PROXY_FILE`) and 5 rotation strategies: round-robin, random, sticky, by-tag, health-check. Non-blocking async health probes (`httpx.AsyncClient`) never stall the event loop |
+| ✅ Fingerprint Database | `GET/POST /api/v1/fingerprints`, `GET/PUT/DELETE /api/v1/fingerprints/{name}`, `POST /api/v1/fingerprints/generate`, `POST /api/v1/fingerprints/{name}/export`, `POST /api/v1/fingerprints/import` | `FingerprintDatabase` (src/anti_detection/fingerprint_database.py) — JSON-backed template store with 4 shipped defaults (chrome-120, firefox-linux, safari-ios, edge-windows), CRUD, random generation, import/export, and load-on-init persistence |
+| ✅ Session Persistence | `POST /api/v1/session/capture`, `POST /api/v1/session/restore`, `GET /api/v1/session`, `GET/DELETE /api/v1/session/{id}`, `POST /api/v1/session/cleanup` | `SessionManager` (src/session_manager.py) captures/restores cookies (`Network.getAllCookies`), localStorage/sessionStorage, and pools WebSocket connections with timeout-based expiry and background cleanup |
+| ✅ Anti-Detection Compositor | `POST /api/v1/compose`, `POST /api/v1/compose/test`, `POST /api/v1/compose/export`, `POST /api/v1/compose/import`, `POST /api/v1/compose/resolve`, `POST /api/v1/compose/resolve-stealth` | `AntiDetectCompositor` (src/anti_detection/compositor.py) — one bundle combining fingerprint template + proxy strategy + stealth level + session TTL; compose, detect-test, export/import JSON, resolve JS patches |
+| ✅ Stealth Injection (real CDP) | `StealthInjector` (src/stealth_injector.py) | Real `Page.addScriptToEvaluateOnNewDocument` injection with correctly escaped JS payloads; `low`/`medium`/`high` patch levels |
+
+See [Proxy Rotation Manager](docs/proxy-rotation-manager.md), [Fingerprint Database](docs/fingerprint-database.md), [Session Persistence](docs/session-persistence.md), [Anti-Detection Compositor](docs/anti-detection-compositor.md).
+
+### v1.7 — Anti-Detection & Cloud Providers
 
 | Feature | Endpoint / Module | Description |
 |---------|------------------|-------------|
@@ -487,6 +503,19 @@ python run.py --port 8001
 
 > **Note for Windows users:** Use `python run.py` instead of `uvicorn src.main:app` to avoid import conflicts with other installed packages.
 
+**Proxy rotation via environment variables (v1.8+):** Optionally pre-load proxies into the rotation pool at startup by setting `PROXY_LIST` (comma-separated URLs) and/or `PROXY_FILE` (path to a file with one proxy URL per line; `#` comments and blank lines ignored). Then call `POST /api/v1/proxy/load-from-env` to load them:
+
+```bash
+# Comma-separated proxy URLs
+PROXY_LIST="socks5://user:pass@host1:1080,http://host2:3128" python run.py
+
+# Or a file — one proxy URL per line
+PROXY_FILE=/path/to/proxies.txt python run.py
+
+# Load the env vars into the pool at runtime
+curl -X POST http://localhost:8000/api/v1/proxy/load-from-env
+```
+
 ### 3. Start browsing
 
 ```bash
@@ -696,7 +725,7 @@ The container bundles the CDP backend. Chrome must still be running on the host 
 cd tests && pytest -v
 ```
 
-Current test suite: **1,591 tests passed** (release v1.7.0 gate, 2026-07-30). Run `pytest -q` for the authoritative result in your environment.
+Current test suite: **1,986 tests passed** (release v1.8.0 gate, 2026-07-31), including **509 anti-detection tests** (0 failures). The remaining failures are pre-existing sprint scaffolding, unchanged from baseline. Run `pytest -q` for the authoritative result in your environment.
 
 ## Documentation
 
@@ -722,6 +751,14 @@ Current test suite: **1,591 tests passed** (release v1.7.0 gate, 2026-07-30). Ru
 | [Fingerprint Randomization](docs/fingerprint-randomization.md) | Signal modules, randomizer, engine, GPU pool, REST API reference |
 | [Behavioral Simulation](docs/behavioral-simulation.md) | Human-like mouse, typing, scroll, click simulation — utility API + CDP events |
 | [Cloud Provider Setup](docs/cloud-provider-setup.md) | Browserbase, Steel, session pool, fallback chain, cost tracking |
+| [Proxy Rotation Manager](docs/proxy-rotation-manager.md) | v1.8 rotation strategies, `PROXY_LIST`/`PROXY_FILE` env vars, async health checks, `/api/v1/proxy/*` REST API |
+| [Fingerprint Database](docs/fingerprint-database.md) | v1.8 JSON-backed template store, generation, import/export, `/api/v1/fingerprints/*` REST API |
+| [Session Persistence](docs/session-persistence.md) | v1.8 cookie/storage capture-restore, WebSocket pooling, expiry cleanup, `/api/v1/session/*` REST API |
+| [Anti-Detection Compositor](docs/anti-detection-compositor.md) | v1.8 unified profile bundles — compose, test, export/import, `/api/v1/compose/*` REST API |
+| [Proxy Rotation Example](examples/proxy_rotation.py) | Load env proxies, health checks, stats, add/remove via `/api/v1/proxy/*` |
+| [Fingerprint Database Example](examples/fingerprint_database.py) | List, generate, add, update, export/import fingerprint templates |
+| [Session Persistence Example](examples/session_persistence.py) | Capture, list, restore, delete, cleanup browser sessions |
+| [Anti-Detection Compositor Example](examples/anti_detect_compositor.py) | Compose bundles, resolve JS patches, export/import, detection test |
 
 ## Agent Navigation Engine (v1.3)
 

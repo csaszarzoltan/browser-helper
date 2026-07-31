@@ -9,19 +9,23 @@ All notable changes to browser-helper will be documented in this file.
 **Anti-Detection Compositor** (`src/anti_detection/compositor.py`)
 - `AntiDetectCompositor` facade that composes a complete anti-detection profile: fingerprint spoofing (Canvas/WebGL/audio/navigator), proxy rotation strategy, session persistence, and stealth injection — selectable per browser session.
 - Compose/test/export/import endpoints wired through the REST API; 64 tests.
+- See [Anti-Detection Compositor](docs/anti-detection-compositor.md) and [examples/anti_detect_compositor.py](examples/anti_detect_compositor.py).
 
 **Fingerprint Database** (`src/anti_detection/fingerprint_database.py`)
-- JSON-backed fingerprint template database with 4 shipped defaults (`stealth-chrome-120`, `mobile-safari-ios`, `firefox-linux`, `edge-windows`).
+- JSON-backed fingerprint template database with 4 shipped defaults (`chrome-120`, `firefox-linux`, `safari-ios`, `edge-windows`) — note these DB names differ from the v1.7 profile types (`stealth-chrome-120` / `mobile-safari-ios`).
 - Template add/get/remove/list, arbitrary template generation (`generate_template`), and load-on-init persistence — templates added via API now survive restarts.
 - Export/import of template JSON files.
+- See [Fingerprint Database](docs/fingerprint-database.md) and [examples/fingerprint_database.py](examples/fingerprint_database.py).
 
 **Proxy Rotation** (`src/proxy_rotation_manager.py`)
 - `ProxyRotationManager` wrapping `ProxyPool` with env-var auto-load (`PROXY_LIST`/`PROXY_FILE`).
 - 5 rotation strategies: round-robin, random, sticky, by-tag, and health — 70 tests.
 - Non-blocking async health checks (`health_check_async`/`health_check_all_async`, httpx.AsyncClient) that never stall the event loop.
+- See [Proxy Rotation Manager](docs/proxy-rotation-manager.md) and [examples/proxy_rotation.py](examples/proxy_rotation.py).
 
 **Session Persistence** (`src/session_manager.py`)
 - `SessionManager` capture/restore of browser session state: cookies (`Network.getAllCookies`), storage (`Runtime.evaluate`), and WebSocket frames — 32 tests.
+- See [Session Persistence](docs/session-persistence.md) and [examples/session_persistence.py](examples/session_persistence.py).
 
 **REST API** (`src/main.py`)
 - New `/api/v1` endpoints: `/api/v1/fingerprints/*` (generate, export, import), `/api/v1/session/*` (capture, restore, cleanup), `/api/v1/compose/*` (compose, test, export, import, resolve, resolve-stealth), `/api/v1/proxy/*` (health, stats, load-from-env) — 114 tests.
@@ -46,6 +50,9 @@ All notable changes to browser-helper will be documented in this file.
 #### Docs
 
 - Expanded anti-detection documentation and examples (proxy rotation, profile manager, behavioral simulation, fingerprint randomization, cloud provider setup) and README feature table.
+- New v1.8.0 per-feature guides: [Proxy Rotation Manager](docs/proxy-rotation-manager.md), [Fingerprint Database](docs/fingerprint-database.md), [Session Persistence](docs/session-persistence.md), [Anti-Detection Compositor](docs/anti-detection-compositor.md).
+- New runnable examples: [examples/proxy_rotation.py](examples/proxy_rotation.py), [examples/fingerprint_database.py](examples/fingerprint_database.py), [examples/session_persistence.py](examples/session_persistence.py), [examples/anti_detect_compositor.py](examples/anti_detect_compositor.py).
+- README: v1.8 features table, version/python/tests badges, `PROXY_LIST`/`PROXY_FILE` quick-start section, test count updated to 1,986 passed (v1.8.0 gate).
 
 ### [1.7.0] — 2026-07-30
 
