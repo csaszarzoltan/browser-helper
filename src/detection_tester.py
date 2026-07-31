@@ -91,33 +91,60 @@ class DetectionTester:
 
                 if "sannysoft" in site_url:
                     parsed = self.parse_sannysoft(page_text)
-                    all_pass = all(
-                        v is True
-                        for k, v in parsed.items()
-                        if not k.startswith("_")
-                    )
-                    result = TestResult(
-                        site=site_url,
-                        passed=all_pass,
-                        details=parsed,
-                        errors=[],
-                    )
+                    summary = parsed.get("_summary", {})
+                    if summary.get("total", 0) == 0:
+                        result = TestResult(
+                            site=site_url,
+                            passed=False,
+                            details=parsed,
+                            errors=["No checks parsed from sannysoft page (empty/unparseable text)"],
+                        )
+                    else:
+                        all_pass = all(
+                            v is True
+                            for k, v in parsed.items()
+                            if not k.startswith("_")
+                        )
+                        result = TestResult(
+                            site=site_url,
+                            passed=all_pass,
+                            details=parsed,
+                            errors=[],
+                        )
                 elif "creepjs" in site_url:
                     parsed = self.parse_creepjs(page_text)
-                    lies = parsed.get("lies_detected", -1)
-                    result = TestResult(
-                        site=site_url,
-                        passed=lies == 0,
-                        details=parsed,
-                        errors=[],
-                    )
+                    if not parsed.get("_matched", False):
+                        result = TestResult(
+                            site=site_url,
+                            passed=False,
+                            details=parsed,
+                            errors=["No lies/coverage data parsed from creepjs page (empty/unparseable text)"],
+                        )
+                    else:
+                        lies = parsed.get("lies_detected", -1)
+                        result = TestResult(
+                            site=site_url,
+                            passed=lies == 0,
+                            details=parsed,
+                            errors=[],
+                        )
                 else:
-                    result = TestResult(
-                        site=site_url,
-                        passed=True,
-                        details={},
-                        errors=[],
-                    )
+                    # fingerprintjs.com/demo — parse visitorId + components
+                    parsed = self.parse_fingerprintjs(page_text)
+                    if not parsed.get("_matched", False):
+                        result = TestResult(
+                            site=site_url,
+                            passed=False,
+                            details=parsed,
+                            errors=["No fingerprint data parsed from fingerprintjs demo (empty/unparseable page)"],
+                        )
+                    else:
+                        result = TestResult(
+                            site=site_url,
+                            passed=True,
+                            details=parsed,
+                            errors=[],
+                        )
 
                 results.append(result)
             except Exception as exc:  # noqa: BLE001 — unexpected per-site errors are recorded, not fatal
@@ -207,9 +234,9 @@ class DetectionTester:
             keys, plus a ``_raw`` key with raw extracted text.
         """
         if not page_text or not page_text.strip():
-            return {"lies_detected": 0, "coverage_score": 0.0, "_raw": ""}
+            return {"lies_detected": 0, "coverage_score": 0.0, "_raw": "", "_matched": False}
 
-        result: dict[str, Any] = {"lies_detected": 0, "coverage_score": 0.0}
+        result: dict[str, Any] = {"lies_detected": 0, "coverage_score": 0.0, "_matched": False}
 
         # Extract lies count — look for "Lies detected: <number>"
         lies_match = re.search(
@@ -219,6 +246,7 @@ class DetectionTester:
         )
         if lies_match:
             result["lies_detected"] = int(lies_match.group(1))
+            result["_matched"] = True
 
         # Also look for id="lies-count"
         lies_id_match = re.search(
@@ -228,6 +256,7 @@ class DetectionTester:
         )
         if lies_id_match:
             result["lies_detected"] = int(lies_id_match.group(1))
+            result["_matched"] = True
 
         # Extract coverage score — look for "Coverage score: <number>%"
         cov_match = re.search(
@@ -238,6 +267,7 @@ class DetectionTester:
         if cov_match:
             score = float(cov_match.group(1))
             result["coverage_score"] = score
+            result["_matched"] = True
 
         # Also look for id="coverage-score"
         cov_id_match = re.search(
@@ -248,6 +278,38 @@ class DetectionTester:
         if cov_id_match:
             score = float(cov_id_match.group(1))
             result["coverage_score"] = score
+            result["_matched"] = True
 
         result["_raw"] = page_text[:500]
         return result
+
+    @staticmethod
+    def parse_fingerprintjs(page_text: str) -> dict:
+        """Parse fingerprintjs.com demo page for visitorId + component data.
+
+        Args:
+            page_text: Raw HTML of the fingerprintjs.com/demo page.
+
+        Returns:
+            Dict with ``visitor_id`` (str | None), ``components`` (int),
+            and ``_matched`` (bool) — True when any fingerprint data was
+            parsed from the page.
+        """
+        if not page_text or not page_text.strip():
+            return {"visitor_id": None, "components": 0, "_matched": False}
+
+        visitor_id: str | None = None
+        m = re.search(
+            r'id=["\']visitorId["\'][^>]*>(.*?)<',
+            page_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if m:
+            visitor_id = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+
+        components = len(
+            re.findall(r'class=["\']component["\']', page_text, re.IGNORECASE)
+        )
+
+        matched = bool(visitor_id) or components > 0
+        return {"visitor_id": visitor_id, "components": components, "_matched": matched}

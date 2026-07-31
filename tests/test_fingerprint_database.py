@@ -871,3 +871,40 @@ class TestEdgeCasesBehavior:
         retrieved = db.get_template("immediate")
         assert retrieved is not None
         assert retrieved.signals["navigator"]["user_agent"] == "Immediate UA"
+class TestR1DefaultInstanceLoadsPersisted:
+    """R1 regression: default-constructed FingerprintDatabase loads persisted files."""
+
+    def test_default_constructor_loads_from_disk(self, tmp_path, monkeypatch):
+        """Default FingerprintDatabase() must load templates persisted by a
+        previous instance (review R1).  Uses monkeypatched HOME so tests
+        don't touch the real user directory."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        # First instance: add a custom template and save to default path
+        db1 = FingerprintDatabase()
+        tpl = FingerprintTemplate(name="r1-persist-test", browser="chrome")
+        db1.add_template(tpl)
+        db1.save()
+
+        # Second default-constructed instance must find the persisted template
+        db2 = FingerprintDatabase()
+        found = db2.get_template("r1-persist-test")
+        assert found is not None, (
+            "Default-constructed FingerprintDatabase must load persisted files"
+        )
+        assert found.name == "r1-persist-test"
+        assert found.browser == "chrome"
+
+    def test_default_constructor_also_has_defaults(self, tmp_path, monkeypatch):
+        """Default-constructed FingerprintDatabase still has the 4 built-in
+        defaults even when the storage dir was empty."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        db = FingerprintDatabase()
+        names = [t["name"] for t in db.list_templates()]
+        for default_name in ("chrome-120", "firefox-linux", "safari-ios", "edge-windows"):
+            assert default_name in names, f"Default template {default_name} missing"

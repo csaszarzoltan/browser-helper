@@ -740,3 +740,72 @@ class TestStats:
         assert stats["total_requests"] == 3
         assert stats["total_success"] == 2
         assert stats["total_failures"] == 1
+class TestR3HealthCheckAsync:
+    """R3 regression: async health_check must not stall the event loop."""
+
+    @pytest.mark.asyncio
+    async def test_async_health_check_does_not_block_loop(self, monkeypatch):
+        """A slow proxy (simulated) must not stall the event loop when
+        health_check_async is awaited.  Uses a 50ms ticker to measure gaps."""
+        import asyncio as _asyncio
+        import time as _time
+
+        import httpx as _httpx
+        from proxy_manager import ProxyPool as _ProxyPool
+
+        pool = _ProxyPool()
+        pid = pool.add_proxy("http://blackhole:1080")
+
+        class _SlowAsyncClient:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url):
+                await _asyncio.sleep(2.0)  # simulate hanging proxy
+                from types import SimpleNamespace
+                return SimpleNamespace(status_code=500)
+
+        monkeypatch.setattr(_httpx, "AsyncClient", _SlowAsyncClient)
+
+        # Ticker: record gaps every ~50ms during the probe
+        tick_gaps: list[float] = []
+
+        async def _ticker():
+            last = _time.monotonic()
+            for _ in range(60):  # 60 x 50ms = 3s (probe is 2s)
+                await _asyncio.sleep(0.05)
+                now = _time.monotonic()
+                tick_gaps.append(now - last)
+                last = now
+
+        ticker_task = _asyncio.create_task(_ticker())
+        result = await pool.health_check_async(pid)
+        await ticker_task
+
+        assert result is not None
+        max_gap = max(tick_gaps)
+        assert max_gap < 0.15, (
+            f"Event loop stalled during async health_check: max tick gap "
+            f"was {max_gap:.3f}s (threshold 0.15s)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_health_check_all(self):
+        """health_check_all_async returns result dicts for all proxies."""
+        from proxy_manager import ProxyPool as _ProxyPool
+
+        pool = _ProxyPool()
+        p1 = pool.add_proxy("socks5://h1:1080")
+        p2 = pool.add_proxy("socks5://h2:1080")
+
+        results = await pool.health_check_all_async()
+        assert isinstance(results, list)
+        assert len(results) == 2
+        ids = {r["proxy_id"] for r in results}
+        assert p1 in ids and p2 in ids

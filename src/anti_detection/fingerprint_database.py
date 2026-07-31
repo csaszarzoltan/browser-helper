@@ -195,13 +195,13 @@ class FingerprintDatabase:
         self._storage_dir = Path(storage_dir) if storage_dir else Path.home() / ".browser-helper" / "fingerprints"
         self._storage_dir.mkdir(parents=True, exist_ok=True)
         self._templates: dict[str, FingerprintTemplate] = {}
-        if storage_dir is not None:
-            # Load persisted templates when an explicit path is provided
-            # (review H1). The default home-dir instance stays in-memory so
-            # API tests don't pick up stale files across runs.
-            self.load()
-        else:
-            self._load_defaults()
+        # Load persisted templates first — both explicit and default-dir
+        # instances must persist across restarts (review R1).  Test isolation
+        # belongs in tests (tmp dirs / HOME), NOT in production behaviour.
+        self.load()
+        # Seed per-name defaults for any names still missing from disk.
+        # Per-name seeding is safe after a load() — it only fills gaps.
+        self._load_defaults()
 
     def _load_defaults(self) -> None:
         """Seed default templates for names not already present.

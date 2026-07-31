@@ -626,3 +626,110 @@ class TestFingerprintTestEndpointInterface:
         urls_in_response = [entry["site"] for entry in data]
         for url in DetectionTester.TEST_SITES:
             assert url in urls_in_response, f"Missing test result for {url}"
+class _FakeBrowser:
+    """Fake CDP client that returns pre-set page text per URL."""
+
+    def __init__(self, url_texts: dict[str, str] | str = ""):
+        self._url_texts: dict[str, str] = {}
+        self._current_url = ""
+        if isinstance(url_texts, str):
+            for site in DetectionTester.TEST_SITES:
+                self._url_texts[site] = url_texts
+        else:
+            self._url_texts = url_texts
+
+    async def navigate(self, url: str) -> None:
+        self._current_url = url
+
+    async def get_page_text(self) -> str:
+        return self._url_texts.get(self._current_url, "")
+
+
+class TestR2RunAllEmptyPageText:
+    """R2 regression: empty page text yields 0/3 passed (review R2)."""
+
+    @pytest.mark.asyncio
+    async def test_empty_page_text_yields_zero_passed(self, monkeypatch):
+        """A fake browser returning "" for every site must produce 0/3
+        passed — never fabricate passes with zero checks."""
+        import asyncio as _asyncio
+
+        async def _noop_sleep(_):
+            pass
+
+        monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+
+        fake = _FakeBrowser("")
+        tester = DetectionTester()
+        results = await tester.run_all(cdp_client=fake)
+
+        assert len(results) == 3, f"Expected 3 results, got {len(results)}"
+        passed = [r for r in results if r.passed]
+        assert len(passed) == 0, (
+            f"Expected 0/3 passed with empty page text, got {len(passed)}: "
+            f"{[r.site for r in passed]}"
+        )
+        for r in results:
+            assert r.errors or not r.passed, (
+                f"{r.site} has no error and didn't pass — expected error message"
+            )
+
+    @pytest.mark.asyncio
+    async def test_real_fixtures_through_run_all(self, monkeypatch):
+        """Verify real HTML fixtures pass/fail through the full run_all
+        pipeline (sannysoft all-pass → pass; creepjs with lies → fail;
+        fingerprintjs demo → pass)."""
+        import asyncio as _asyncio
+
+        async def _noop_sleep(_):
+            pass
+
+        monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+
+        url_texts = {
+            "https://bot.sannysoft.com": SANNYSQFT_ALL_PASS_HTML,
+            "https://fingerprintjs.com/demo": FINGERPRINTJS_DEMO_HTML,
+            "https://creepjs.org/checker": CREEPJS_NORMAL_HTML,
+        }
+        fake = _FakeBrowser(url_texts)
+        tester = DetectionTester()
+        results = await tester.run_all(cdp_client=fake)
+
+        by_url = {r.site: r for r in results}
+        assert by_url["https://bot.sannysoft.com"].passed is True
+        assert by_url["https://creepjs.org/checker"].passed is False
+        assert by_url["https://fingerprintjs.com/demo"].passed is True
+
+
+class TestR2ParseFingerprintjs:
+    """R2: parser tests for the new fingerprintjs parser."""
+
+    def test_demo_html_matches(self):
+        result = DetectionTester.parse_fingerprintjs(FINGERPRINTJS_DEMO_HTML)
+        assert result["_matched"] is True
+        assert result["visitor_id"] == "a1b2c3d4e5f6g7h8"
+        assert result["components"] == 2
+
+    def test_empty_html_not_matched(self):
+        result = DetectionTester.parse_fingerprintjs(FINGERPRINTJS_EMPTY_HTML)
+        assert result["_matched"] is False
+        assert result["visitor_id"] is None
+        assert result["components"] == 0
+
+
+class TestR2ParseCreepjsEdgeCases:
+    """R2: creepjs parser — _matched flag for missing elements."""
+
+    def test_missing_elements_not_matched(self):
+        result = DetectionTester.parse_creepjs(CREEPJS_MISSING_ELEMENTS_HTML)
+        assert result["_matched"] is False
+        assert result["lies_detected"] == 0
+
+    def test_empty_not_matched(self):
+        result = DetectionTester.parse_creepjs(CREEPJS_EMPTY_HTML)
+        assert result["_matched"] is False
+
+    def test_normal_html_matched(self):
+        result = DetectionTester.parse_creepjs(CREEPJS_NORMAL_HTML)
+        assert result["_matched"] is True
+        assert result["lies_detected"] == 3

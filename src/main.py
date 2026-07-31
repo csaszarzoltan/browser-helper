@@ -3321,11 +3321,11 @@ async def clear_pool():
 async def trigger_health_check(body: HealthCheckRequest):
     """Run health check on all or a single proxy."""
     if body.proxy_id:
-        result = proxy_pool.health_check(body.proxy_id)
+        result = await proxy_pool.health_check_async(body.proxy_id)
         if result is None:
             return api_error("trigger_health_check", "proxy_not_found", f"Proxy {body.proxy_id!r} not found", 404)
         return api_success("trigger_health_check", {"results": [result]})
-    results = proxy_pool.health_check_all()
+    results = await proxy_pool.health_check_all_async()
     return api_success("trigger_health_check", {"results": results})
 
 
@@ -3507,9 +3507,9 @@ async def api_proxy_health(request: Request):
         pass
     proxy_id = body.get("proxy_id") if isinstance(body, dict) else None
     if proxy_id:
-        result = _proxy_rotation.health_check(proxy_id)
+        result = await _proxy_rotation.health_check_async(proxy_id)
         return {"status": "ok", "results": [result] if result else []}
-    return {"status": "ok", "results": _proxy_rotation.health_check_all()}
+    return {"status": "ok", "results": await _proxy_rotation.health_check_all_async()}
 
 
 @app.get("/api/v1/proxy/stats")

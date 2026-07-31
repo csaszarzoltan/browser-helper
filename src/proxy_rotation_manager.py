@@ -146,3 +146,11 @@ class ProxyRotationManager:
     def health_check_all(self) -> list[dict[str, Any]]:
         """Run health check on all proxies. Returns list of result dicts."""
         return self._pool.health_check_all()
+
+    async def health_check_async(self, proxy_id: str) -> dict[str, Any] | None:
+        """Non-blocking health check on a single proxy (R3)."""
+        return await self._pool.health_check_async(proxy_id)
+
+    async def health_check_all_async(self) -> list[dict[str, Any]]:
+        """Non-blocking health check on all proxies (R3)."""
+        return await self._pool.health_check_all_async()

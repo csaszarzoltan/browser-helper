@@ -331,6 +331,76 @@ class ProxyPool:
                 results.append(result)
         return results
 
+    # ── Non-blocking health checks for async callers (review R3) ──────
+
+    async def health_check_async(self, proxy_id: str) -> dict[str, Any] | None:
+        """Non-blocking health check using httpx.AsyncClient (R3).
+
+        Safe to call from within a running event loop — never stalls the
+        loop.  Returns the same result shape as the sync ``health_check``.
+        """
+        entry = self._proxies.get(proxy_id)
+        if not entry:
+            return None
+
+        start = time.time()
+        healthy = False
+        error = None
+
+        try:
+            import httpx as _httpx
+        except ImportError:
+            _httpx = None
+
+        if _httpx is None:
+            healthy = False
+            error = "httpx is not installed — cannot health-check proxy"
+        else:
+            try:
+                async with _httpx.AsyncClient(
+                    proxy=entry.url,
+                    timeout=10.0,
+                ) as client:
+                    resp = await client.get("https://httpbin.org/ip")
+                    healthy = resp.status_code == 200
+            except Exception as exc:  # noqa: BLE001 — probe failure = unhealthy
+                error = str(exc)
+                healthy = False
+
+        return self._finalize_health(entry, healthy, error, start)
+
+    async def health_check_all_async(self) -> list[dict[str, Any]]:
+        """Non-blocking health check on all proxies (R3)."""
+        results: list[dict[str, Any]] = []
+        for pid in list(self._proxies.keys()):
+            result = await self.health_check_async(pid)
+            if result:
+                results.append(result)
+        return results
+
+    def _finalize_health(
+        self,
+        entry: ProxyEntry,
+        healthy: bool,
+        error: str | None,
+        start: float,
+    ) -> dict[str, Any]:
+        """Update entry state and build the standard result dict."""
+        elapsed = (time.time() - start) * 1000
+        entry.healthy = healthy
+        entry.last_checked = time.time()
+        entry.latency_ms = round(elapsed, 1)
+
+        result: dict[str, Any] = {
+            "proxy_id": entry.id,
+            "healthy": healthy,
+            "latency_ms": entry.latency_ms,
+            "last_checked": entry.last_checked,
+        }
+        if error:
+            result["error"] = error
+        return result
+
     def report_success(self, proxy_id: str) -> None:
         """Record a successful request for a proxy."""
         entry = self._proxies.get(proxy_id)
