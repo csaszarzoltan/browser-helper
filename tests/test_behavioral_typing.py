@@ -30,6 +30,10 @@ import math
 from unittest.mock import AsyncMock
 
 import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from httpx import ASGITransport, AsyncClient
 
 from behavioral_typing import BehavioralTyping, TypingConfig

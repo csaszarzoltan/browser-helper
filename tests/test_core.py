@@ -10,6 +10,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import httpx
 import pytest
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from cdp_client import CDPClient, CDPError
 
 

@@ -8,6 +8,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from resource_monitor import ResourceMonitor
 
+import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
+
 
 class TestResourceMonitorInit:
     def test_create_with_current_pid(self):

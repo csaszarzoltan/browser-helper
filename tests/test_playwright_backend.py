@@ -35,6 +35,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))

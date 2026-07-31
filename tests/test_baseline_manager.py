@@ -17,6 +17,10 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 @pytest.fixture
 def base_dir(tmp_path):
     """Return a temporary directory for baseline storage."""

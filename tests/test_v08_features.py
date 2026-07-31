@@ -30,6 +30,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 import pytest_asyncio
 from httpx import ASGITransport
 from pydantic import ValidationError

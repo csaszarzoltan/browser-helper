@@ -22,6 +22,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # Expected fingerprint field list (as per P1-4 spec)
 # ---------------------------------------------------------------------------
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 FINGERPRINT_FIELDS = [
     "canvas_offset_x",
     "canvas_offset_y",

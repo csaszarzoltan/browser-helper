@@ -1,5 +1,10 @@
 """Focused regression tests for the LLM Agent Navigation Engine."""
 
+import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
@@ -12,6 +17,7 @@ from agent_navigation import (
     extract_by_schema,
     validate_expectations,
 )
+
 
 
 def ax_value(value):

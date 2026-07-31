@@ -24,6 +24,7 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "integration: mark tests that require real API keys (skipped by default)",
+    "quick: fast unit tests with mocks",
 ]
 asyncio_mode = "auto"
 

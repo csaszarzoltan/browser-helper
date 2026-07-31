@@ -20,6 +20,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
+
+# Mark as integration (uses TestClient)
+pytestmark = pytest.mark.integration
+
 from fastapi.testclient import TestClient
 
 import main

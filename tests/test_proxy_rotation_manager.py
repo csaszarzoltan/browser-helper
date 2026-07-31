@@ -34,6 +34,10 @@ import pytest
 # ===================================================================
 
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 @pytest.fixture
 def manager():
     """Return a fresh ProxyRotationManager with an internal ProxyPool."""

@@ -25,8 +25,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from session_manager import SessionManager, SessionState
 
+import pytest
+
+
+
 # ─── Helpers ───────────────────────────────────────────────────────────
 
+
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
 
 def _make_session_state(**overrides) -> SessionState:
     """Build a ``SessionState`` with sensible defaults."""

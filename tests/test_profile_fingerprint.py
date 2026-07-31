@@ -23,6 +23,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # Expected FingerprintConfig field names (mirror existing FINGERPRINT_FIELDS)
 # ---------------------------------------------------------------------------
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 FINGERPRINT_CONFIG_FIELDS = [
     "canvas_offset_x",
     "canvas_offset_y",

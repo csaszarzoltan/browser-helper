@@ -37,6 +37,10 @@ import pytest
 # ===================================================================
 
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 @pytest.fixture
 def storage_path(tmp_path):
     """Return a temporary path for proxy pool JSON persistence."""

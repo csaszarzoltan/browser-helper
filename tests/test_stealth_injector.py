@@ -33,6 +33,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from stealth_injector import LEVEL_PATCHES, StealthInjector, _make_patches
 
 

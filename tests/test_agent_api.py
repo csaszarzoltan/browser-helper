@@ -2,6 +2,10 @@ import base64
 from unittest.mock import AsyncMock
 
 import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from fastapi.testclient import TestClient
 
 import main

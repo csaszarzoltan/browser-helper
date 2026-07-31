@@ -25,6 +25,10 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 @pytest.fixture
 def storage_dir(tmp_path):
     """Return a temporary directory for profile storage."""

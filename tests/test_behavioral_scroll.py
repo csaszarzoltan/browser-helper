@@ -30,6 +30,10 @@ from pathlib import Path
 
 import pytest
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from behavioral_scroll import (

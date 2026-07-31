@@ -7,6 +7,10 @@ Tests for v1.1 features:
 """
 import json
 import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 

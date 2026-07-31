@@ -13,6 +13,10 @@ import math
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from fastapi.testclient import TestClient
 
 import main

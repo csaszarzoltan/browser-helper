@@ -27,6 +27,10 @@ import pytest
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 REPO_ROOT = Path(__file__).parent.parent
 SKILL_MD_PATH = REPO_ROOT / "SKILL.md"
 

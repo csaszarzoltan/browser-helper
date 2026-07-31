@@ -27,6 +27,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 
+
+# Mark as quick (unit tests with mocks)
+pytestmark = pytest.mark.quick
+
 from anti_detection.fingerprint_database import FingerprintDatabase, FingerprintTemplate
 
 # ===================================================================
