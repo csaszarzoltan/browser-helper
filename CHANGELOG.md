@@ -2,6 +2,51 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+### [1.8.0] — 2026-07-31
+
+#### Added
+
+**Anti-Detection Compositor** (`src/anti_detection/compositor.py`)
+- `AntiDetectCompositor` facade that composes a complete anti-detection profile: fingerprint spoofing (Canvas/WebGL/audio/navigator), proxy rotation strategy, session persistence, and stealth injection — selectable per browser session.
+- Compose/test/export/import endpoints wired through the REST API; 64 tests.
+
+**Fingerprint Database** (`src/anti_detection/fingerprint_database.py`)
+- JSON-backed fingerprint template database with 4 shipped defaults (`stealth-chrome-120`, `mobile-safari-ios`, `firefox-linux`, `edge-windows`).
+- Template add/get/remove/list, arbitrary template generation (`generate_template`), and load-on-init persistence — templates added via API now survive restarts.
+- Export/import of template JSON files.
+
+**Proxy Rotation** (`src/proxy_rotation_manager.py`)
+- `ProxyRotationManager` wrapping `ProxyPool` with env-var auto-load (`PROXY_LIST`/`PROXY_FILE`).
+- 5 rotation strategies: round-robin, random, sticky, by-tag, and health — 70 tests.
+- Non-blocking async health checks (`health_check_async`/`health_check_all_async`, httpx.AsyncClient) that never stall the event loop.
+
+**Session Persistence** (`src/session_manager.py`)
+- `SessionManager` capture/restore of browser session state: cookies (`Network.getAllCookies`), storage (`Runtime.evaluate`), and WebSocket frames — 32 tests.
+
+**REST API** (`src/main.py`)
+- New `/api/v1` endpoints: `/api/v1/fingerprints/*` (generate, export, import), `/api/v1/session/*` (capture, restore, cleanup), `/api/v1/compose/*` (compose, test, export, import, resolve, resolve-stealth), `/api/v1/proxy/*` (health, stats, load-from-env) — 114 tests.
+
+**Stealth Injection improvements** (`src/stealth_injector.py`)
+- Real CDP injection via `Page.addScriptToEvaluateOnNewDocument` and correct `json.dumps` escaping of injected JS payloads.
+
+#### Fixed
+
+- **C1–C5 critical defects** (tech-lead review): detection tests no longer report fabricated passes without a CDP connection; `StealthInjector` performs real CDP script injection; session capture/restore works with real CDP clients; JS injection payloads correctly escaped; proxy health check performs a real `httpx` probe instead of marking everything unhealthy.
+- **R1 — fingerprint persistence**: default-constructed `FingerprintDatabase()` now loads persisted files on init, so API-added templates survive restarts.
+- **R2 — detection tester integrity**: `DetectionTester.run_all` fails on zero parsed checks (sannysoft/creepjs/fingerprintjs) instead of fabricating 3/3 passes from empty page text; real `parse_fingerprintjs` implemented.
+- **R3 — event-loop stall**: `/proxy/health` handlers now await async probes — an unreachable proxy can no longer freeze the event loop for 10s+.
+
+#### Tests
+
+- 11 regression tests for R1/R2/R3 (load-on-init persistence, empty-page → 0/3 passed, 50ms-ticker loop-responsiveness).
+- Overshoot target assertion made deterministic (random direction).
+- 12 stale RED-phase markers removed, stale RED-phase tests cleaned from compositor and modules, 15 new ruff errors resolved.
+- Anti-detection suite green at release: 509 passed / 0 failed (tech-lead approval run); full suite failures unchanged vs pre-sprint baseline.
+
+#### Docs
+
+- Expanded anti-detection documentation and examples (proxy rotation, profile manager, behavioral simulation, fingerprint randomization, cloud provider setup) and README feature table.
+
 ### [1.7.0] — 2026-07-30
 
 #### Added
