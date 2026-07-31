@@ -3593,6 +3593,8 @@ async def api_fingerprints_collection(request: Request):
         metadata=body.get("metadata", {"version": 1, "created_at": time.time(), "description": ""}),
     )
     _fingerprint_db.add_template(tpl)
+    # Persist immediately so API-created templates survive restart (review H1)
+    _fingerprint_db.save()
     return {"status": "ok", "name": tpl.name}
 
 
@@ -3602,6 +3604,8 @@ async def api_fingerprints_item(request: Request, name: str):
     if request.method == "DELETE":
         if not _fingerprint_db.delete_template(name):
             return _api_error(404, f"Template not found: {name}")
+        # Persist deletion (review H1)
+        _fingerprint_db.save()
         return {"status": "ok"}
     if request.method == "PUT":
         try:
@@ -3610,6 +3614,8 @@ async def api_fingerprints_item(request: Request, name: str):
             body = {}
         if not _fingerprint_db.update_template(name, body):
             return _api_error(404, f"Template not found: {name}")
+        # Persist update (review H1)
+        _fingerprint_db.save()
         return {"status": "ok"}
     tpl = _fingerprint_db.get_template(name)
     if tpl is None:
@@ -3666,6 +3672,8 @@ async def api_fingerprints_import(body: dict):
         name = _fingerprint_db.import_template(path)
     except (FileNotFoundError, OSError):
         return _api_error(404, f"Import file not found: {path}")
+    # Persist the imported template (review H1)
+    _fingerprint_db.save()
     return {"status": "ok", "name": name}
 
 
@@ -3674,15 +3682,56 @@ async def api_fingerprints_import(body: dict):
 # ===================================================================
 
 
+async def _create_cdp_client(cdp_url: str) -> tuple[CDPClient | None, str | None]:
+    """Create (and try to connect) a real CDPClient from a ws:// URL.
+
+    Returns ``(client, error)``. ``client`` is a real ``CDPClient`` even
+    when the connection attempt failed, so callers always pass a real
+    client type into session_manager / detection_tester (review C3);
+    ``error`` is set when the connection could not be established.
+
+    Raises:
+        HTTPException(422): if ``cdp_url`` is not a ws:// or wss:// URL.
+    """
+    if not cdp_url:
+        return None, None
+    if not cdp_url.startswith(("ws://", "wss://")):
+        raise HTTPException(
+            status_code=422,
+            detail="Field 'cdp_url' must be a ws:// or wss:// WebSocket URL",
+        )
+    client = CDPClient()
+    try:
+        await asyncio.wait_for(client.connect_ws(cdp_url), timeout=5.0)
+        return client, None
+    except Exception as exc:  # noqa: BLE001 — surface connection failure to the caller
+        logger.warning("CDP connection failed for %s: %s", cdp_url, exc)
+        return client, str(exc)
+
+
 @app.post("/api/v1/session/capture")
 async def api_session_capture(body: dict):
-    """Capture session state."""
+    """Capture session state.
+
+    Requires a proper CDP WebSocket URL (``ws://``) in ``cdp_url``; a real
+    CDPClient is created and passed to the session manager. If the CDP
+    endpoint is unreachable the response carries a ``warning`` field instead
+    of silently fabricating state.
+    """
     session_id = body.get("session_id")
     if not session_id:
         raise HTTPException(status_code=422, detail="Field 'session_id' is required")
     cdp_url = body.get("cdp_url", "")
-    state = await _session_mgr.capture(cdp_client=None if not cdp_url else cdp_url, session_id=session_id)
-    return {
+    client, cdp_error = await _create_cdp_client(cdp_url)
+    try:
+        state = await _session_mgr.capture(cdp_client=client, session_id=session_id)
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception as exc:  # noqa: BLE001 — close is best-effort
+                logger.debug("Error closing CDP client: %s", exc)
+    response = {
         "status": "ok",
         "session": {
             "session_id": state.session_id,
@@ -3693,19 +3742,38 @@ async def api_session_capture(body: dict):
             "last_active": state.last_active,
         },
     }
+    if cdp_error:
+        response["warning"] = f"CDP unavailable: {cdp_error}"
+    return response
 
 
 @app.post("/api/v1/session/restore")
 async def api_session_restore(body: dict):
-    """Restore session state."""
+    """Restore session state.
+
+    Requires a proper CDP WebSocket URL (``ws://``) in ``cdp_url``; a real
+    CDPClient is created and passed to the session manager (review C3).
+    """
     session_id = body.get("session_id")
     if not session_id:
         raise HTTPException(status_code=422, detail="Field 'session_id' is required")
     state = _session_mgr.load(session_id)
     if state is None:
         return _api_error(404, f"Session not found: {session_id}")
-    result = await _session_mgr.restore(cdp_client=None, state=state)
-    return {"status": "ok", "session_id": result["session_id"]}
+    cdp_url = body.get("cdp_url", "")
+    client, cdp_error = await _create_cdp_client(cdp_url)
+    try:
+        result = await _session_mgr.restore(cdp_client=client, state=state)
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception as exc:  # noqa: BLE001 — close is best-effort
+                logger.debug("Error closing CDP client: %s", exc)
+    response = {"status": "ok", "session_id": result["session_id"]}
+    if cdp_error:
+        response["warning"] = f"CDP unavailable: {cdp_error}"
+    return response
 
 
 @app.get("/api/v1/session")
@@ -3768,6 +3836,9 @@ async def api_compose(body: dict):
         result = _compositor.compose(bundle)
     except KeyError as exc:
         return _api_error(400, str(exc))
+    except ValueError as exc:
+        # Unvalidated fingerprint signals (review H3)
+        return _api_error(400, str(exc))
     # The API contract exposes the combined scripts under the "combined" key
     result["combined"] = result.get("combined_js", [])
     return {"status": "ok", "bundle": result}
@@ -3775,7 +3846,13 @@ async def api_compose(body: dict):
 
 @app.post("/api/v1/compose/test")
 async def api_compose_test(body: dict):
-    """Test a composed profile."""
+    """Test a composed profile.
+
+    Requires a proper CDP WebSocket URL (``ws://``) in ``cdp_url``; a real
+    CDPClient is created and passed to the detection tester. If the CDP
+    endpoint is unreachable the per-site results carry explicit errors
+    instead of fabricated passes (review C1).
+    """
     bundle_data = body.get("bundle")
     cdp_url = body.get("cdp_url")
     if not isinstance(bundle_data, dict):
@@ -3790,9 +3867,17 @@ async def api_compose_test(body: dict):
         stealth_level=bundle_data.get("stealth_level", "medium"),
         session_ttl=bundle_data.get("session_ttl", 3600.0),
     )
-    results = await _compositor.test(bundle, cdp_client=None)
+    client, cdp_error = await _create_cdp_client(cdp_url)
+    try:
+        results = await _compositor.test(bundle, cdp_client=client)
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception as exc:  # noqa: BLE001 — close is best-effort
+                logger.debug("Error closing CDP client: %s", exc)
     site_results = results.get("results", [])
-    return {
+    response = {
         "status": "ok",
         "results": {
             "sites": site_results,
@@ -3802,6 +3887,9 @@ async def api_compose_test(body: dict):
             },
         },
     }
+    if cdp_error:
+        response["warning"] = f"CDP unavailable: {cdp_error}"
+    return response
 
 
 @app.post("/api/v1/compose/export")
@@ -3846,6 +3934,9 @@ async def api_compose_resolve(body: dict):
         )
     except KeyError as exc:
         return _api_error(400, str(exc))
+    except ValueError as exc:
+        # Unvalidated fingerprint signals (review H3)
+        return _api_error(400, str(exc))
     return {
         "status": "ok",
         "config": result.get("config", {}),
@@ -3870,10 +3961,33 @@ async def api_compose_resolve_stealth(body: dict):
 
 
 @app.post("/tools/fingerprint-test")
-async def api_fingerprint_test():
-    """Run fingerprint detection tests on all known test sites."""
+async def api_fingerprint_test(body: dict | None = None):
+    """Run fingerprint detection tests on all known test sites.
+
+    Accepts an optional ``cdp_url`` body field (a ws:// CDP WebSocket URL).
+    When provided, a real CDPClient is created and used for navigation; when
+    absent or unreachable the endpoint returns explicit per-site failures
+    (503 on hard errors) instead of fabricated passes (review C1).
+    """
+    body = body or {}
+    cdp_url = body.get("cdp_url") if isinstance(body, dict) else None
     try:
-        results = await _detection_tester.run_all(cdp_client=None, timeout_per_site=30)
+        if cdp_url:
+            client, _ = await _create_cdp_client(cdp_url)
+            try:
+                results = await _detection_tester.run_all(
+                    cdp_client=client, timeout_per_site=30
+                )
+            finally:
+                if client is not None:
+                    try:
+                        await client.close()
+                    except Exception as exc:  # noqa: BLE001 — close is best-effort
+                        logger.debug("Error closing CDP client: %s", exc)
+        else:
+            results = await _detection_tester.run_all(
+                cdp_client=None, timeout_per_site=30
+            )
     except Exception as exc:  # noqa: BLE001 — any detection failure must surface as 503, not 500
         return JSONResponse(
             status_code=503,

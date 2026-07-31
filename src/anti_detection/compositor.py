@@ -209,12 +209,20 @@ class AntiDetectCompositor:
 
         if canvas.get("noise_enabled", False):
             seed = canvas.get("noise_seed", 0)
+            # Validate before interpolating into JS — a non-int seed would be
+            # an injection vector (review H3).
+            if not isinstance(seed, int) or isinstance(seed, bool):
+                raise ValueError(
+                    f"canvas.noise_seed must be an integer, got {type(seed).__name__}"
+                )
             js_patches.append(
                 f"(function(){{"
                 f"const _origGetImageData=HTMLCanvasElement.prototype.getImageData;"
                 f"HTMLCanvasElement.prototype.getImageData=function(x,y,w,h){{"
                 f"const img=_origGetImageData.call(this,x,y,w,h);"
-                f"for(let i=0;i<img.data.length;i+=4){{img.data[i]^={seed};}}"
+                f"for(let i=0;i<img.data.length;i+=4){{"
+                f"img.data[i]^={seed};img.data[i+1]^={seed};img.data[i+2]^={seed};"
+                f"}}"
                 f"return img;}})();"
             )
 

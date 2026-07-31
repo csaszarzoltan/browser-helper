@@ -93,6 +93,44 @@ class CDPClient:
         self._tabs_cache_ts = now
         return self._tabs_cache
 
+    async def connect_ws(self, ws_url: str) -> dict:
+        """Connect directly to a CDP WebSocket URL (``ws://`` or ``wss://``).
+
+        Unlike :meth:`connect` (which discovers tabs via the HTTP ``/json``
+        endpoint), this connects straight to the given WebSocket endpoint —
+        e.g. ``ws://127.0.0.1:9222/devtools/browser/<id>`` — without tab
+        discovery. Enables Page and Runtime domains like ``connect()``.
+
+        Args:
+            ws_url: CDP WebSocket URL.
+
+        Returns:
+            ``{"status": "ok", "target_id": ..., "cdp_url": ws_url}``
+
+        Raises:
+            CDPError: if the connection or domain enable fails.
+        """
+        try:
+            self._ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
+        except Exception as exc:
+            raise CDPError(f"Cannot connect to CDP WebSocket {ws_url}: {exc}") from exc
+        self._connected = True
+        self._target_id = None
+        self._active_tab_id = None
+        self._message_id = 0
+        self._pending = {}
+
+        asyncio.create_task(self._listener())
+
+        await self._send_command("Page.enable")
+        await self._send_command("Runtime.enable")
+
+        return {
+            "status": "ok",
+            "target_id": self._target_id or "",
+            "cdp_url": ws_url,
+        }
+
     async def connect(self, cdp_url: str | None = None) -> dict:
         """
         Auto-connect to Chrome CDP.

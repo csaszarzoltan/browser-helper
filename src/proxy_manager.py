@@ -274,8 +274,21 @@ class ProxyPool:
         except RuntimeError:
             in_running_loop = False
 
-        if in_running_loop or httpx is None:
+        if httpx is None:
             healthy = False
+            error = "httpx is not installed — cannot health-check proxy"
+        elif in_running_loop:
+            # Inside a running event loop we cannot use asyncio.run(); perform
+            # the probe with the synchronous httpx client. This blocks the
+            # loop briefly but performs a REAL check (review C5) instead of
+            # marking the proxy unhealthy without checking.
+            try:
+                with httpx.Client(proxy=entry.url, timeout=10.0) as client:
+                    resp = client.get("https://httpbin.org/ip")
+                    healthy = resp.status_code == 200
+            except Exception as exc:  # noqa: BLE001 — probe failure means unhealthy
+                error = str(exc)
+                healthy = False
         else:
             try:
                 async def _check() -> bool:

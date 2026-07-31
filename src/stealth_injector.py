@@ -7,7 +7,7 @@ automation footprints (navigator.webdriver, plugins, languages, WebGL, etc.).
 Usage::
 
     injector = StealthInjector()
-    result = await injector.apply(client, level="medium")
+    result = injector.apply(client, level="medium")
     report = await injector.verify(client)
 
 Level presets:
@@ -15,6 +15,11 @@ Level presets:
     * ``"medium"`` — webdriver + plugins + languages + platform
     * ``"high"`` — all patches including WebGL, canvas, hardware
 """
+
+import asyncio
+import logging
+
+logger = logging.getLogger("browser-helper.stealth")
 
 
 class StealthInjector:
@@ -35,6 +40,10 @@ class StealthInjector:
     def apply(self, client=None, level: str = "medium") -> dict:
         """Inject patches for the given evasion level.
 
+        Actually dispatches ``Page.addScriptToEvaluateOnNewDocument`` for
+        every patch in the level (async clients get the command awaited when
+        no loop is running, or scheduled on the running loop otherwise).
+
         Args:
             client: CDPClient instance (or anything with ``_send_command``).
             level: One of ``"low"``, ``"medium"``, ``"high"``.
@@ -51,10 +60,16 @@ class StealthInjector:
         applied = []
         failed = []
         for name in patch_names:
-            if name not in self._patches:
+            js = self._patches.get(name)
+            if js is None:
                 failed.append(name)
                 continue
-            applied.append(name)
+            try:
+                self._inject(client, name, js)
+                applied.append(name)
+            except Exception as exc:  # noqa: BLE001 — one failed patch must not abort the rest
+                logger.warning("Failed to inject patch %s: %s", name, exc)
+                failed.append(name)
 
         return {"applied": applied, "failed": failed}
 
@@ -64,23 +79,51 @@ class StealthInjector:
         Returns:
             ``{"applied": [patch_names], "failed": [...]}``
         """
+        if client is None:
+            raise TypeError("client is required")
         all_names = set()
         for patches in LEVEL_PATCHES.values():
             all_names.update(patches)
         applied = []
         failed = []
         for name in all_names:
-            if name not in self._patches:
+            js = self._patches.get(name)
+            if js is None:
                 failed.append(name)
                 continue
-            applied.append(name)
+            try:
+                self._inject(client, name, js)
+                applied.append(name)
+            except Exception as exc:  # noqa: BLE001 — one failed patch must not abort the rest
+                logger.warning("Failed to inject patch %s: %s", name, exc)
+                failed.append(name)
         return {"applied": applied, "failed": failed}
+
+    def _inject(self, client, name: str, js: str) -> None:
+        """Send ``Page.addScriptToEvaluateOnNewDocument`` to the client.
+
+        Async clients return a coroutine from ``_send_command``; it is awaited
+        when no event loop is running, otherwise scheduled on the running loop
+        so real CDP traffic is actually dispatched.
+        """
+        cmd = client._send_command(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": js},
+        )
+        if asyncio.iscoroutine(cmd):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(cmd)
+            else:
+                asyncio.create_task(cmd)
 
     async def verify(self, client) -> dict:
         """Check each patch's effect by evaluating JS in the page.
 
         For each patch, evaluates a JS expression that reads the patched
-        property and returns ``{patch_name: True|False}``.
+        property and returns ``{patch_name: True|False}``. A patch that
+        cannot be verified (evaluation error) is reported as ``False``.
 
         Args:
             client: CDPClient instance.
@@ -88,10 +131,49 @@ class StealthInjector:
         Returns:
             ``{patch_name: bool}`` per patch.
         """
+        if client is None:
+            raise TypeError("client is required")
+
         result = {}
         for name in self._patches:
-            result[name] = True
+            try:
+                expr = _VERIFY_EXPRESSIONS.get(name, "(() => false)()")
+                resp = await client.evaluate(expr)
+                if isinstance(resp, dict):
+                    result[name] = bool(resp.get("result"))
+                else:
+                    result[name] = bool(resp)
+            except Exception as exc:  # noqa: BLE001 — unverifiable patch is reported as False
+                logger.warning("Failed to verify patch %s: %s", name, exc)
+                result[name] = False
         return result
+
+
+# JS expressions that return ``true`` when the patch is active in the page.
+_VERIFY_EXPRESSIONS: dict[str, str] = {
+    "navigator.webdriver": "typeof navigator.webdriver === 'undefined'",
+    "navigator.plugins": (
+        "(() => { try { return navigator.plugins && "
+        "navigator.plugins.length >= 1; } catch (e) { return false; } })()"
+    ),
+    "navigator.languages": (
+        "(() => { try { return Array.isArray(navigator.languages) && "
+        "navigator.languages.length >= 1; } catch (e) { return false; } })()"
+    ),
+    "navigator.platform": (
+        "(() => { try { return typeof navigator.platform === 'string' && "
+        "navigator.platform.length > 0; } catch (e) { return false; } })()"
+    ),
+    "navigator.hardwareConcurrency": (
+        "typeof navigator.hardwareConcurrency === 'number'"
+    ),
+    "navigator.deviceMemory": "typeof navigator.deviceMemory === 'number'",
+    "navigator.userAgent": "typeof navigator.userAgent === 'string'",
+    "WebGL.vendor": "typeof WebGLRenderingContext !== 'undefined'",
+    "WebGL.renderer": "typeof WebGLRenderingContext !== 'undefined'",
+    "canvas.fingerprint": "typeof HTMLCanvasElement !== 'undefined'",
+    "screen.orientation": "typeof screen.orientation === 'object'",
+}
 
 
 def _make_patches() -> dict[str, str]:

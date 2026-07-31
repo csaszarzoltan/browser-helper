@@ -55,92 +55,69 @@ class DetectionTester:
         Returns:
             List of TestResult, one per test site.
         """
+        if cdp_client is None:
+            # Explicit failure instead of fabricated results — a detection
+            # run without a CDP connection cannot pass (review C1).
+            return [
+                TestResult(
+                    site=site_url,
+                    passed=False,
+                    details={},
+                    errors=["cdp_client is required — no CDP connection provided"],
+                )
+                for site_url in self.TEST_SITES
+            ]
+
         results: list[TestResult] = []
         for site_url in self.TEST_SITES:
             try:
-                # Attempt page text extraction. With mock clients this returns
-                # a test fixture; with real CDP it navigates and extracts HTML.
-                from unittest.mock import MagicMock
+                page_text = ""
+                try:
+                    # Navigate and get page content
+                    await cdp_client.navigate(site_url)
+                    import asyncio
 
-                if isinstance(cdp_client, MagicMock) or cdp_client is None:
-                    # Unit test mode — return a synthetic result
-                    if "sannysoft" in site_url:
-                        result = TestResult(
-                            site=site_url,
-                            passed=True,
-                            details={"webdriver": True, "plugins": True},
-                            errors=[],
-                        )
-                    elif "fingerprintjs" in site_url:
-                        result = TestResult(
-                            site=site_url,
-                            passed=True,
-                            details={"visitorId": "a1b2c3d4e5f6g7h8"},
-                            errors=[],
-                        )
-                    elif "creepjs" in site_url:
-                        result = TestResult(
-                            site=site_url,
-                            passed=True,
-                            details={"lies_detected": 0, "coverage_score": 100.0},
-                            errors=[],
-                        )
-                    else:
-                        result = TestResult(
-                            site=site_url,
-                            passed=False,
-                            details={},
-                            errors=["Unknown test site"],
-                        )
+                    await asyncio.sleep(2)  # Wait for page to render
+                    page_text = await cdp_client.get_page_text()
+                except Exception as exc:  # noqa: BLE001 — one site's navigation failure must not abort the run
+                    result = TestResult(
+                        site=site_url,
+                        passed=False,
+                        details={},
+                        errors=[str(exc)],
+                    )
+                    results.append(result)
+                    continue
+
+                if "sannysoft" in site_url:
+                    parsed = self.parse_sannysoft(page_text)
+                    all_pass = all(
+                        v is True
+                        for k, v in parsed.items()
+                        if not k.startswith("_")
+                    )
+                    result = TestResult(
+                        site=site_url,
+                        passed=all_pass,
+                        details=parsed,
+                        errors=[],
+                    )
+                elif "creepjs" in site_url:
+                    parsed = self.parse_creepjs(page_text)
+                    lies = parsed.get("lies_detected", -1)
+                    result = TestResult(
+                        site=site_url,
+                        passed=lies == 0,
+                        details=parsed,
+                        errors=[],
+                    )
                 else:
-                    # Real CDP client mode
-                    page_text = ""
-                    try:
-                        # Navigate and get page content
-                        await cdp_client.navigate(site_url)
-                        import asyncio
-
-                        await asyncio.sleep(2)  # Wait for page to render
-                        page_text = await cdp_client.get_page_text()
-                    except Exception as exc:  # noqa: BLE001 — one site's navigation failure must not abort the run
-                        result = TestResult(
-                            site=site_url,
-                            passed=False,
-                            details={},
-                            errors=[str(exc)],
-                        )
-                        results.append(result)
-                        continue
-
-                    if "sannysoft" in site_url:
-                        parsed = self.parse_sannysoft(page_text)
-                        all_pass = all(
-                            v is True
-                            for k, v in parsed.items()
-                            if not k.startswith("_")
-                        )
-                        result = TestResult(
-                            site=site_url,
-                            passed=all_pass,
-                            details=parsed,
-                            errors=[],
-                        )
-                    elif "creepjs" in site_url:
-                        parsed = self.parse_creepjs(page_text)
-                        lies = parsed.get("lies_detected", -1)
-                        result = TestResult(
-                            site=site_url,
-                            passed=lies == 0,
-                            details=parsed,
-                            errors=[],
-                        )
-                    else:
-                        result = TestResult(
-                            site=site_url,
-                            passed=True,
-                            details={},
-                            errors=[],
-                        )
+                    result = TestResult(
+                        site=site_url,
+                        passed=True,
+                        details={},
+                        errors=[],
+                    )
 
                 results.append(result)
             except Exception as exc:  # noqa: BLE001 — unexpected per-site errors are recorded, not fatal

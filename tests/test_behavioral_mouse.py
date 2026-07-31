@@ -274,14 +274,23 @@ async def async_client():
 class TestBezierPathGeneration:
     """_generate_bezier_path() raises NotImplementedError in stub."""
 
-    def test_generate_bezier_path_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            mouse._generate_bezier_path(100, 200, 500, 600, num_steps=20)
+    def test_generate_bezier_path_returns_list_of_tuples(self, mouse):
+        """Test that _generate_bezier_path returns a list of (x, y) tuples."""
+        path = mouse._generate_bezier_path(100, 200, 500, 600, num_steps=20)
+        assert isinstance(path, list)
+        assert len(path) == 20
+        assert all(isinstance(p, tuple) and len(p) == 2 for p in path)
+        # Start and end points should be close to the input coordinates
+        assert abs(path[0][0] - 100) < 10
+        assert abs(path[0][1] - 200) < 10
+        assert abs(path[-1][0] - 500) < 10
+        assert abs(path[-1][1] - 600) < 10
 
     def test_generate_bezier_path_static_method(self):
         from behavioral_mouse import BehavioralMouse
-        with pytest.raises(NotImplementedError):
-            BehavioralMouse._generate_bezier_path(0, 0, 800, 600)
+        path = BehavioralMouse._generate_bezier_path(0, 0, 800, 600)
+        assert isinstance(path, list)
+        assert len(path) > 0
 
     def test_generate_bezier_path_signature(self):
         from behavioral_mouse import BehavioralMouse
@@ -299,9 +308,15 @@ class TestBezierPathGeneration:
 class TestJitter:
     """Jitter on control points."""
 
-    def test_add_jitter_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            mouse._add_jitter((100.0, 200.0))
+    def test_add_jitter_returns_tuple(self, mouse):
+        """Test that _add_jitter returns a jittered tuple."""
+        point = (100.0, 200.0)
+        jittered = mouse._add_jitter(point)
+        assert isinstance(jittered, tuple)
+        assert len(jittered) == 2
+        # Jittered point should be close to original (within amplitude)
+        assert abs(jittered[0] - point[0]) <= 2.0
+        assert abs(jittered[1] - point[1]) <= 2.0
 
     def test_add_jitter_accepts_amplitude(self, mouse):
         sig = inspect.signature(mouse._add_jitter)
@@ -316,13 +331,18 @@ class TestJitter:
 class TestOvershoot:
     """Overshoot probability and target computation."""
 
-    def test_should_overshoot_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            mouse._should_overshoot()
+    def test_should_overshoot_returns_bool(self, mouse):
+        """Test that _should_overshoot returns a boolean."""
+        result = mouse._should_overshoot()
+        assert isinstance(result, bool)
 
-    def test_compute_overshoot_target_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            mouse._compute_overshoot_target(500.0, 300.0, overshoot_px=10)
+    def test_compute_overshoot_target_returns_tuple(self, mouse):
+        """Test that _compute_overshoot_target returns a tuple."""
+        target = mouse._compute_overshoot_target(500.0, 300.0, overshoot_px=10)
+        assert isinstance(target, tuple)
+        assert len(target) == 2
+        # Overshoot target should be beyond the original target
+        assert target[0] > 500.0 or target[1] > 300.0
 
     def test_compute_overshoot_target_signature(self):
         from behavioral_mouse import BehavioralMouse
@@ -359,9 +379,14 @@ class TestSpeedProfiles:
         fast = MouseConfig(speed="fast").base_duration_ms
         assert slow > normal > fast
 
-    def test_inter_step_delays_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            mouse._inter_step_delays(num_steps=20, base_duration_ms=300)
+    def test_inter_step_delays_returns_list(self, mouse):
+        """Test that _inter_step_delays returns a list of delays."""
+        delays = mouse._inter_step_delays(num_steps=20, base_duration_ms=300)
+        assert isinstance(delays, list)
+        assert len(delays) == 20
+        assert all(isinstance(d, (int, float)) for d in delays)
+        # Total should be close to base_duration_ms
+        assert sum(delays) > 0
 
     def test_inter_step_delays_signature(self):
         from behavioral_mouse import BehavioralMouse
@@ -380,21 +405,16 @@ class TestSpeedProfiles:
 class TestMoveToClick:
     """move_to() and click() raise NotImplementedError in stub."""
 
-    async def test_move_to_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            await mouse.move_to(x=500, y=300)
+    async def test_move_to_returns_list(self, mouse, mock_cdp_client):
+        """Test that move_to returns a list of events."""
+        result = await mouse.move_to(x=500, y=300, client=mock_cdp_client)
+        assert isinstance(result, list)
 
-    async def test_move_to_accepts_client(self, mouse, mock_cdp_client):
-        with pytest.raises(NotImplementedError):
-            await mouse.move_to(x=500, y=300, client=mock_cdp_client)
-
-    async def test_click_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            await mouse.click(x=500, y=300)
-
-    async def test_click_accepts_client(self, mouse, mock_cdp_client):
-        with pytest.raises(NotImplementedError):
-            await mouse.click(x=500, y=300, client=mock_cdp_client)
+    async def test_click_returns_dict(self, mouse, mock_cdp_client):
+        """Test that click returns a dict with status."""
+        result = await mouse.click(x=500, y=300, client=mock_cdp_client)
+        assert isinstance(result, dict)
+        assert "status" in result
 
     async def test_move_to_returns_list_of_dicts(self, monkeypatch, mouse):
         monkeypatch.setattr(
@@ -406,7 +426,7 @@ class TestMoveToClick:
         assert len(result) > 0
         assert isinstance(result[0], dict)
 
-    async def test_click_returns_dict(self, monkeypatch, mouse):
+    async def test_click_returns_dict_with_mock(self, monkeypatch, mouse):
         monkeypatch.setattr(
             mouse, "click",
             AsyncMock(return_value={"status": "ok", "x": 500, "y": 300}),
@@ -425,9 +445,10 @@ class TestMoveToClick:
 class TestDisabledMode:
     """Disabled mode falls through to raw CDP."""
 
-    def test_raw_move_to_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            mouse._raw_move_to(100, 200)
+    def test_raw_move_to_returns_list(self, mouse):
+        """Test that _raw_move_to returns a list of events."""
+        result = mouse._raw_move_to(100, 200)
+        assert isinstance(result, list)
 
     def test_raw_move_to_signature(self):
         from behavioral_mouse import BehavioralMouse
@@ -445,9 +466,12 @@ class TestDisabledMode:
 class TestEventDispatch:
     """CDP event dispatch via _make_dispatch_params."""
 
-    def test_make_dispatch_params_raises_not_implemented(self, mouse):
-        with pytest.raises(NotImplementedError):
-            mouse._make_dispatch_params("mouseMoved", 100, 200)
+    def test_make_dispatch_params_returns_dict(self, mouse):
+        """Test that _make_dispatch_params returns a dict."""
+        result = mouse._make_dispatch_params("mouseMoved", 100, 200)
+        assert isinstance(result, dict)
+        assert "type" in result
+        assert result["type"] == "mouseMoved"
 
     def test_make_dispatch_params_signature(self):
         from behavioral_mouse import BehavioralMouse
@@ -460,7 +484,7 @@ class TestEventDispatch:
         sig = inspect.signature(mouse._make_dispatch_params)
         assert "button" in sig.parameters
 
-    def test_make_dispatch_params_returns_dict(self, monkeypatch):
+    def test_make_dispatch_params_returns_dict_with_mock(self, monkeypatch):
         from behavioral_mouse import BehavioralMouse
         mock_ret = {"type": "mouseMoved", "x": 100, "y": 200, "button": "left"}
         monkeypatch.setattr(

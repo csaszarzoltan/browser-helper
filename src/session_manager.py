@@ -178,7 +178,10 @@ class SessionManager:
                     try:
                         await cdp_client._send_command(
                             "Runtime.evaluate",
-                            expression=f"window.localStorage.setItem('{key}', '{value}')",
+                            expression=(
+                                "window.localStorage.setItem("
+                                f"{json.dumps(key)}, {json.dumps(value)})"
+                            ),
                         )
                     except Exception as exc:  # noqa: BLE001 — restore must degrade gracefully
                         logger.warning("Failed to set localStorage key %s: %s", key, exc)
@@ -188,7 +191,10 @@ class SessionManager:
                     try:
                         await cdp_client._send_command(
                             "Runtime.evaluate",
-                            expression=f"window.sessionStorage.setItem('{key}', '{value}')",
+                            expression=(
+                                "window.sessionStorage.setItem("
+                                f"{json.dumps(key)}, {json.dumps(value)})"
+                            ),
                         )
                     except Exception as exc:  # noqa: BLE001 — restore must degrade gracefully
                         logger.warning("Failed to set sessionStorage key %s: %s", key, exc)
