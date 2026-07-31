@@ -59,6 +59,27 @@ from settings_manager import SettingsManager
 
 from proxy_manager import ProxyParseError, ProxyPool
 
+# ── Anti-detection v1.8.0 modules ──────────────────────────────────
+from proxy_rotation_manager import ProxyRotationManager
+from anti_detection.fingerprint_database import FingerprintDatabase
+from session_manager import SessionManager
+from stealth_injector import StealthInjector
+from anti_detection.compositor import AntiDetectCompositor, AntiDetectProfileBundle
+from detection_tester import DetectionTester
+
+# Global singleton instances for v1.8.0 API endpoints
+_fingerprint_db = FingerprintDatabase()
+_proxy_rotation = ProxyRotationManager()
+_stealth_injector = StealthInjector()
+_session_mgr = SessionManager()
+_compositor = AntiDetectCompositor(
+    fingerprint_db=_fingerprint_db,
+    proxy_mgr=_proxy_rotation,
+    stealth=_stealth_injector,
+    session_mgr=_session_mgr,
+)
+_detection_tester = DetectionTester()
+
 # Paths excluded from auth and rate-limiting middleware
 PUBLIC_PATHS = {"/", "/health", "/ready", "/ws"}
 
@@ -3448,3 +3469,417 @@ async def enterprise_workflow(body: dict):
 @app.post("/api/v1/enterprise/evaluations")
 async def enterprise_evaluation(body: dict):
     return {"id": _enterprise.create_evaluation(body["candidate"], body["threshold"]), "state": "RUNNING"}
+
+
+# ===================================================================
+# v1.8.0 Anti-Detection API — /api/v1/proxy/*
+# ===================================================================
+
+
+def _api_error(status_code: int, message: str) -> JSONResponse:
+    """Return an API error response in the ``{status, error}`` shape."""
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "error", "error": message},
+    )
+
+
+@app.post("/api/v1/proxy/load-from-env")
+async def api_proxy_load_from_env():
+    """Load proxies from PROXY_LIST/PROXY_FILE env vars."""
+    added = _proxy_rotation.load_from_env()
+    return {"status": "ok", "added": added}
+
+
+@app.api_route("/api/v1/proxy/health", methods=["GET", "POST"])
+async def api_proxy_health(request: Request):
+    """Health check — POST runs checks, GET returns a summary."""
+    if request.method == "GET":
+        pool = _proxy_rotation.get_pool()
+        total = len(pool)
+        healthy = sum(1 for p in pool if p.get("healthy", True))
+        unhealthy = total - healthy
+        return {"status": "ok", "total": total, "healthy": healthy, "unhealthy": unhealthy}
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    proxy_id = body.get("proxy_id") if isinstance(body, dict) else None
+    if proxy_id:
+        result = _proxy_rotation.health_check(proxy_id)
+        return {"status": "ok", "results": [result] if result else []}
+    return {"status": "ok", "results": _proxy_rotation.health_check_all()}
+
+
+@app.get("/api/v1/proxy/stats")
+async def api_proxy_stats():
+    """Usage stats."""
+    return {"status": "ok", "stats": _proxy_rotation.get_stats()}
+
+
+@app.api_route("/api/v1/proxy/{proxy_id}", methods=["GET", "DELETE"])
+async def api_proxy_by_id(request: Request, proxy_id: str):
+    """Get (GET) or remove (DELETE) a single proxy by ID."""
+    if request.method == "DELETE":
+        if not _proxy_rotation.remove_proxy(proxy_id):
+            return _api_error(404, f"Proxy not found: {proxy_id}")
+        return {"status": "ok"}
+    for p in _proxy_rotation.get_pool():
+        if p.get("id") == proxy_id:
+            return {"status": "ok", "proxy": p}
+    return _api_error(404, f"Proxy not found: {proxy_id}")
+
+
+@app.api_route("/api/v1/proxy", methods=["GET", "POST", "DELETE"])
+async def api_proxy_collection(request: Request):
+    """Add (POST), list (GET) or clear (DELETE) proxies."""
+    if request.method == "GET":
+        return {"status": "ok", "proxies": _proxy_rotation.get_pool()}
+    if request.method == "DELETE":
+        _proxy_rotation.clear()
+        return {"status": "ok"}
+    # POST — add proxy(es)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid JSON body")
+    proxies = body.get("proxies") if isinstance(body, dict) else None
+    if not isinstance(proxies, list):
+        raise HTTPException(status_code=422, detail="Field 'proxies' is required")
+    ids: list[str] = []
+    for p in proxies:
+        if not isinstance(p, dict) or not p.get("url"):
+            raise HTTPException(status_code=422, detail="Each proxy entry requires a 'url'")
+        try:
+            pid = _proxy_rotation.add_proxy(
+                p["url"],
+                proxy_type=p.get("type"),
+                tags=p.get("tags"),
+            )
+        except Exception as exc:
+            return _api_error(400, f"Invalid proxy URL {p['url']!r}: {exc}")
+        ids.append(pid)
+    return {"status": "ok", "ids": ids}
+
+
+# ===================================================================
+# v1.8.0 Anti-Detection API — /api/v1/fingerprints/*
+# ===================================================================
+
+
+@app.api_route("/api/v1/fingerprints", methods=["GET", "POST"])
+async def api_fingerprints_collection(request: Request):
+    """List (GET) or add (POST) fingerprint templates."""
+    if request.method == "GET":
+        return {"status": "ok", "templates": _fingerprint_db.list_templates()}
+    # POST — add a template
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid JSON body")
+    name = body.get("name") if isinstance(body, dict) else None
+    if not name:
+        raise HTTPException(status_code=422, detail="Field 'name' is required")
+    if _fingerprint_db.get_template(name) is not None:
+        return _api_error(400, f"Template already exists: {name}")
+    from anti_detection.fingerprint_database import FingerprintTemplate
+
+    tpl = FingerprintTemplate(
+        name=name,
+        browser=body.get("browser", "chrome"),
+        signals=body.get("signals", {}),
+        config=body.get("config", {}),
+        metadata=body.get("metadata", {"version": 1, "created_at": time.time(), "description": ""}),
+    )
+    _fingerprint_db.add_template(tpl)
+    return {"status": "ok", "name": tpl.name}
+
+
+@app.api_route("/api/v1/fingerprints/{name}", methods=["GET", "PUT", "DELETE"])
+async def api_fingerprints_item(request: Request, name: str):
+    """Get (GET), update (PUT) or delete (DELETE) a template by name."""
+    if request.method == "DELETE":
+        if not _fingerprint_db.delete_template(name):
+            return _api_error(404, f"Template not found: {name}")
+        return {"status": "ok"}
+    if request.method == "PUT":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not _fingerprint_db.update_template(name, body):
+            return _api_error(404, f"Template not found: {name}")
+        return {"status": "ok"}
+    tpl = _fingerprint_db.get_template(name)
+    if tpl is None:
+        return _api_error(404, f"Template not found: {name}")
+    return {"status": "ok", "template": {
+        "name": tpl.name,
+        "browser": tpl.browser,
+        "metadata": tpl.metadata,
+        "signals": tpl.signals,
+        "config": tpl.config,
+    }}
+
+
+@app.post("/api/v1/fingerprints/generate")
+async def api_fingerprints_generate(body: dict = None):
+    """Generate a random fingerprint template."""
+    body = body or {}
+    browser = body.get("browser", "chrome")
+    try:
+        tpl = _fingerprint_db.generate_template(browser)
+    except ValueError:
+        return _api_error(400, f"Unknown browser type: {browser}")
+    return {
+        "status": "ok",
+        "template": {
+            "name": tpl.name,
+            "browser": tpl.browser,
+            "metadata": tpl.metadata,
+            "signals": tpl.signals,
+            "config": tpl.config,
+        },
+    }
+
+
+@app.post("/api/v1/fingerprints/{name}/export")
+async def api_fingerprints_export(name: str, body: dict = None):
+    """Export a fingerprint template to a JSON file."""
+    body = body or {}
+    export_path = body.get("path") or "/tmp/test.json"
+    try:
+        _fingerprint_db.export_template(name, export_path)
+    except KeyError:
+        return _api_error(404, f"Template not found: {name}")
+    return {"status": "ok", "path": export_path}
+
+
+@app.post("/api/v1/fingerprints/import")
+async def api_fingerprints_import(body: dict):
+    """Import a fingerprint template from a JSON file."""
+    path = body.get("path") if isinstance(body, dict) else None
+    if not path:
+        raise HTTPException(status_code=422, detail="Field 'path' is required")
+    try:
+        name = _fingerprint_db.import_template(path)
+    except (FileNotFoundError, OSError):
+        return _api_error(404, f"Import file not found: {path}")
+    return {"status": "ok", "name": name}
+
+
+# ===================================================================
+# v1.8.0 Anti-Detection API — /api/v1/session/*
+# ===================================================================
+
+
+@app.post("/api/v1/session/capture")
+async def api_session_capture(body: dict):
+    """Capture session state."""
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=422, detail="Field 'session_id' is required")
+    cdp_url = body.get("cdp_url", "")
+    state = await _session_mgr.capture(cdp_client=None if not cdp_url else cdp_url, session_id=session_id)
+    return {
+        "status": "ok",
+        "session": {
+            "session_id": state.session_id,
+            "cookies": state.cookies,
+            "local_storage": state.local_storage,
+            "url": state.url,
+            "created_at": state.created_at,
+            "last_active": state.last_active,
+        },
+    }
+
+
+@app.post("/api/v1/session/restore")
+async def api_session_restore(body: dict):
+    """Restore session state."""
+    session_id = body.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=422, detail="Field 'session_id' is required")
+    state = _session_mgr.load(session_id)
+    if state is None:
+        return _api_error(404, f"Session not found: {session_id}")
+    result = await _session_mgr.restore(cdp_client=None, state=state)
+    return {"status": "ok", "session_id": result["session_id"]}
+
+
+@app.get("/api/v1/session")
+async def api_session_list():
+    """List all sessions."""
+    return {"status": "ok", "sessions": _session_mgr.list_sessions()}
+
+
+@app.api_route("/api/v1/session/{session_id}", methods=["GET", "DELETE"])
+async def api_session_item(request: Request, session_id: str):
+    """Get (GET) or delete (DELETE) a session by ID."""
+    state = _session_mgr.load(session_id)
+    if state is None:
+        return _api_error(404, f"Session not found: {session_id}")
+    if request.method == "DELETE":
+        fpath = Path(_session_mgr._storage_dir) / f"{session_id}.json"
+        fpath.unlink(missing_ok=True)
+        return {"status": "ok"}
+    return {
+        "status": "ok",
+        "session": {
+            "session_id": state.session_id,
+            "cookies": state.cookies,
+            "local_storage": state.local_storage,
+            "session_storage": state.session_storage,
+            "url": state.url,
+            "created_at": state.created_at,
+            "last_active": state.last_active,
+        },
+    }
+
+
+@app.post("/api/v1/session/cleanup")
+async def api_session_cleanup():
+    """Trigger cleanup of expired sessions."""
+    removed = await _session_mgr.cleanup()
+    return {"status": "ok", "removed": removed}
+
+
+# ===================================================================
+# v1.8.0 Anti-Detection API — /api/v1/compose/*
+# ===================================================================
+
+
+@app.post("/api/v1/compose")
+async def api_compose(body: dict):
+    """Compose a full anti-detection profile."""
+    if not body.get("name"):
+        raise HTTPException(status_code=422, detail="Field 'name' is required")
+    bundle = AntiDetectProfileBundle(
+        name=body.get("name", "default"),
+        fingerprint_template=body.get("fingerprint_template", "chrome-120"),
+        fingerprint_config=body.get("fingerprint_config", {}),
+        proxy_strategy=body.get("proxy_strategy", "round-robin"),
+        proxy_group=body.get("proxy_group"),
+        stealth_level=body.get("stealth_level", "medium"),
+        session_ttl=body.get("session_ttl", 3600.0),
+    )
+    try:
+        result = _compositor.compose(bundle)
+    except KeyError as exc:
+        return _api_error(400, str(exc))
+    # The API contract exposes the combined scripts under the "combined" key
+    result["combined"] = result.get("combined_js", [])
+    return {"status": "ok", "bundle": result}
+
+
+@app.post("/api/v1/compose/test")
+async def api_compose_test(body: dict):
+    """Test a composed profile."""
+    bundle_data = body.get("bundle")
+    cdp_url = body.get("cdp_url")
+    if not isinstance(bundle_data, dict):
+        raise HTTPException(status_code=422, detail="Field 'bundle' is required")
+    if not cdp_url:
+        raise HTTPException(status_code=422, detail="Field 'cdp_url' is required")
+    bundle = AntiDetectProfileBundle(
+        name=bundle_data.get("name", "default"),
+        fingerprint_template=bundle_data.get("fingerprint_template", "chrome-120"),
+        fingerprint_config=bundle_data.get("fingerprint_config", {}),
+        proxy_strategy=bundle_data.get("proxy_strategy", "round-robin"),
+        stealth_level=bundle_data.get("stealth_level", "medium"),
+        session_ttl=bundle_data.get("session_ttl", 3600.0),
+    )
+    results = await _compositor.test(bundle, cdp_client=None)
+    site_results = results.get("results", [])
+    return {
+        "status": "ok",
+        "results": {
+            "sites": site_results,
+            "summary": {
+                "total": len(site_results),
+                "passed": sum(1 for r in site_results if r.get("passed")),
+            },
+        },
+    }
+
+
+@app.post("/api/v1/compose/export")
+async def api_compose_export(body: dict):
+    """Export a bundle to JSON file."""
+    if not body.get("name"):
+        raise HTTPException(status_code=422, detail="Field 'name' is required")
+    bundle = AntiDetectProfileBundle(
+        name=body.get("name", "default"),
+        fingerprint_template=body.get("fingerprint_template", "chrome-120"),
+        fingerprint_config=body.get("fingerprint_config", {}),
+        proxy_strategy=body.get("proxy_strategy", "round-robin"),
+        stealth_level=body.get("stealth_level", "medium"),
+        session_ttl=body.get("session_ttl", 3600.0),
+    )
+    out_path = body.get("path") or f"/tmp/{bundle.name}.json"
+    _compositor.export_bundle(bundle, out_path)
+    return {"status": "ok", "path": out_path}
+
+
+@app.post("/api/v1/compose/import")
+async def api_compose_import(body: dict):
+    """Import a bundle from JSON file."""
+    path = body.get("path") if isinstance(body, dict) else None
+    if not path:
+        raise HTTPException(status_code=422, detail="Field 'path' is required")
+    try:
+        bundle = _compositor.import_bundle(path)
+    except (FileNotFoundError, OSError):
+        return _api_error(404, f"Bundle file not found: {path}")
+    return {"status": "ok", "bundle": bundle.to_dict()}
+
+
+@app.post("/api/v1/compose/resolve")
+async def api_compose_resolve(body: dict):
+    """Resolve a fingerprint template."""
+    template_name = body.get("template_name", "chrome-120")
+    try:
+        result = _compositor.resolve_fingerprint(
+            template_name,
+            overrides=body.get("overrides"),
+        )
+    except KeyError as exc:
+        return _api_error(400, str(exc))
+    return {
+        "status": "ok",
+        "config": result.get("config", {}),
+        "js_patches": result.get("js_patches", []),
+    }
+
+
+@app.post("/api/v1/compose/resolve-stealth")
+async def api_compose_resolve_stealth(body: dict):
+    """Resolve stealth patches for a given level."""
+    level = body.get("level", "medium")
+    try:
+        result = _compositor.resolve_stealth_patches(level)
+    except ValueError as exc:
+        return _api_error(400, str(exc))
+    return {"status": "ok", "patches": result.get("patches", {})}
+
+
+# ===================================================================
+# v1.8.0 — /tools/fingerprint-test
+# ===================================================================
+
+
+@app.post("/tools/fingerprint-test")
+async def api_fingerprint_test():
+    """Run fingerprint detection tests on all known test sites."""
+    try:
+        results = await _detection_tester.run_all(cdp_client=None, timeout_per_site=30)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"error": f"Detection test failed: {exc}", "detail": str(exc)},
+        )
+    return [
+        {"site": r.site, "passed": r.passed, "details": r.details, "errors": r.errors}
+        for r in results
+    ]

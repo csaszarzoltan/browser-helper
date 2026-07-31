@@ -528,14 +528,18 @@ class TestParseCreepjsAcceptance:
 class TestRunAllAcceptance:
     """Acceptance tests for ``run_all`` — fail until implemented."""
 
-    def _try_run(self) -> list[TestResult] | None:
+    def _try_run(
+        self, timeout_per_site: int = 30,
+    ) -> list[TestResult] | None:
         """Try calling ``run_all`` — return result or ``None`` if not implemented."""
         import asyncio
 
         async def _do():
             tester = DetectionTester()
             try:
-                return await tester.run_all(cdp_client=None)
+                return await tester.run_all(
+                    cdp_client=None, timeout_per_site=timeout_per_site,
+                )
             except NotImplementedError:
                 return None
 
@@ -579,6 +583,24 @@ class TestRunAllAcceptance:
         assert len(results) >= 1
         # At minimum, we should get results — if one errors we still get 3 entries
         # with one having errors
+
+    def test_timeout_parameter_is_passed_through(self):
+        """``run_all`` respects ``timeout_per_site`` parameter (AC5).
+
+        Verifies the timeout value is passed through to the implementation
+        and doesn't cause errors. The actual timeout behavior (timeout
+        enforcement) is verified in integration tests. Here we check that
+        different timeout values don't break the call.
+        """
+        for timeout in (5, 15, 30, 60):
+            results = self._try_run(timeout_per_site=timeout)
+            if results is None:
+                pytest.fail(
+                    "run_all must be implemented to verify timeout passthrough. "
+                    "See RED test test_raises_not_implemented."
+                )
+            # Even with different timeouts, we should get results
+            assert isinstance(results, list)
 
 
 # ═══════════════════════════════════════════════════════════════════════

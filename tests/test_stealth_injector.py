@@ -5,15 +5,19 @@ All tests in this file MUST FAIL initially because the StealthInjector
 module is a stub whose methods raise ``NotImplementedError``.  Once the
 module is implemented, every test below should PASS with zero changes.
 
-Acceptance criteria covered:
-1. 15+ unit tests covering each patch individually
-2. Tests for verify() returning correct status per patch
-3. Tests for all three level presets
-4. Tests for level switching (low → medium → high)
-5. Tests for enable/disable toggle via REST
-6. Startup-loads-from-settings.json
-7. Invalid level returns 422
-8. navigator.webdriver evaluates to undefined after injection
+Acceptance criteria covered (analysis brief §7 — P0.2):
+ 1. patches property returns dict with all patch names from LEVEL_PATCHES
+ 2. apply(client, "low") injects only navigator.webdriver
+ 3. apply(client, "medium") injects exactly 4 patches
+ 4. apply(client, "high") injects all 11 patches
+ 5. apply_all() injects all patches regardless of level
+ 6. verify() returns {patch_name: bool}
+ 7. JS patches are syntactically valid (basic syntax check)
+ 8. _make_patches() returns 11+ entries, one per LEVEL_PATCHES name
+ 9. LEVEL_PATCHES dict unchanged (backward compat)
+10. Missing client raises appropriate error
+
+Total: 29 tests (13 interface PASS, 16 behavioral RED-phase FAIL)
 """
 
 # ─── Helpers: mock CDP client ─────────────────────────────────────────
@@ -169,6 +173,70 @@ class TestStealthInjectorApplyRED:
                 "Apply must be implemented to verify low-level injection."
             )
 
+    # ── AC3: medium level injects exactly 4 patches ──────────────
+
+    def test_apply_medium_injects_four_patches(self):
+        """``apply(level=\"medium\")`` injects exactly 4 patches.
+
+        Acceptance criterion P0.2.3: ``apply(client, \"medium\")``
+        injects 4 patches (webdriver + plugins + languages + platform).
+        """
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result = injector.apply(client, level="medium")
+            expected = LEVEL_PATCHES["medium"]
+            assert len(result["applied"]) == len(expected), (
+                f"Expected {len(expected)} patches at medium level, "
+                f"got {len(result['applied'])}"
+            )
+            for name in expected:
+                assert name in result["applied"], (
+                    f"Medium-level patch {name!r} missing from applied list"
+                )
+        except NotImplementedError:
+            pytest.fail(
+                "Apply must be implemented to verify medium-level injection."
+            )
+
+    # ── AC4: high level injects all 11 patches ───────────────────
+
+    def test_apply_high_injects_all_patches(self):
+        """``apply(level=\"high\")`` injects all 11 patches.
+
+        Acceptance criterion P0.2.4: ``apply(client, \"high\")``
+        injects all patches in ``LEVEL_PATCHES[\"high\"]`` (11).
+        """
+        injector = StealthInjector()
+        client = _mock_cdp_client()
+        try:
+            result = injector.apply(client, level="high")
+            expected = LEVEL_PATCHES["high"]
+            assert len(result["applied"]) == len(expected), (
+                f"Expected {len(expected)} patches at high level, "
+                f"got {len(result['applied'])}"
+            )
+            for name in expected:
+                assert name in result["applied"], (
+                    f"High-level patch {name!r} missing from applied list"
+                )
+        except NotImplementedError:
+            pytest.fail(
+                "Apply must be implemented to verify high-level injection."
+            )
+
+    # ── AC10: missing client raises error ────────────────────────
+
+    def test_apply_without_client_raises_error(self):
+        """Calling ``apply()`` without a ``client`` raises ``TypeError``.
+
+        Acceptance criterion P0.2.10: Missing ``client`` raises
+        appropriate error.
+        """
+        injector = StealthInjector()
+        with pytest.raises((TypeError, NotImplementedError)):
+            injector.apply()
+
 
 class TestStealthInjectorApplyAllRED:
     """``apply_all()`` — expected to fail with NotImplementedError."""
@@ -292,3 +360,73 @@ class TestPatchSourceIntegrity:
             assert name in patches, (
                 f"Missing patch source for {name!r}"
             )
+
+    # ── AC7: JS patches are syntactically valid ──────────────────
+
+    def test_js_patches_are_syntactically_valid(self):
+        """Every JS patch from ``_make_patches()`` passes a basic syntax check.
+
+        Acceptance criterion P0.2.7: Each JS patch is syntactically valid
+        JavaScript (basic syntax check via balanced delimiters and structure).
+        Only runs when ``_make_patches()`` is implemented (no longer stub).
+        """
+        patches = _make_patches()
+        for name, js in patches.items():
+            # Non-empty string
+            assert isinstance(js, str) and js, (
+                f"Patch {name!r} JS source is empty"
+            )
+
+            # Balanced braces
+            open_braces = js.count("{")
+            close_braces = js.count("}")
+            assert open_braces == close_braces, (
+                f"Patch {name!r}: unbalanced braces "
+                f"({open_braces} open, {close_braces} close)"
+            )
+
+            # Balanced parentheses
+            open_parens = js.count("(")
+            close_parens = js.count(")")
+            assert open_parens == close_parens, (
+                f"Patch {name!r}: unbalanced parentheses "
+                f"({open_parens} open, {close_parens} close)"
+            )
+
+            # Balanced square brackets
+            open_brack = js.count("[")
+            close_brack = js.count("]")
+            assert open_brack == close_brack, (
+                f"Patch {name!r}: unbalanced square brackets "
+                f"({open_brack} open, {close_brack} close)"
+            )
+
+            # Must contain at least one JS keyword or assignment pattern
+            assert any(kw in js for kw in (
+                "function", "=>", "Object.defineProperty",
+                "var ", "let ", "const ", "=",
+            )), (
+                f"Patch {name!r} JS source contains no recognizable "
+                f"JavaScript constructs"
+            )
+
+    # ── AC9: LEVEL_PATCHES dict unchanged (backward compat) ──────
+
+    def test_level_patches_dict_not_modified(self):
+        """``LEVEL_PATCHES`` dict is not modified by any operation.
+
+        Acceptance criterion P0.2.9: Existing ``LEVEL_PATCHES`` dict
+        is not modified (backward compatibility).
+        """
+        # Snapshot of LEVEL_PATCHES before any operation
+        original = {
+            level: list(patches)
+            for level, patches in LEVEL_PATCHES.items()
+        }
+        # Perform operations that could mutate
+        injector = StealthInjector()
+        _ = injector.patches  # accessing property should not mutate
+        # Verify LEVEL_PATCHES is unchanged
+        assert LEVEL_PATCHES == original, (
+            "LEVEL_PATCHES dict was modified after accessing patches property"
+        )
