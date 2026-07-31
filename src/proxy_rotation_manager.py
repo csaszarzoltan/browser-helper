@@ -59,7 +59,7 @@ class ProxyRotationManager:
                 try:
                     self._pool.add_proxy(url)
                     added += 1
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — one bad URL must not abort env loading
                     logger.warning("Bad proxy URL in PROXY_LIST: %s — %s", url, exc)
 
         # Load from PROXY_FILE env var (one URL per line)
@@ -74,7 +74,7 @@ class ProxyRotationManager:
                         try:
                             self._pool.add_proxy(line)
                             added += 1
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001 — one bad line must not abort env loading
                             logger.warning("Bad proxy URL in PROXY_FILE: %s — %s", line, exc)
             except FileNotFoundError:
                 logger.warning("PROXY_FILE not found: %s", proxy_file)

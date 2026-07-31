@@ -1,19 +1,20 @@
 """
-RED-phase pre-development tests for ProxyRotationManager (P0.3).
+Tests for ProxyRotationManager (P0.3).
 
 Interface tests: verify imports, constructor, delegation to ProxyPool.
-Behavioral tests: verify load_from_env and health-check strategy raise NotImplementedError.
+Behavioral tests: verify load_from_env env-var parsing and the
+health-check rotation strategy (implementation exists; the stale
+RED-phase NotImplementedError assertions were removed — see a7952e5).
 
 Coverage:
   - ProxyRotationManager class existence and constructor
   - Delegated methods (add_proxy, remove_proxy, get_pool, clear, get_stats, health_check, health_check_all)
-  - load_from_env() with PROXY_LIST / PROXY_FILE env vars (NOT YET IMPLEMENTED)
-  - get_proxy(strategy="health-check") (NOT YET IMPLEMENTED)
+  - load_from_env() with PROXY_LIST / PROXY_FILE env vars
+  - get_proxy(strategy="health-check")
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -23,7 +24,6 @@ import pytest
 
 from proxy_manager import ProxyPool
 from proxy_rotation_manager import ProxyRotationManager
-
 
 # ===================================================================
 # Fixtures
@@ -116,12 +116,7 @@ class TestProxyRotationManagerInterface:
 
 
 class TestProxyRotationManagerLoadFromEnvRED:
-    """load_from_env() — expected to fail with NotImplementedError."""
-
-    def test_load_from_env_raises_not_implemented(self, mgr):
-        """Calling load_from_env() on the stub raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            mgr.load_from_env()
+    """load_from_env() — behavioral tests (implementation exists)."""
 
     def test_load_from_env_with_proxy_list_returns_int(self, mgr):
         """load_from_env() with PROXY_LIST set should return the count of proxies added."""
@@ -182,12 +177,7 @@ class TestProxyRotationManagerLoadFromEnvRED:
 
 
 class TestProxyRotationManagerHealthCheckStrategyRED:
-    """get_proxy(strategy='health-check') — expected to fail with NotImplementedError."""
-
-    def test_health_check_strategy_raises_not_implemented(self, mgr):
-        """Calling get_proxy(strategy='health-check') raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            mgr.get_proxy(strategy="health-check")
+    """get_proxy(strategy='health-check') — behavioral tests (implementation exists)."""
 
     def test_health_check_other_strategies_work(self, mgr):
         """Non-health-check strategies delegate to ProxyPool without error."""

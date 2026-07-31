@@ -246,6 +246,7 @@ class FingerprintDatabase:
         but realistic signal values for the given browser type.
         """
         import random as _random
+
         from fingerprint_engine import _pick_gpu
 
         rng = _random.Random()
@@ -432,7 +433,7 @@ class FingerprintDatabase:
 DEFAULT_TEMPLATES: dict[str, dict[str, Any]] = FingerprintDatabase.DEFAULT_TEMPLATES
 
 __all__ = [
-    "FingerprintTemplate",
-    "FingerprintDatabase",
     "DEFAULT_TEMPLATES",
+    "FingerprintDatabase",
+    "FingerprintTemplate",
 ]

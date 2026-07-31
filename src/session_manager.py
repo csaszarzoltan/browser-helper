@@ -106,7 +106,7 @@ class SessionManager:
                 try:
                     cookies_result = await cdp_client._send_command("Network.getAllCookies")
                     cookies = cookies_result.get("cookies", [])
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — CDP transport failures are non-fatal
                     logger.warning("Failed to get cookies: %s", exc)
 
                 # Get localStorage
@@ -118,7 +118,7 @@ class SessionManager:
                     ls_val = ls_result.get("result", {}).get("value", {})
                     if isinstance(ls_val, dict):
                         local_storage = ls_val
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — CDP transport failures are non-fatal
                     logger.warning("Failed to get localStorage: %s", exc)
 
                 # Get sessionStorage
@@ -130,10 +130,10 @@ class SessionManager:
                     ss_val = ss_result.get("result", {}).get("value", {})
                     if isinstance(ss_val, dict):
                         session_storage = ss_val
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — CDP transport failures are non-fatal
                     logger.warning("Failed to get sessionStorage: %s", exc)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — capture must degrade gracefully
             logger.warning("Error during capture: %s", exc)
 
         state = SessionState(
@@ -170,7 +170,7 @@ class SessionManager:
                             "Network.setCookies",
                             cookies=state.cookies,
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — restore must degrade gracefully
                         logger.warning("Failed to set cookies: %s", exc)
 
                 # Set localStorage
@@ -180,7 +180,7 @@ class SessionManager:
                             "Runtime.evaluate",
                             expression=f"window.localStorage.setItem('{key}', '{value}')",
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — restore must degrade gracefully
                         logger.warning("Failed to set localStorage key %s: %s", key, exc)
 
                 # Set sessionStorage
@@ -190,10 +190,10 @@ class SessionManager:
                             "Runtime.evaluate",
                             expression=f"window.sessionStorage.setItem('{key}', '{value}')",
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — restore must degrade gracefully
                         logger.warning("Failed to set sessionStorage key %s: %s", key, exc)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — restore must degrade gracefully
             logger.warning("Error during restore: %s", exc)
 
         # Update last_active
@@ -254,8 +254,8 @@ class SessionManager:
         if ws is not None:
             try:
                 ws.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — close is best-effort
+                logger.debug("Error closing cached WebSocket %s: %s", cdp_url, exc)
 
     async def close_all_ws(self) -> None:
         """Close all cached WebSocket connections."""
@@ -325,7 +325,7 @@ class SessionManager:
                     await self.cleanup()
                 except asyncio.CancelledError:
                     break
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — loop must survive transient errors
                     logger.warning("Cleanup loop error: %s", exc)
 
         self._cleanup_task = asyncio.create_task(_cleanup_loop())

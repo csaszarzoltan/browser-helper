@@ -108,8 +108,7 @@ class AntiDetectCompositor:
         # Add fingerprint JS patches
         combined_js.extend(fingerprint.get("js_patches", []))
         # Add stealth JS patches
-        for name, js in stealth_patches.get("patches", {}).items():
-            combined_js.append(js)
+        combined_js.extend(stealth_patches.get("patches", {}).values())
 
         return {
             "fingerprint": fingerprint,
@@ -175,7 +174,7 @@ class AntiDetectCompositor:
             # Re-seed the database so subsequent lookups on the same instance work
             try:
                 self._fingerprint_db.add_template(FingerprintTemplate(**default_data))
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 — best-effort re-seed, fall back to defaults
                 pass
             raw = default_data
 

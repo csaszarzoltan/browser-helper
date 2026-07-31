@@ -1,19 +1,20 @@
 """
-RED-phase pre-development tests for SessionManager (P1.1).
+Tests for SessionManager (P1.1).
 
 Interface tests: verify SessionState dataclass, SessionManager class,
 constructor, WebSocket caching methods.
-Behavioral tests: verify capture, restore, save/load, cleanup raise NotImplementedError.
+Behavioral tests: verify capture, restore, save/load round-trip, and
+cleanup (implementation exists; the stale RED-phase NotImplementedError
+assertions were removed — see a7952e5).
 
 Coverage:
   - SessionState dataclass fields
   - SessionManager class existence and constructor
   - WebSocket caching (get_cached_ws, cache_ws, close_cached_ws, close_all_ws)
-  - capture(cdp_client, session_id) (RED)
-  - restore(cdp_client, state) (RED)
-  - save(state) / load(session_id) (RED)
-  - list_sessions, is_expired, cleanup (RED)
-  - start_cleanup_loop / stop_cleanup_loop (RED)
+  - capture(cdp_client, session_id)
+  - restore(cdp_client, state)
+  - save(state) / load(session_id)
+  - list_sessions, is_expired, cleanup
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import pytest
 
 from session_manager import SessionManager, SessionState
-
 
 # ===================================================================
 # Fixtures
@@ -161,13 +161,7 @@ class TestSessionManagerInterface:
 
 
 class TestSessionManagerCaptureRED:
-    """capture() — expected to fail with NotImplementedError."""
-
-    @pytest.mark.asyncio
-    async def test_capture_raises_not_implemented(self, mgr, mock_cdp):
-        """Calling capture() on the stub raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            await mgr.capture(mock_cdp, "test-session")
+    """capture() — behavioral tests (implementation exists)."""
 
     @pytest.mark.asyncio
     async def test_capture_returns_session_state(self, mgr, mock_cdp):
@@ -186,13 +180,7 @@ class TestSessionManagerCaptureRED:
 
 
 class TestSessionManagerRestoreRED:
-    """restore() — expected to fail with NotImplementedError."""
-
-    @pytest.mark.asyncio
-    async def test_restore_raises_not_implemented(self, mgr, mock_cdp, sample_state):
-        """Calling restore() on the stub raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            await mgr.restore(mock_cdp, sample_state)
+    """restore() — behavioral tests (implementation exists)."""
 
     @pytest.mark.asyncio
     async def test_restore_returns_dict_with_session_id(self, mgr, mock_cdp, sample_state):
@@ -209,17 +197,7 @@ class TestSessionManagerRestoreRED:
 
 
 class TestSessionManagerPersistenceRED:
-    """save()/load() — expected to fail with NotImplementedError."""
-
-    def test_save_raises_not_implemented(self, mgr, sample_state):
-        """Calling save() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            mgr.save(sample_state)
-
-    def test_load_raises_not_implemented(self, mgr):
-        """Calling load() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            mgr.load("test-session")
+    """save()/load() — behavioral tests (implementation exists)."""
 
     def test_save_and_load_round_trip(self, mgr, sample_state):
         """save(state) then load(id) should return equivalent state."""
@@ -248,23 +226,7 @@ class TestSessionManagerPersistenceRED:
 
 
 class TestSessionManagerCleanupRED:
-    """cleanup() and session listing — expected to fail with NotImplementedError."""
-
-    def test_list_sessions_raises_not_implemented(self, mgr):
-        """Calling list_sessions() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            mgr.list_sessions()
-
-    def test_is_expired_raises_not_implemented(self, mgr):
-        """Calling is_expired() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            mgr.is_expired("test-session")
-
-    @pytest.mark.asyncio
-    async def test_cleanup_raises_not_implemented(self, mgr):
-        """Calling cleanup() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            await mgr.cleanup()
+    """cleanup() and session listing — behavioral tests (implementation exists)."""
 
     @pytest.mark.asyncio
     async def test_cleanup_returns_int(self, mgr):
@@ -278,14 +240,3 @@ class TestSessionManagerCleanupRED:
                 "See test_cleanup_raises_not_implemented."
             )
 
-    @pytest.mark.asyncio
-    async def test_start_cleanup_loop_raises_not_implemented(self, mgr):
-        """Calling start_cleanup_loop() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            await mgr.start_cleanup_loop()
-
-    @pytest.mark.asyncio
-    async def test_stop_cleanup_loop_raises_not_implemented(self, mgr):
-        """Calling stop_cleanup_loop() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            await mgr.stop_cleanup_loop()

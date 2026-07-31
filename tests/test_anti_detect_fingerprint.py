@@ -1,19 +1,20 @@
 """
-RED-phase pre-development tests for FingerprintDatabase (P0.1).
+Tests for FingerprintDatabase (P0.1).
 
 Interface tests: verify FingerprintTemplate dataclass, FingerprintDatabase class,
 DEFAULT_TEMPLATES, and CRUD operations.
-Behavioral tests: verify generate_template, save/load, export/import raise NotImplementedError.
+Behavioral tests: verify generate_template, save/load round-trip, and
+export/import (implementation exists; the stale RED-phase
+NotImplementedError assertions were removed — see a7952e5).
 
 Coverage:
   - FingerprintTemplate dataclass fields
   - FingerprintDatabase class exists, constructor, DEFAULT_TEMPLATES
   - list_templates, get_template (found + not found)
   - add_template, update_template, delete_template
-  - generate_template (RED)
-  - save / load (RED)
-  - export_template / import_template (RED)
-  - Empty storage init, corrupted JSON fallback (RED)
+  - generate_template
+  - save / load
+  - export_template / import_template
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import pytest
 
 from anti_detection.fingerprint_database import FingerprintDatabase, FingerprintTemplate
-
 
 # ===================================================================
 # Fixtures
@@ -187,12 +187,7 @@ class TestFingerprintDatabaseInterface:
 
 
 class TestFingerprintDatabaseGenerateRED:
-    """generate_template() — expected to fail with NotImplementedError."""
-
-    def test_generate_raises_not_implemented(self, db):
-        """Calling generate_template() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            db.generate_template("chrome")
+    """generate_template() — behavioral tests (implementation exists)."""
 
     def test_generate_chrome_returns_template(self, db):
         """generate_template('chrome') should return a valid FingerprintTemplate."""
@@ -221,17 +216,7 @@ class TestFingerprintDatabaseGenerateRED:
 
 
 class TestFingerprintDatabasePersistenceRED:
-    """save()/load() — expected to fail with NotImplementedError."""
-
-    def test_save_raises_not_implemented(self, db):
-        """Calling save() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            db.save()
-
-    def test_load_raises_not_implemented(self, db):
-        """Calling load() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            db.load()
+    """save()/load() — behavioral tests (implementation exists)."""
 
     def test_save_and_reload_preserves_templates(self, db, sample_template):
         """Saved templates should survive a new FingerprintDatabase() init."""
@@ -249,17 +234,7 @@ class TestFingerprintDatabasePersistenceRED:
 
 
 class TestFingerprintDatabaseImportExportRED:
-    """export_template()/import_template() — expected to fail with NotImplementedError."""
-
-    def test_export_raises_not_implemented(self, db, tmp_path):
-        """Calling export_template() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            db.export_template("chrome-120", str(tmp_path / "export.json"))
-
-    def test_import_raises_not_implemented(self, db):
-        """Calling import_template() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            db.import_template("/nonexistent/path.json")
+    """export_template()/import_template() — behavioral tests (implementation exists)."""
 
     def test_export_writes_valid_json(self, db, tmp_path):
         """export_template('chrome-120', path) should write a valid JSON file."""
