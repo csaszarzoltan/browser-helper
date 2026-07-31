@@ -123,21 +123,7 @@ class TestStealthInjectorInterface:
 
 
 class TestStealthInjectorApplyRED:
-    """``apply()`` — expected to fail with NotImplementedError."""
-
-    def test_apply_raises_not_implemented(self):
-        """Calling ``apply()`` on the stub raises ``NotImplementedError``."""
-        injector = StealthInjector()
-        client = _mock_cdp_client()
-        with pytest.raises(NotImplementedError):
-            injector.apply(client, level="low")
-
-    def test_apply_without_level_defaults_to_medium(self):
-        """``apply()`` called without ``level`` defaults to ``\"medium\"``."""
-        injector = StealthInjector()
-        client = _mock_cdp_client()
-        with pytest.raises(NotImplementedError):
-            injector.apply(client)
+    """``apply()`` — behavioural tests (RED-phase markers removed, implementation landed)."""
 
     def test_apply_returns_dict_with_applied_and_failed(self):
         """``apply()`` returns ``{\"applied\": [...], \"failed\": [...]}``."""
@@ -239,14 +225,7 @@ class TestStealthInjectorApplyRED:
 
 
 class TestStealthInjectorApplyAllRED:
-    """``apply_all()`` — expected to fail with NotImplementedError."""
-
-    def test_apply_all_raises_not_implemented(self):
-        """Calling ``apply_all()`` on the stub raises ``NotImplementedError``."""
-        injector = StealthInjector()
-        client = _mock_cdp_client()
-        with pytest.raises(NotImplementedError):
-            injector.apply_all(client)
+    """``apply_all()`` — behavioural tests (RED-phase markers removed, implementation landed)."""
 
     def test_apply_all_injects_all_patches(self):
         """``apply_all()`` injects every patch registered."""
@@ -266,15 +245,7 @@ class TestStealthInjectorApplyAllRED:
 
 
 class TestStealthInjectorVerifyRED:
-    """``verify()`` — expected to fail with NotImplementedError."""
-
-    @pytest.mark.asyncio
-    async def test_verify_raises_not_implemented(self):
-        """Calling ``verify()`` on the stub raises ``NotImplementedError``."""
-        injector = StealthInjector()
-        client = _mock_cdp_client()
-        with pytest.raises(NotImplementedError):
-            await injector.verify(client)
+    """``verify()`` — behavioural tests (RED-phase markers removed, implementation landed)."""
 
     @pytest.mark.asyncio
     async def test_verify_returns_dict_of_string_to_bool(self):

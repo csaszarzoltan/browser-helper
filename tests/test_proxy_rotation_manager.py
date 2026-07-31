@@ -22,14 +22,12 @@ Usage:
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
-
 
 # ===================================================================
 # Fixtures
@@ -136,9 +134,9 @@ class TestLoadFromEnvInterface:
 
     def test_signature(self):
         """load_from_env should take only self."""
-        from proxy_rotation_manager import ProxyRotationManager
-
         import inspect
+
+        from proxy_rotation_manager import ProxyRotationManager
 
         sig = inspect.signature(ProxyRotationManager.load_from_env)
         # Only 'self' parameter
@@ -313,7 +311,7 @@ class TestGetProxyInterface:
 
     def test_by_tag_strategy(self, manager):
         """get_proxy(strategy='by-tag') should work."""
-        pid = manager.add_proxy("socks5://host:1080", tags=["datacenter"])
+        manager.add_proxy("socks5://host:1080", tags=["datacenter"])
         result = manager.get_proxy(strategy="by-tag", group="datacenter")
         assert result is not None
         assert "datacenter" in result["tags"]

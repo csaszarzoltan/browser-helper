@@ -298,67 +298,6 @@ class TestDetectionTesterInstantiation:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Behavioral RED tests — should FAIL with NotImplementedError
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestParseSannysoftRED:
-    """RED-phase tests: ``parse_sannysoft`` must raise ``NotImplementedError``."""
-
-    def test_raises_not_implemented(self):
-        """``parse_sannysoft()`` raises ``NotImplementedError``."""
-        with pytest.raises(NotImplementedError):
-            DetectionTester.parse_sannysoft(SANNYSQFT_ALL_PASS_HTML)
-
-    def test_raises_with_empty_string(self):
-        """``parse_sannysoft('')`` raises ``NotImplementedError`` (does not crash)."""
-        with pytest.raises(NotImplementedError):
-            DetectionTester.parse_sannysoft("")
-
-    def test_raises_with_malformed_html(self):
-        """``parse_sannysoft(malformed)`` raises ``NotImplementedError`` (does not crash)."""
-        with pytest.raises(NotImplementedError):
-            DetectionTester.parse_sannysoft(SANNYSQFT_MALFORMED_HTML)
-
-
-class TestParseCreepjsRED:
-    """RED-phase tests: ``parse_creepjs`` must raise ``NotImplementedError``."""
-
-    def test_raises_not_implemented(self):
-        """``parse_creepjs()`` raises ``NotImplementedError``."""
-        with pytest.raises(NotImplementedError):
-            DetectionTester.parse_creepjs(CREEPJS_NORMAL_HTML)
-
-    def test_raises_with_empty_string(self):
-        """``parse_creepjs('')`` raises ``NotImplementedError`` (does not crash)."""
-        with pytest.raises(NotImplementedError):
-            DetectionTester.parse_creepjs("")
-
-    def test_raises_with_missing_elements(self):
-        """``parse_creepjs(partial)`` raises ``NotImplementedError`` (does not crash)."""
-        with pytest.raises(NotImplementedError):
-            DetectionTester.parse_creepjs(CREEPJS_MISSING_ELEMENTS_HTML)
-
-
-class TestRunAllRED:
-    """RED-phase tests: ``run_all`` must raise ``NotImplementedError``."""
-
-    @pytest.mark.asyncio
-    async def test_raises_not_implemented(self):
-        """``run_all()`` raises ``NotImplementedError``."""
-        tester = DetectionTester()
-        with pytest.raises(NotImplementedError):
-            await tester.run_all(cdp_client=None)  # type: ignore[arg-type]
-
-    @pytest.mark.asyncio
-    async def test_raises_with_custom_timeout(self):
-        """``run_all(cdp_client=None, timeout_per_site=15)`` raises."""
-        tester = DetectionTester()
-        with pytest.raises(NotImplementedError):
-            await tester.run_all(cdp_client=None, timeout_per_site=15)  # type: ignore[arg-type]
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Parser acceptance tests — RED-phase (guarded, fail once implemented)
 # ═══════════════════════════════════════════════════════════════════════
 

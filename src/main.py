@@ -3503,7 +3503,7 @@ async def api_proxy_health(request: Request):
     body: dict[str, Any] = {}
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         pass
     proxy_id = body.get("proxy_id") if isinstance(body, dict) else None
     if proxy_id:
@@ -3542,7 +3542,7 @@ async def api_proxy_collection(request: Request):
     # POST — add proxy(es)
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         raise HTTPException(status_code=422, detail="Invalid JSON body")
     proxies = body.get("proxies") if isinstance(body, dict) else None
     if not isinstance(proxies, list):
@@ -3557,7 +3557,7 @@ async def api_proxy_collection(request: Request):
                 proxy_type=p.get("type"),
                 tags=p.get("tags"),
             )
-        except Exception as exc:
+        except ValueError as exc:
             return _api_error(400, f"Invalid proxy URL {p['url']!r}: {exc}")
         ids.append(pid)
     return {"status": "ok", "ids": ids}
@@ -3576,7 +3576,7 @@ async def api_fingerprints_collection(request: Request):
     # POST — add a template
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         raise HTTPException(status_code=422, detail="Invalid JSON body")
     name = body.get("name") if isinstance(body, dict) else None
     if not name:
@@ -3606,7 +3606,7 @@ async def api_fingerprints_item(request: Request, name: str):
     if request.method == "PUT":
         try:
             body = await request.json()
-        except Exception:
+        except ValueError:
             body = {}
         if not _fingerprint_db.update_template(name, body):
             return _api_error(404, f"Template not found: {name}")
@@ -3624,7 +3624,7 @@ async def api_fingerprints_item(request: Request, name: str):
 
 
 @app.post("/api/v1/fingerprints/generate")
-async def api_fingerprints_generate(body: dict = None):
+async def api_fingerprints_generate(body: dict | None = None):
     """Generate a random fingerprint template."""
     body = body or {}
     browser = body.get("browser", "chrome")
@@ -3645,7 +3645,7 @@ async def api_fingerprints_generate(body: dict = None):
 
 
 @app.post("/api/v1/fingerprints/{name}/export")
-async def api_fingerprints_export(name: str, body: dict = None):
+async def api_fingerprints_export(name: str, body: dict | None = None):
     """Export a fingerprint template to a JSON file."""
     body = body or {}
     export_path = body.get("path") or "/tmp/test.json"
@@ -3874,7 +3874,7 @@ async def api_fingerprint_test():
     """Run fingerprint detection tests on all known test sites."""
     try:
         results = await _detection_tester.run_all(cdp_client=None, timeout_per_site=30)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — any detection failure must surface as 503, not 500
         return JSONResponse(
             status_code=503,
             content={"error": f"Detection test failed: {exc}", "detail": str(exc)},

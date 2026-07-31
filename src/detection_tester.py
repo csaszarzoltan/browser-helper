@@ -102,7 +102,7 @@ class DetectionTester:
 
                         await asyncio.sleep(2)  # Wait for page to render
                         page_text = await cdp_client.get_page_text()
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — one site's navigation failure must not abort the run
                         result = TestResult(
                             site=site_url,
                             passed=False,
@@ -143,7 +143,7 @@ class DetectionTester:
                         )
 
                 results.append(result)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — unexpected per-site errors are recorded, not fatal
                 results.append(
                     TestResult(
                         site=site_url,
