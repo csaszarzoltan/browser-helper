@@ -341,8 +341,12 @@ class TestOvershoot:
         target = mouse._compute_overshoot_target(500.0, 300.0, overshoot_px=10)
         assert isinstance(target, tuple)
         assert len(target) == 2
-        # Overshoot target should be beyond the original target
-        assert target[0] > 500.0 or target[1] > 300.0
+        # Overshoot target is exactly overshoot_px away from the original
+        # target (direction is random, so assert distance not direction)
+        import math
+
+        dist = math.hypot(target[0] - 500.0, target[1] - 300.0)
+        assert abs(dist - 10.0) < 1e-6
 
     def test_compute_overshoot_target_signature(self):
         from behavioral_mouse import BehavioralMouse
