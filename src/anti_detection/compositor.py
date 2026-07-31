@@ -1,8 +1,10 @@
 """
 AntiDetectCompositor — facade that composes complete anti-detection profiles (P1.2).
 
-Stub — all behavioral methods raise NotImplementedError.
-Interface definitions (dataclasses, types) are available for import.
+Combines a fingerprint template, stealth patches, and proxy strategy into a
+single deployable profile. Supports compose/test against a live CDP client,
+fingerprint resolution with signal overrides, bundle export/import as JSON,
+and stealth-patch lookup by level.
 """
 
 from __future__ import annotations

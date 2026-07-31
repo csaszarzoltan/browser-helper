@@ -646,7 +646,7 @@ class TestFingerprintEndpoints:
         """POST /api/v1/fingerprints/import with bad path → 404"""
         response = client.post(
             f"{self.BASE}/import",
-            json={"path": "/tmp/nonexistent-template-file.json"},
+            json={"path": "nonexistent-template-file.json"},
         )
         assert response.status_code == 404, \
             f"Expected 404, got {response.status_code}"
@@ -654,6 +654,18 @@ class TestFingerprintEndpoints:
         assert "error" in data, \
             f"Response is not API error shape: {data}"
         assert data.get("status") == "error"
+
+    def test_fingerprints_import_rejects_escaping_path(self):
+        """POST /api/v1/fingerprints/import with path outside transfer dir → 400 (M6)"""
+        response = client.post(
+            f"{self.BASE}/import",
+            json={"path": "/etc/passwd"},
+        )
+        assert response.status_code == 400, \
+            f"Expected 400, got {response.status_code}: {response.text}"
+        data = response.json()
+        assert "error" in data, \
+            f"Response is not API error shape: {data}"
 
     def test_fingerprints_list_after_add(self):
         """CRUD: add a template, then list should include it."""
@@ -913,7 +925,7 @@ class TestComposeEndpoints:
             f"{self.BASE}/export",
             json={
                 "name": "export-test-profile",
-                "path": "/tmp/test-export-bundle.json",
+                "path": "test-export-bundle.json",
             },
         )
         assert response.status_code in (200, 201), \
@@ -927,14 +939,14 @@ class TestComposeEndpoints:
         # First export a bundle
         export_resp = client.post(
             f"{self.BASE}/export",
-            json={"name": "import-test", "path": "/tmp/import-test-bundle.json"},
+            json={"name": "import-test", "path": "import-test-bundle.json"},
         )
         if export_resp.status_code in (404, 405):
             pytest.skip("Export route not implemented yet (RED phase)")
 
         response = client.post(
             f"{self.BASE}/import",
-            json={"path": "/tmp/import-test-bundle.json"},
+            json={"path": "import-test-bundle.json"},
         )
         assert response.status_code in (200, 201), \
             f"Expected 200/201, got {response.status_code}"
@@ -947,7 +959,7 @@ class TestComposeEndpoints:
         """POST /api/v1/compose/import with bad path → 404"""
         response = client.post(
             f"{self.BASE}/import",
-            json={"path": "/tmp/nonexistent-bundle.json"},
+            json={"path": "nonexistent-bundle.json"},
         )
         assert response.status_code == 404, \
             f"Expected 404, got {response.status_code}"
@@ -955,6 +967,18 @@ class TestComposeEndpoints:
         assert "error" in data, \
             f"Response is not API error shape: {data}"
         assert data.get("status") == "error"
+
+    def test_compose_import_rejects_escaping_path(self):
+        """POST /api/v1/compose/import with path outside transfer dir → 400 (M6)"""
+        response = client.post(
+            f"{self.BASE}/import",
+            json={"path": "/etc/passwd"},
+        )
+        assert response.status_code == 400, \
+            f"Expected 400, got {response.status_code}: {response.text}"
+        data = response.json()
+        assert "error" in data, \
+            f"Response is not API error shape: {data}"
 
     def test_compose_resolve(self):
         """POST /api/v1/compose/resolve → {"status": "ok", "config": {...}, "js_patches": [...]}"""

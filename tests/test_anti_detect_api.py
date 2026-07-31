@@ -239,8 +239,15 @@ class TestApiFingerprintV1RED:
     @pytest.mark.asyncio
     async def test_fingerprints_import(self, api_client):
         """POST /api/v1/fingerprints/import returns {status, name}."""
+        # Export first so the import path is inside the transfer dir (M6)
+        export_resp = await api_client.post("/api/v1/fingerprints/chrome-120/export")
+        if export_resp.status_code in (404, 405):
+            pytest.skip("Export route not implemented yet (RED phase)")
+        export_path = export_resp.json().get("path", "")
+        if not export_path:
+            pytest.skip("No export path returned")
         resp = await api_client.post(
-            "/api/v1/fingerprints/import", json={"path": "/tmp/test.json"}
+            "/api/v1/fingerprints/import", json={"path": export_path}
         )
         assert resp.status_code == 200, (
             f"Expected 200, got {resp.status_code}. Route not wired yet (RED phase)."
@@ -384,7 +391,7 @@ class TestApiComposeV1RED:
         """POST /api/v1/compose/export returns {status, path}."""
         resp = await api_client.post(
             "/api/v1/compose/export",
-            json={"name": "test-profile", "path": "/tmp/bundle.json"},
+            json={"name": "test-profile", "path": "bundle.json"},
         )
         assert resp.status_code == 200, (
             f"Expected 200, got {resp.status_code}. Route not wired yet (RED phase)."
@@ -396,9 +403,18 @@ class TestApiComposeV1RED:
     @pytest.mark.asyncio
     async def test_compose_import(self, api_client):
         """POST /api/v1/compose/import returns {status, bundle}."""
+        # Export first so the import path is inside the transfer dir (M6)
+        export_resp = await api_client.post(
+            "/api/v1/compose/export",
+            json={"name": "import-test", "path": "import-bundle.json"},
+        )
+        if export_resp.status_code in (404, 405):
+            pytest.skip("Export route not implemented yet (RED phase)")
+        export_path = export_resp.json().get("path", "")
+        if not export_path:
+            pytest.skip("No export path returned")
         resp = await api_client.post(
-            "/api/v1/compose/import",
-            json={"path": "/tmp/bundle.json"},
+            "/api/v1/compose/import", json={"path": export_path}
         )
         assert resp.status_code == 200, (
             f"Expected 200, got {resp.status_code}. Route not wired yet (RED phase)."

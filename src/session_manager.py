@@ -1,8 +1,10 @@
 """
 SessionManager — browser session state persistence (P1.1).
 
-Stub — all async/behavioral methods raise NotImplementedError.
-Interface definitions (dataclasses, types) are available for import.
+Captures, restores, and persists browser session state (cookies, localStorage,
+etc.) via CDP. Sessions are stored as JSON in a storage directory, support
+expiry-based cleanup (background loop included), and cache reusable CDP
+WebSocket connections across captures/restores.
 """
 
 from __future__ import annotations

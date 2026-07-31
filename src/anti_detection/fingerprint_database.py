@@ -1,8 +1,11 @@
 """
 FingerprintDatabase — JSON-backed browser fingerprint template database (P0.1).
 
-Stub — all behavioral methods raise NotImplementedError.
-Interface definitions (types, dataclasses) are available for import.
+Provides persistent storage for named ``FingerprintTemplate`` objects plus
+generation of randomized templates per browser family. Templates are loaded
+from JSON files in a storage directory at construction, are exposed through
+CRUD accessors (list/get/add/update/delete), and can be exported/imported as
+JSON files. Built-in defaults are seeded on first load.
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -305,7 +309,9 @@ class FingerprintDatabase:
             raise ValueError(f"Unknown browser type: {browser}")
 
         now = time.time()
-        name = f"{browser_name}-{int(now)}"
+        # Unique suffix guards against two generations within the same second
+        # overwriting each other in the store (review M1).
+        name = f"{browser_name}-{int(now)}-{uuid.uuid4().hex[:6]}"
 
         return FingerprintTemplate(
             name=name,

@@ -78,7 +78,13 @@ class DetectionTester:
                     import asyncio
 
                     await asyncio.sleep(2)  # Wait for page to render
-                    page_text = await cdp_client.get_page_text()
+                    raw_text = await cdp_client.get_page_text()
+                    # Real CDPClient.get_page_text() returns a dict
+                    # {"status", "text", "length"}; fakes may return str.
+                    if isinstance(raw_text, dict):
+                        page_text = raw_text.get("text", "") or ""
+                    else:
+                        page_text = raw_text or ""
                 except Exception as exc:  # noqa: BLE001 — one site's navigation failure must not abort the run
                     result = TestResult(
                         site=site_url,
@@ -287,8 +293,18 @@ class DetectionTester:
     def parse_fingerprintjs(page_text: str) -> dict:
         """Parse fingerprintjs.com demo page for visitorId + component data.
 
+        Handles two input shapes:
+        1. The recorded HTML fixture (``id="visitorId"`` / ``class="component"``,
+           used by the unit tests).
+        2. The live page text returned by ``CDPClient.get_page_text()``
+           (``document.body.innerText``), where the visitor ID appears under
+           ``YOUR REAL BROWSER'S VISITOR ID`` and inside a ``[VISITOR ID: ...]``
+           block, and signal cards carry BROWSER / IP ADDRESS / OPERATING
+           SYSTEM / CONFIDENCE SCORE / VISIT HISTORY / LAST SEEN labels
+           (verified against fingerprint.com/demo, review M5).
+
         Args:
-            page_text: Raw HTML of the fingerprintjs.com/demo page.
+            page_text: Raw HTML or innerText of the fingerprintjs.com/demo page.
 
         Returns:
             Dict with ``visitor_id`` (str | None), ``components`` (int),
@@ -299,6 +315,8 @@ class DetectionTester:
             return {"visitor_id": None, "components": 0, "_matched": False}
 
         visitor_id: str | None = None
+
+        # Pattern 1: recorded HTML fixture — <div id="visitorId">...</div>
         m = re.search(
             r'id=["\']visitorId["\'][^>]*>(.*?)<',
             page_text,
@@ -307,9 +325,40 @@ class DetectionTester:
         if m:
             visitor_id = re.sub(r"<[^>]+>", "", m.group(1)).strip()
 
+        # Pattern 2: live innerText — "YOUR REAL BROWSER'S VISITOR ID\n<id>"
+        if not visitor_id:
+            m = re.search(
+                r"YOUR\s+REAL\s+BROWSER['\u2019]S\s+VISITOR\s+ID\s*\n\s*([A-Za-z0-9_-]{6,})",
+                page_text,
+                re.IGNORECASE,
+            )
+            if m:
+                visitor_id = m.group(1).strip()
+
+        # Pattern 3: live innerText — "[VISITOR ID: <id>]"
+        if not visitor_id:
+            m = re.search(
+                r"\[\s*VISITOR\s+ID:\s*([A-Za-z0-9_-]{6,})\s*\]",
+                page_text,
+                re.IGNORECASE,
+            )
+            if m:
+                visitor_id = m.group(1).strip()
+
+        # Components: HTML fixture uses class="component"; the live innerText
+        # has no such classes, so fall back to counting the labelled signal
+        # cards rendered by the demo (own-line, uppercase labels).
         components = len(
             re.findall(r'class=["\']component["\']', page_text, re.IGNORECASE)
         )
+        if components == 0:
+            components = len(
+                re.findall(
+                    r"(?:BROWSER|IP\s+ADDRESS|OPERATING\s+SYSTEM|CONFIDENCE\s+SCORE|VISIT\s+HISTORY|LAST\s+SEEN)\b",
+                    page_text,
+                    re.IGNORECASE,
+                )
+            )
 
         matched = bool(visitor_id) or components > 0
         return {"visitor_id": visitor_id, "components": components, "_matched": matched}

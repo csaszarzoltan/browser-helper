@@ -751,6 +751,7 @@ class TestR3HealthCheckAsync:
         import time as _time
 
         import httpx as _httpx
+
         from proxy_manager import ProxyPool as _ProxyPool
 
         pool = _ProxyPool()

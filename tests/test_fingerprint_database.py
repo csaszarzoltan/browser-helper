@@ -33,6 +33,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import get_type_hints
@@ -352,7 +353,6 @@ def db(storage_dir):
 class TestDefaultTemplatesBehavior:
     """Acceptance criteria 1-2: DEFAULT_TEMPLATES and list_templates."""
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: list_templates() returns defaults")
     def test_list_templates_returns_four_defaults(self, db):
         """AC-2: list_templates() returns all 4 default templates on first call."""
         templates = db.list_templates()
@@ -363,9 +363,6 @@ class TestDefaultTemplatesBehavior:
         assert "safari-ios" in names
         assert "edge-windows" in names
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: list includes browser metadata"
-    )
     def test_list_includes_browser_field(self, db):
         """Each list entry has 'name', 'browser', 'metadata' keys."""
         templates = db.list_templates()
@@ -378,9 +375,6 @@ class TestDefaultTemplatesBehavior:
 class TestGetTemplateBehavior:
     """Acceptance criteria 3-4: get_template."""
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: get_template returns FingerprintTemplate"
-    )
     def test_get_chrome_120_returns_complete_template(self, db):
         """AC-3: get_template('chrome-120') returns a complete FingerprintTemplate."""
         tmpl = db.get_template("chrome-120")
@@ -392,17 +386,11 @@ class TestGetTemplateBehavior:
         assert "webgl" in tmpl.signals, "signals should contain webgl"
         assert tmpl.config, "config dict should be non-empty"
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: get_template returns None for missing"
-    )
     def test_get_nonexistent_returns_none(self, db):
         """AC-4: get_template('nonexistent') returns None."""
         result = db.get_template("nonexistent")
         assert result is None
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: get_template for other defaults"
-    )
     def test_get_firefox_linux(self, db):
         """get_template('firefox-linux') returns a valid template."""
         tmpl = db.get_template("firefox-linux")
@@ -410,9 +398,6 @@ class TestGetTemplateBehavior:
         assert tmpl.name == "firefox-linux"
         assert tmpl.browser == "firefox"
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: get_template for safari"
-    )
     def test_get_safari_ios(self, db):
         """get_template('safari-ios') returns a valid template."""
         tmpl = db.get_template("safari-ios")
@@ -420,9 +405,6 @@ class TestGetTemplateBehavior:
         assert tmpl.name == "safari-ios"
         assert tmpl.browser == "safari"
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: get_template for edge"
-    )
     def test_get_edge_windows(self, db):
         """get_template('edge-windows') returns a valid template."""
         tmpl = db.get_template("edge-windows")
@@ -434,7 +416,6 @@ class TestGetTemplateBehavior:
 class TestCRUDBehavior:
     """Acceptance criteria 5-7: add/update/delete CRUD."""
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: add_template")
     def test_add_template_persists_and_appears_in_list(self, db):
         """AC-5: add_template persists and appears in list."""
         tmpl = FingerprintTemplate(
@@ -449,7 +430,6 @@ class TestCRUDBehavior:
         names = [t["name"] for t in templates]
         assert "custom-chrome" in names
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: get after add")
     def test_added_template_is_retrievable(self, db):
         """An added template is retrievable via get_template."""
         tmpl = FingerprintTemplate(name="custom-edge", browser="edge")
@@ -468,7 +448,6 @@ class TestCRUDBehavior:
         with pytest.raises(ValueError, match=r"(?i)already exists|duplicate"):
             db.add_template(tmpl2)
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: update_template")
     def test_update_template_modifies_fields(self, db):
         """AC-6: update_template modifies fields as specified."""
         db.add_template(
@@ -488,13 +467,11 @@ class TestCRUDBehavior:
         assert updated is not None
         assert updated.metadata.get("description") == "Updated"
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: update nonexistent")
     def test_update_nonexistent_returns_false(self, db):
         """update_template on a nonexistent name returns False."""
         result = db.update_template("nonexistent", {"metadata": {}})
         assert result is False
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: delete_template")
     def test_delete_template_removes_from_list(self, db):
         """AC-7: delete_template removes template and it no longer appears in list."""
         db.add_template(FingerprintTemplate(name="deletable", browser="chrome"))
@@ -504,14 +481,12 @@ class TestCRUDBehavior:
         names = [t["name"] for t in templates]
         assert "deletable" not in names
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: get after delete")
     def test_delete_makes_get_return_none(self, db):
         """After deletion, get_template returns None."""
         db.add_template(FingerprintTemplate(name="disappear", browser="chrome"))
         db.delete_template("disappear")
         assert db.get_template("disappear") is None
 
-    @pytest.mark.xfail(reason="P0.1 not implemented: delete nonexistent")
     def test_delete_nonexistent_returns_false(self, db):
         """delete_template on a nonexistent name returns False."""
         result = db.delete_template("nonexistent")
@@ -544,9 +519,6 @@ class TestGenerateTemplateBehavior:
         assert tmpl.browser == "firefox"
         assert "Firefox" in tmpl.signals["navigator"].get("user_agent", "")
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: generate_template safari"
-    )
     def test_generate_safari_returns_valid_template(self, db):
         """generate_template('safari') returns a Safari template."""
         tmpl = db.generate_template("safari")
@@ -563,17 +535,11 @@ class TestGenerateTemplateBehavior:
         assert tmpl.browser == "edge"
         assert "Edg/" in tmpl.signals["navigator"].get("user_agent", "")
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: generate for unknown browser raises"
-    )
     def test_generate_invalid_browser_raises(self, db):
         """generate_template with unknown browser raises ValueError."""
         with pytest.raises(ValueError, match=r"(?i)unknown|unsupported|invalid"):
             db.generate_template("opera")
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: generate is non-deterministic"
-    )
     def test_generate_is_non_deterministic(self, db):
         """Two calls to generate_template('chrome') produce different results."""
         tmpl1 = db.generate_template("chrome")
@@ -583,9 +549,19 @@ class TestGenerateTemplateBehavior:
             "generate_template should produce different results on each call"
         )
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: generated has signals with all groups"
-    )
+    def test_generate_names_are_unique_within_same_second(self, db):
+        """Review M1: same-second generations get distinct names.
+
+        Names use ``<browser>-<epoch>-<uuid4-hex>`` so two calls inside the
+        same second cannot overwrite each other in the store.
+        """
+        tmpl1 = db.generate_template("chrome")
+        tmpl2 = db.generate_template("chrome")
+        assert tmpl1.name != tmpl2.name
+        # Both names carry the expected suffix pattern (6 hex chars after a dash)
+        assert re.search(r"-\d+-[0-9a-f]{6}$", tmpl1.name)
+        assert re.search(r"-\d+-[0-9a-f]{6}$", tmpl2.name)
+
     def test_generated_template_has_all_signal_groups(self, db):
         """Generated template contains navigator, screen, webgl, canvas, audio."""
         tmpl = db.generate_template("chrome")
@@ -616,9 +592,6 @@ class TestPersistenceBehavior:
         assert tmpl is not None
         assert tmpl.name == "persist-test"
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: added defaults persist"
-    )
     def test_defaults_survive_re_init(self, storage_dir):
         """Default templates are still available after re-init."""
         FingerprintDatabase(storage_dir=storage_dir)  # db1 — init then discard
@@ -658,9 +631,6 @@ class TestPersistenceBehavior:
 class TestExportImportBehavior:
     """Acceptance criteria 11-12: export/import round-trip."""
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: export_template"
-    )
     def test_export_writes_valid_json(self, db, tmp_path):
         """AC-11: export_template(name, path) writes a valid JSON file."""
         export_path = str(tmp_path / "chrome-120.json")
@@ -671,18 +641,12 @@ class TestExportImportBehavior:
         assert "name" in data
         assert data["name"] == "chrome-120"
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: export nonexistent raises"
-    )
     def test_export_nonexistent_raises(self, db, tmp_path):
         """export_template on nonexistent name raises KeyError."""
         export_path = str(tmp_path / "nope.json")
         with pytest.raises(KeyError):
             db.export_template("nonexistent", export_path)
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: import_template"
-    )
     def test_import_loads_json_into_db(self, db, tmp_path):
         """AC-12: import_template(path) reads JSON and loads into DB."""
         # First export a template
@@ -697,9 +661,6 @@ class TestExportImportBehavior:
         assert tmpl is not None
         assert tmpl.browser == "chrome"
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: import returns name"
-    )
     def test_import_returns_template_name(self, db, tmp_path):
         """import_template returns the name of the imported template."""
         export_path = str(tmp_path / "export-for-return.json")
@@ -709,9 +670,6 @@ class TestExportImportBehavior:
         name = db2.import_template(export_path)
         assert name == "firefox-linux"
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: import invalid JSON raises"
-    )
     def test_import_invalid_json_raises(self, db, tmp_path):
         """import_template with invalid JSON raises ValueError."""
         bad_path = str(tmp_path / "bad.json")
@@ -720,9 +678,6 @@ class TestExportImportBehavior:
         with pytest.raises(ValueError, match=r"(?i)invalid|not a valid|parse"):
             db.import_template(bad_path)
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: export/import round-trip"
-    )
     def test_export_import_round_trip(self, db, tmp_path):
         """Export → import → get_template produces identical data."""
         # Add a custom template
@@ -761,9 +716,6 @@ class TestExportImportBehavior:
 class TestGracefulFallbackBehavior:
     """Acceptance criteria 13-14: graceful initialization."""
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: empty storage dir loads defaults"
-    )
     def test_empty_storage_dir_loads_defaults(self, tmp_path):
         """AC-13: Empty storage dir → database initializes with defaults."""
         empty_dir = str(tmp_path / "empty-storage")
@@ -773,9 +725,6 @@ class TestGracefulFallbackBehavior:
             f"Expected 4 defaults from empty dir, got {len(templates)}"
         )
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: corrupted JSON fallback"
-    )
     def test_corrupted_json_loads_defaults(self, tmp_path):
         """AC-14: Corrupted JSON file → database initializes with defaults."""
         storage_dir = str(tmp_path / "corrupted-storage")
@@ -790,9 +739,6 @@ class TestGracefulFallbackBehavior:
             "DB should still work with corrupt fallback"
         )
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: non-existent storage dir"
-    )
     def test_nonexistent_storage_dir_creates_and_loads_defaults(self, tmp_path):
         """Storage dir that doesn't exist is created and defaults loaded."""
         non_existent = str(tmp_path / "brand-new" / "nested")
@@ -801,9 +747,6 @@ class TestGracefulFallbackBehavior:
         templates = db.list_templates()
         assert len(templates) == 4
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: mixed good/bad files"
-    )
     def test_mixed_valid_and_corrupted_files(self, tmp_path):
         """Valid templates are loaded even when some files are corrupted."""
         storage_dir = str(tmp_path / "mixed-storage")
@@ -835,18 +778,12 @@ class TestEdgeCasesBehavior:
         with pytest.raises(ValueError):
             db.add_template(tmpl)
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: update empty dict"
-    )
     def test_update_with_empty_dict(self, db):
         """Updating with empty dict does not error."""
         result = db.update_template("chrome-120", {})
         # Should succeed (no-op) or return True
         assert result is True
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: list returns fresh copy"
-    )
     def test_list_templates_returns_separate_objects(self, db):
         """list_templates returns independent copies, not internal references."""
         templates1 = db.list_templates()
@@ -857,9 +794,6 @@ class TestEdgeCasesBehavior:
             t2_names = [t["name"] for t in templates2]
             assert "hacked" not in t2_names
 
-    @pytest.mark.xfail(
-        reason="P0.1 not implemented: concurrent add and get"
-    )
     def test_add_then_immediate_get(self, db):
         """get_template immediately after add_template returns the new template."""
         tmpl = FingerprintTemplate(

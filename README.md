@@ -538,6 +538,15 @@ Authorization: Bearer ***
 
 If `API_TOKEN` is not set, all endpoints are open.
 
+> **⚠️ Exposed deployments:** if the API is reachable from an untrusted
+> network, `API_TOKEN` is **mandatory**. Without it, anyone can call
+> file-write endpoints such as `POST /api/v1/fingerprints/export`,
+> `/api/v1/fingerprints/import`, `/api/v1/compose/export`, and
+> `/api/v1/compose/import`. Since v1.8.0 these endpoints restrict request-body
+> paths to the directory configured via `ANTI_DETECTION_DATA_DIR`
+> (default `~/.browser-helper/transfers`) and reject paths that escape it, but
+> a token is still required to keep the API itself closed.
+
 ### Using with Hermes Agent
 
 ```bash

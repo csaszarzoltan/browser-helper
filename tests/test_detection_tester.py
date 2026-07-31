@@ -130,6 +130,53 @@ FINGERPRINTJS_DEMO_HTML = """
 
 FINGERPRINTJS_EMPTY_HTML = ""
 
+# Recorded live page text from https://fingerprint.com/demo (2026-07-31,
+# review M5) — what CDPClient.get_page_text() returns (document.body.innerText).
+# The visitor ID appears under "YOUR REAL BROWSER'S VISITOR ID" and inside a
+# "[VISITOR ID: ...]" block; signal cards carry the uppercase labels below.
+FINGERPRINTJS_LIVE_INNERTEXT = """
+Product
+Use Cases
+Resources
+Docs
+Templates
+Demo
+Pricing
+Login
+Contact Sales
+Get Started
+See Fingerprint in Action
+Analyze your device data, explore our Smart Signals.
+01
+IDENTIFICATION SIGNALS
+02
+BROWSER SMART SIGNALS
+03
+MOBILE SMART SIGNALS
+Analyze my browser again
+Your Unique Visitor ID Data
+YOUR REAL BROWSER'S VISITOR ID
+
+9oFI04M70mUOtjpJiafh
+
+Try revisiting on VPN or incognito mode, your visitor ID will be the same.
+LAST SEEN
+Less than a minute ago
+VISIT HISTORY
+Current Visit
+CONFIDENCE SCORE
+1
+BROWSER
+Chrome 148.0.0 on Mac OS X (10.15.7)
+IP ADDRESS
+68.96.34.52
+OPERATING SYSTEM
+Mac OS X
+THIS IS A REAL DEMO. PRODUCTION ACCURACY WILL BE MUCH HIGHER.
+[VISITOR ID: 9OFI04M70MUOTJPJIAFH]
+CHROME 148.0.0 ON MAC OS X (10.15.7)
+"""
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Interface / contract tests — should PASS immediately
@@ -645,6 +692,27 @@ class _FakeBrowser:
         return self._url_texts.get(self._current_url, "")
 
 
+class _FakeBrowserDictText:
+    """Fake CDP client whose get_page_text() returns the real CDPClient's
+    dict shape {"status", "text", "length"} (review M5)."""
+
+    def __init__(self, url_texts: dict[str, str] | str = ""):
+        self._url_texts: dict[str, str] = {}
+        self._current_url = ""
+        if isinstance(url_texts, str):
+            for site in DetectionTester.TEST_SITES:
+                self._url_texts[site] = url_texts
+        else:
+            self._url_texts = url_texts
+
+    async def navigate(self, url: str) -> None:
+        self._current_url = url
+
+    async def get_page_text(self) -> dict:
+        text = self._url_texts.get(self._current_url, "")
+        return {"status": "ok", "text": text, "length": len(text)}
+
+
 class TestR2RunAllEmptyPageText:
     """R2 regression: empty page text yields 0/3 passed (review R2)."""
 
@@ -700,6 +768,32 @@ class TestR2RunAllEmptyPageText:
         assert by_url["https://creepjs.org/checker"].passed is False
         assert by_url["https://fingerprintjs.com/demo"].passed is True
 
+    @pytest.mark.asyncio
+    async def test_real_dict_page_text_through_run_all(self, monkeypatch):
+        """Real CDPClient.get_page_text() returns a dict; run_all must accept
+        it (review M5) and still parse the live fingerprintjs innerText."""
+        import asyncio as _asyncio
+
+        async def _noop_sleep(_):
+            pass
+
+        monkeypatch.setattr(_asyncio, "sleep", _noop_sleep)
+
+        url_texts = {
+            "https://bot.sannysoft.com": SANNYSQFT_ALL_PASS_HTML,
+            "https://fingerprintjs.com/demo": FINGERPRINTJS_LIVE_INNERTEXT,
+            "https://creepjs.org/checker": CREEPJS_NORMAL_HTML,
+        }
+        fake = _FakeBrowserDictText(url_texts)
+        tester = DetectionTester()
+        results = await tester.run_all(cdp_client=fake)
+
+        by_url = {r.site: r for r in results}
+        assert by_url["https://bot.sannysoft.com"].passed is True
+        assert by_url["https://fingerprintjs.com/demo"].passed is True
+        assert by_url["https://fingerprintjs.com/demo"].details["visitor_id"] == "9oFI04M70mUOtjpJiafh"
+        assert by_url["https://creepjs.org/checker"].passed is False
+
 
 class TestR2ParseFingerprintjs:
     """R2: parser tests for the new fingerprintjs parser."""
@@ -715,6 +809,18 @@ class TestR2ParseFingerprintjs:
         assert result["_matched"] is False
         assert result["visitor_id"] is None
         assert result["components"] == 0
+
+    def test_live_innertext_matches(self):
+        """Recorded live innerText (review M5) must yield a visitor ID.
+
+        The live fingerprint.com/demo page renders the ID as text under
+        \"YOUR REAL BROWSER'S VISITOR ID\" and inside a \"[VISITOR ID: ...]\"
+        block — no id=\"visitorId\" attribute exists in the rendered text.
+        """
+        result = DetectionTester.parse_fingerprintjs(FINGERPRINTJS_LIVE_INNERTEXT)
+        assert result["_matched"] is True
+        assert result["visitor_id"] == "9oFI04M70mUOtjpJiafh"
+        assert result["components"] >= 5  # BROWSER, IP ADDRESS, OPERATING SYSTEM, CONFIDENCE SCORE, VISIT HISTORY, LAST SEEN
 
 
 class TestR2ParseCreepjsEdgeCases:

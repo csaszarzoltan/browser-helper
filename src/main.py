@@ -95,6 +95,14 @@ logger = logging.getLogger("browser-helper")
 PORT = int(os.environ.get("PORT", "8000"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 API_TOKEN = os.environ.get("API_TOKEN", "")
+# Directory that fingerprint/compose export/import may read/write (review M6).
+# Request-body paths are resolved against this directory and rejected when
+# they escape it — prevents unauthenticated arbitrary file access when the
+# API is exposed without API_TOKEN.
+ANTI_DETECTION_DATA_DIR = os.environ.get(
+    "ANTI_DETECTION_DATA_DIR",
+    str(Path.home() / ".browser-helper" / "transfers"),
+)
 
 # ---------------------------------------------------------------------------
 # FastAPI application
@@ -3650,11 +3658,39 @@ async def api_fingerprints_generate(body: dict | None = None):
     }
 
 
+class _TransferPathError(Exception):
+    """Raised when an export/import path escapes ANTI_DETECTION_DATA_DIR (M6)."""
+
+
+def _resolve_transfer_path(requested: str | None, default_name: str) -> str:
+    """Resolve an export/import path inside ANTI_DETECTION_DATA_DIR (review M6).
+
+    Relative paths are joined to the data dir; absolute paths are only
+    accepted when they stay inside it (after resolving symlinks). Escaping
+    paths raise ``_TransferPathError`` (mapped to a 400 by callers) so
+    request bodies cannot read/write arbitrary files when the API is
+    exposed without API_TOKEN.
+    """
+    base = Path(ANTI_DETECTION_DATA_DIR).resolve()
+    candidate = Path(requested) if requested else base / default_name
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    resolved = candidate.resolve()
+    if resolved != base and base not in resolved.parents:
+        raise _TransferPathError(
+            f"Export/import path must stay inside {base}",
+        )
+    return str(resolved)
+
+
 @app.post("/api/v1/fingerprints/{name}/export")
 async def api_fingerprints_export(name: str, body: dict | None = None):
-    """Export a fingerprint template to a JSON file."""
+    """Export a fingerprint template to a JSON file (path restricted, M6)."""
     body = body or {}
-    export_path = body.get("path") or "/tmp/test.json"
+    try:
+        export_path = _resolve_transfer_path(body.get("path"), f"{name}.json")
+    except _TransferPathError as exc:
+        return _api_error(400, str(exc))
     try:
         _fingerprint_db.export_template(name, export_path)
     except KeyError:
@@ -3664,12 +3700,16 @@ async def api_fingerprints_export(name: str, body: dict | None = None):
 
 @app.post("/api/v1/fingerprints/import")
 async def api_fingerprints_import(body: dict):
-    """Import a fingerprint template from a JSON file."""
+    """Import a fingerprint template from a JSON file (path restricted, M6)."""
     path = body.get("path") if isinstance(body, dict) else None
     if not path:
         raise HTTPException(status_code=422, detail="Field 'path' is required")
     try:
-        name = _fingerprint_db.import_template(path)
+        import_path = _resolve_transfer_path(path, "")
+    except _TransferPathError as exc:
+        return _api_error(400, str(exc))
+    try:
+        name = _fingerprint_db.import_template(import_path)
     except (FileNotFoundError, OSError):
         return _api_error(404, f"Import file not found: {path}")
     # Persist the imported template (review H1)
@@ -3894,7 +3934,7 @@ async def api_compose_test(body: dict):
 
 @app.post("/api/v1/compose/export")
 async def api_compose_export(body: dict):
-    """Export a bundle to JSON file."""
+    """Export a bundle to JSON file (path restricted, M6)."""
     if not body.get("name"):
         raise HTTPException(status_code=422, detail="Field 'name' is required")
     bundle = AntiDetectProfileBundle(
@@ -3905,19 +3945,26 @@ async def api_compose_export(body: dict):
         stealth_level=body.get("stealth_level", "medium"),
         session_ttl=body.get("session_ttl", 3600.0),
     )
-    out_path = body.get("path") or f"/tmp/{bundle.name}.json"
+    try:
+        out_path = _resolve_transfer_path(body.get("path"), f"{bundle.name}.json")
+    except _TransferPathError as exc:
+        return _api_error(400, str(exc))
     _compositor.export_bundle(bundle, out_path)
     return {"status": "ok", "path": out_path}
 
 
 @app.post("/api/v1/compose/import")
 async def api_compose_import(body: dict):
-    """Import a bundle from JSON file."""
+    """Import a bundle from JSON file (path restricted, M6)."""
     path = body.get("path") if isinstance(body, dict) else None
     if not path:
         raise HTTPException(status_code=422, detail="Field 'path' is required")
     try:
-        bundle = _compositor.import_bundle(path)
+        import_path = _resolve_transfer_path(path, "")
+    except _TransferPathError as exc:
+        return _api_error(400, str(exc))
+    try:
+        bundle = _compositor.import_bundle(import_path)
     except (FileNotFoundError, OSError):
         return _api_error(404, f"Bundle file not found: {path}")
     return {"status": "ok", "bundle": bundle.to_dict()}
