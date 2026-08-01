@@ -270,9 +270,13 @@ input[type="text"] { width: 100%; }
   .card-body { max-height: 260px; }
 }
 </style>
+<link rel="stylesheet" href="/static/dashboard_ux.css">
 </head>
 <body>
-<div class="toast-container" id="toast-container"></div>
+<a class="skip-link" href="#workspace-main">Skip to main workspace</a>
+<div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
+<div id="a11y-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+<div class="workspace-shell">
 
 <!-- ═══════════════ HEADER ═══════════════ -->
 <header class="dashboard-header">
@@ -286,11 +290,62 @@ input[type="text"] { width: 100%; }
   </div>
 </header>
 
+<nav id="workspace-nav" class="workspace-nav" aria-label="Primary workspace navigation">
+  <button type="button" class="btn" data-workspace="overview">Overview</button>
+  <button type="button" class="btn" data-workspace="browser">Live Browser</button>
+  <button type="button" class="btn" data-workspace="automation">Automation</button>
+  <button type="button" class="btn" data-workspace="diagnostics">Diagnostics</button>
+  <button type="button" class="btn" data-workspace="agent">Agent Tools</button>
+</nav>
+<section id="active-context" class="active-context" aria-label="Active execution context">
+  <span class="context-label">Context</span>
+  <span id="context-connection" class="context-value">Disconnected</span>
+  <span class="context-separator" aria-hidden="true">/</span>
+  <span id="context-tab" class="context-value">No active tab</span>
+  <span class="context-actions"><button id="open-command-palette" type="button" class="btn"><i class="fas fa-search" aria-hidden="true"></i> Commands <span class="shortcut-hint">Ctrl+K</span></button></span>
+</section>
+<div id="connection-warning" class="connection-warning" role="status">Connect to Chrome to enable browser, diagnostic, and agent actions.</div>
+<h2 id="workspace-title" class="sr-only">Overview</h2>
+<p id="workspace-description" class="workspace-description"></p>
+
 <!-- ═══════════════ GRID ═══════════════ -->
-<div class="grid">
+<main id="workspace-main" class="grid" tabindex="-1">
+
+  <!-- Guided daily flow -->
+  <section class="card full-width" id="guided-action-card" data-workspace="browser" aria-labelledby="guided-action-title">
+    <div class="card-header">
+      <h2 id="guided-action-title"><i class="fas fa-compass" aria-hidden="true"></i> Guided browser flow</h2>
+      <span class="badge">Navigate, capture, observe</span>
+    </div>
+    <div class="card-body no-scroll guided-action-body" aria-busy="false">
+      <div class="guided-url-row">
+        <div class="guided-url-field">
+          <label for="guided-url">Page URL</label>
+          <input id="guided-url" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com" aria-describedby="guided-url-help guided-url-error">
+          <small id="guided-url-help">Enter an HTTP or HTTPS address. Press Enter to navigate.</small>
+          <small id="guided-url-error" class="field-error" role="alert"></small>
+        </div>
+        <button id="guided-navigate" type="button" class="btn primary" data-requires-connection><i class="fas fa-arrow-right" aria-hidden="true"></i> Navigate</button>
+        <button id="guided-screenshot" type="button" class="btn" data-requires-connection><i class="fas fa-camera" aria-hidden="true"></i> Screenshot</button>
+        <button id="guided-observe" type="button" class="btn" data-requires-connection><i class="fas fa-eye" aria-hidden="true"></i> Observe</button>
+      </div>
+      <div id="guided-recent" class="guided-recent" aria-label="Recent page addresses"></div>
+      <div id="guided-result" class="guided-result" role="status" aria-live="polite">Choose an action to begin.</div>
+      <section id="guided-run-history" class="guided-run-history" aria-label="Guided run history">
+        <header class="guided-run-header">
+          <div><strong>Session run history</strong><small> Correlated actions stay in this browser tab only.</small></div>
+          <div class="btn-group">
+            <button id="guided-export-runs" type="button" class="btn sm">Export JSON</button>
+            <button id="guided-clear-runs" type="button" class="btn sm danger" data-confirm="Clear the guided run history for this browser tab?">Clear</button>
+          </div>
+        </header>
+        <ol id="guided-run-list" class="guided-run-list" aria-live="polite"></ol>
+      </section>
+    </div>
+  </section>
 
   <!-- ── Connection Panel ── -->
-  <div class="card">
+  <div class="card" data-workspace="overview">
     <div class="card-header">
       <h2><i class="fas fa-plug"></i> Connection</h2>
     </div>
@@ -322,7 +377,7 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Action Buttons Bar ── -->
-  <div class="card">
+  <div class="card" data-workspace="browser">
     <div class="card-header">
       <h2><i class="fas fa-bolt"></i> Quick Actions</h2>
     </div>
@@ -341,7 +396,7 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Chrome Management ── -->
-  <div class="card">
+  <div class="card" data-workspace="overview">
     <div class="card-header">
       <h2><i class="fab fa-chrome"></i> Chrome Management</h2>
     </div>
@@ -389,7 +444,7 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Advanced Tools ── -->
-  <div class="card">
+  <div class="card" data-workspace="browser">
     <div class="card-header">
       <h2><i class="fas fa-tools"></i> Advanced Tools</h2>
     </div>
@@ -451,7 +506,7 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Screenshot Preview ── -->
-  <div class="card">
+  <div class="card" data-workspace="browser">
     <div class="card-header">
       <h2><i class="fas fa-camera-retro"></i> Screenshot Preview</h2>
       <span>
@@ -470,12 +525,33 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Operation Log ── -->
-  <div class="card">
+  <div class="card" data-workspace="diagnostics">
     <div class="card-header">
       <h2><i class="fas fa-list"></i> Operation Log</h2>
-      <button class="btn sm" onclick="clearLog()"><i class="fas fa-trash"></i> Clear</button>
+      <div class="btn-group">
+        <button id="log-export-json" type="button" class="btn sm">Export JSON</button>
+        <button id="log-export-csv" type="button" class="btn sm">Export CSV</button>
+        <button id="log-clear" class="btn sm danger" data-confirm="Clear the in-memory operation log?" onclick="clearLog()"><i class="fas fa-trash"></i> Clear</button>
+      </div>
     </div>
     <div class="card-body" id="log-body" style="max-height:340px">
+      <div class="diagnostics-toolbar">
+        <div class="diagnostics-field">
+          <label for="log-search">Search operations</label>
+          <input id="log-search" type="search" autocomplete="off" placeholder="Operation or details">
+        </div>
+        <div class="diagnostics-field">
+          <label for="log-status-filter">Status</label>
+          <select id="log-status-filter">
+            <option value="all">All statuses</option>
+            <option value="success">Success</option>
+            <option value="error">Error</option>
+            <option value="pending">Pending</option>
+          </select>
+        </div>
+        <div id="log-visible-summary" class="diagnostics-summary" role="status" aria-live="polite">0 of 0 operations shown.</div>
+      </div>
+      <div id="log-empty-filtered" class="empty-state" hidden>No operations match the current filters.</div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -497,31 +573,62 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Tabs Panel ── -->
-  <div class="card">
+  <div class="card" data-workspace="browser">
     <div class="card-header">
       <h2><i class="fas fa-window-restore"></i> Tabs</h2>
-      <span>
-        <button class="btn sm" onclick="refreshTabs()"><i class="fas fa-sync"></i></button>
-        <button class="btn sm primary" onclick="promptNewTab()"><i class="fas fa-plus"></i> New</button>
+      <span class="btn-group">
+        <button class="btn sm" onclick="refreshTabs()" aria-label="Refresh tabs" title="Refresh tabs"><i class="fas fa-sync" aria-hidden="true"></i></button>
+        <button class="btn sm primary" onclick="promptNewTab()"><i class="fas fa-plus" aria-hidden="true"></i> New</button>
       </span>
     </div>
-    <div class="card-body" id="tabs-body" style="max-height:280px">
+    <div class="card-body" id="tabs-body" style="max-height:340px">
+      <div class="tab-management-toolbar">
+        <div class="tab-management-field">
+          <label for="tab-search">Search tabs</label>
+          <input id="tab-search" type="search" autocomplete="off" placeholder="Title or URL">
+        </div>
+        <div class="tab-management-field tab-new-field">
+          <label for="tab-new-url">Open a new tab</label>
+          <div class="tab-new-row"><input id="tab-new-url" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com"><button id="tab-open" type="button" class="btn sm primary" data-requires-connection>Open</button></div>
+        </div>
+        <div id="tab-visible-summary" class="tab-management-summary" role="status" aria-live="polite">0 of 0 tabs shown.</div>
+      </div>
       <div class="empty-state" id="tabs-empty">No tabs loaded. Connect first.</div>
+      <div class="empty-state" id="tab-empty-filtered" hidden>No tabs match the current search.</div>
       <div id="tabs-list"></div>
     </div>
   </div>
 
   <!-- ── Network Log ── -->
-  <div class="card">
+  <div class="card" data-workspace="diagnostics">
     <div class="card-header">
       <h2><i class="fas fa-network-wired"></i> Network Log</h2>
-      <span>
-        <button class="btn sm success" onclick="apiPost('/network/start')"><i class="fas fa-play"></i> Start</button>
-        <button class="btn sm warning" onclick="apiPost('/network/stop')"><i class="fas fa-stop"></i> Stop</button>
-        <button class="btn sm danger" onclick="clearNetworkLog()"><i class="fas fa-trash"></i> Clear</button>
+      <span class="btn-group">
+        <span id="network-capture-status" class="network-capture-status" role="status" aria-live="polite">Stopped</span>
+        <button id="network-start" type="button" class="btn sm success" data-requires-connection><i class="fas fa-play" aria-hidden="true"></i> Start</button>
+        <button id="network-stop" type="button" class="btn sm warning" data-requires-connection disabled><i class="fas fa-stop" aria-hidden="true"></i> Stop</button>
+        <button id="network-export-json" type="button" class="btn sm">Export JSON</button>
+        <button id="network-export-csv" type="button" class="btn sm">Export CSV</button>
+        <button id="network-clear" class="btn sm danger" data-confirm="Clear the captured network requests?" onclick="clearNetworkLog()"><i class="fas fa-trash" aria-hidden="true"></i> Clear</button>
       </span>
     </div>
-    <div class="card-body" id="network-body" style="max-height:280px">
+    <div class="card-body" id="network-body" style="max-height:360px">
+      <div class="network-diagnostics-toolbar">
+        <div class="network-diagnostics-field">
+          <label for="network-search">Search requests</label>
+          <input id="network-search" type="search" autocomplete="off" placeholder="Host, path, or resource type">
+        </div>
+        <div class="network-diagnostics-field">
+          <label for="network-method-filter">Method</label>
+          <select id="network-method-filter"><option value="all">All methods</option><option value="GET">GET</option><option value="POST">POST</option><option value="PUT">PUT</option><option value="PATCH">PATCH</option><option value="DELETE">DELETE</option></select>
+        </div>
+        <div class="network-diagnostics-field">
+          <label for="network-status-filter">Status</label>
+          <select id="network-status-filter"><option value="all">All statuses</option><option value="success">2xx</option><option value="redirect">3xx</option><option value="client-error">4xx</option><option value="server-error">5xx</option><option value="pending">Pending</option></select>
+        </div>
+        <div id="network-visible-summary" class="network-diagnostics-summary" role="status" aria-live="polite">0 of 0 requests shown.</div>
+      </div>
+      <div id="network-empty-filtered" class="empty-state" hidden>No requests match the current filters.</div>
       <div class="table-wrap">
         <table class="network-table">
           <thead>
@@ -542,12 +649,22 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Cookie Viewer ── -->
-  <div class="card">
+  <div class="card" data-workspace="diagnostics">
     <div class="card-header">
       <h2><i class="fas fa-cookie-bite"></i> Cookies</h2>
-      <button class="btn sm danger" onclick="clearCookies()"><i class="fas fa-trash"></i> Clear All</button>
+      <div class="btn-group">
+        <button id="cookie-export-metadata" type="button" class="btn sm">Export metadata</button>
+        <button id="cookie-clear" class="btn sm danger" data-confirm="Clear all cookies from the connected browser?" onclick="clearCookies()"><i class="fas fa-trash" aria-hidden="true"></i> Clear All</button>
+      </div>
     </div>
-    <div class="card-body" id="cookie-body" style="max-height:240px">
+    <div class="card-body" id="cookie-body" style="max-height:320px">
+      <p class="cookie-privacy-note"><i class="fas fa-eye-slash" aria-hidden="true"></i> Cookie values are masked. Metadata export never includes cookie values.</p>
+      <div class="cookie-toolbar">
+        <div class="cookie-field"><label for="cookie-search">Search cookies</label><input id="cookie-search" type="search" autocomplete="off" placeholder="Name or domain"></div>
+        <div class="cookie-field"><label for="cookie-secure-filter">Security</label><select id="cookie-secure-filter"><option value="all">All cookies</option><option value="secure">Secure only</option><option value="insecure">Not secure</option></select></div>
+        <div id="cookie-visible-summary" class="cookie-summary" role="status" aria-live="polite">0 of 0 cookies shown.</div>
+      </div>
+      <div id="cookie-empty-filtered" class="empty-state" hidden>No cookies match the current filters.</div>
       <div class="table-wrap">
         <table class="cookie-table">
           <thead>
@@ -568,35 +685,63 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Script Runner ── -->
-  <div class="card">
+  <div class="card" data-workspace="automation">
     <div class="card-header">
       <h2><i class="fas fa-play-circle"></i> Script Runner</h2>
-      <button class="btn sm primary" onclick="runScript()"><i class="fas fa-play"></i> Run</button>
+      <button id="workflow-run" class="btn sm primary" onclick="runScript()" data-requires-connection><i class="fas fa-play"></i> Run</button>
     </div>
-    <div class="card-body">
-      <textarea id="script-area" placeholder='[{"action":"navigate","url":"https://example.com"},{"action":"screenshot"},{"action":"get_text"}]' spellcheck="false"></textarea>
+    <div class="card-body workflow-assistant">
+      <div class="workflow-toolbar">
+        <div class="workflow-template-field">
+          <label for="workflow-template">Starter template</label>
+          <select id="workflow-template">
+            <option value="navigate_capture">Navigate and capture</option>
+            <option value="observe_page">Observe page</option>
+            <option value="form_starter">Form workflow starter</option>
+          </select>
+        </div>
+        <button id="workflow-apply-template" type="button" class="btn sm">Apply template</button>
+        <button id="workflow-validate" type="button" class="btn sm">Validate</button>
+        <button id="workflow-format" type="button" class="btn sm">Format</button>
+        <button id="workflow-save-draft" type="button" class="btn sm warning">Save draft</button>
+        <button id="workflow-clear-draft" type="button" class="btn sm danger" data-confirm="Clear the locally saved workflow draft?">Clear draft</button>
+      </div>
+      <p class="workflow-privacy-note"><i class="fas fa-shield-alt" aria-hidden="true"></i> Drafts may contain sensitive data. Saving is explicit, local to this browser, and limited to 64 KB.</p>
+      <label for="script-area" class="sr-only">Workflow JSON steps</label>
+      <textarea id="script-area" placeholder='[{"action":"navigate","url":"https://example.com"},{"action":"screenshot"},{"action":"get_text"}]' spellcheck="false" aria-describedby="workflow-validation-status"></textarea>
+      <div id="workflow-validation-status" class="workflow-validation" role="status" aria-live="polite">Choose a template or enter a JSON action array.</div>
       <div class="script-result" id="script-result" style="display:none"></div>
     </div>
   </div>
 
   <!-- ── Session Manager ── -->
-  <div class="card">
+  <div class="card" data-workspace="automation">
     <div class="card-header">
       <h2><i class="fas fa-save"></i> Session Manager</h2>
-      <span>
-        <button class="btn sm" onclick="saveSession()"><i class="fas fa-save"></i> Save</button>
-        <button class="btn sm primary" onclick="restoreSession()"><i class="fas fa-upload"></i> Restore</button>
+      <span class="btn-group">
+        <button id="session-save" class="btn sm" onclick="saveSession()" data-requires-connection><i class="fas fa-save"></i> Capture</button>
+        <button id="session-restore" class="btn sm primary" onclick="restoreSession()" data-requires-connection><i class="fas fa-upload"></i> Restore</button>
       </span>
     </div>
-    <div class="card-body">
-      <div class="session-row">
-        <textarea id="session-data" placeholder='Paste session JSON here...' spellcheck="false"></textarea>
+    <div class="card-body session-assistant" aria-busy="false">
+      <div class="session-toolbar">
+        <button id="session-validate" type="button" class="btn sm">Validate</button>
+        <button id="session-download" type="button" class="btn sm">Download JSON</button>
+        <button id="session-import" type="button" class="btn sm">Import JSON</button>
+        <input id="session-import-file" class="sr-only" type="file" accept="application/json,.json">
+        <button id="session-clear-sensitive" type="button" class="btn sm danger" data-confirm="Clear the sensitive session state from this editor?">Clear editor</button>
       </div>
+      <p class="session-privacy-note"><i class="fas fa-user-shield" aria-hidden="true"></i> Session state is never stored by the dashboard. It can contain cookies and authenticated browser data. Keep exports secure.</p>
+      <div class="session-row">
+        <label for="session-data" class="sr-only">Session state JSON</label>
+        <textarea id="session-data" placeholder='Capture a session, paste JSON, or import a file...' spellcheck="false" aria-describedby="session-validation-status"></textarea>
+      </div>
+      <div id="session-validation-status" class="session-validation" role="status" aria-live="polite">No session state loaded.</div>
     </div>
   </div>
 
   <!-- ── JS Console ── -->
-  <div class="card full-width">
+  <div class="card full-width" data-workspace="diagnostics">
     <div class="card-header">
       <h2><i class="fas fa-terminal"></i> JS Console</h2>
       <span>
@@ -615,11 +760,8 @@ input[type="text"] { width: 100%; }
     </div>
   </div>
 
-</div><!-- /.grid -->
 
-<!-- ═══════════════ JAVASCRIPT ═══════════════ -->
-
-<section class="card" id="agent-tools-card">
+<section class="card" id="agent-tools-card" data-workspace="agent">
   <div class="card-header"><h2><i class="fas fa-robot"></i> LLM Agent Tools</h2></div>
   <div class="card-body">
     <div class="btn-row">
@@ -630,6 +772,13 @@ input[type="text"] { width: 100%; }
     <pre id="agent-output" style="max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:12px">Agent API ready.</pre>
   </div>
 </section>
+</main>
+<dialog id="command-palette" class="command-palette" aria-modal="true" aria-labelledby="command-palette-title">
+  <header><strong id="command-palette-title">Find a workspace or action</strong><button type="button" class="btn sm" data-close-palette aria-label="Close command palette">Close</button></header>
+  <div style="padding:12px"><label for="command-search" class="sr-only">Search actions</label><input id="command-search" type="search" autocomplete="off" placeholder="Type an action or workspace name"></div>
+  <div id="command-results" class="command-results" role="list"></div>
+</dialog>
+</div>
 <script>
 // ============================================================
 //  STATE & CONFIG
@@ -687,6 +836,11 @@ async function apiGet(path) {
 
 async function apiPost(path, body) {
   try {
+    // /navigate is a query-parameter endpoint; keep callers consistent with other actions.
+    if (path === '/navigate' && body && body.url) {
+      path = `/navigate?url=${encodeURIComponent(body.url)}`;
+      body = undefined;
+    }
     const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
     if (body !== undefined) opts.body = JSON.stringify(body);
     const resp = await fetch(path, opts);
@@ -760,6 +914,10 @@ function clearLog() {
 }
 
 function renderLogTable() {
+  if (window.BrowserHelperDiagnostics && window.BrowserHelperDiagnostics.render) {
+    window.BrowserHelperDiagnostics.render();
+    return;
+  }
   const tbody = document.getElementById('log-table-body');
   if (operationLog.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#475569;padding:20px">No operations yet.</td></tr>';
@@ -799,15 +957,22 @@ async function refreshTabs() {
 }
 
 function renderTabs(tabs) {
+  window.BrowserHelperTabs.setTabs(tabs || []);
+  const visibleTabs = window.BrowserHelperTabs.getVisible();
   const container = document.getElementById('tabs-list');
   const empty = document.getElementById('tabs-empty');
+  const filteredEmpty = document.getElementById('tab-empty-filtered');
   if (!tabs || tabs.length === 0) {
     container.innerHTML = '';
     empty.style.display = 'block';
+    if (filteredEmpty) filteredEmpty.hidden = true;
+    window.BrowserHelperTabs.updateSummary(0);
     return;
   }
   empty.style.display = 'none';
-  container.innerHTML = tabs.map(t => {
+  if (filteredEmpty) filteredEmpty.hidden = visibleTabs.length > 0;
+  window.BrowserHelperTabs.updateSummary(visibleTabs.length);
+  container.innerHTML = visibleTabs.map(t => {
     const id = t.id || t.tabId || t.targetId || '?';
     const url = t.url || t.title || 'about:blank';
     const isActive = t.active || false;
@@ -815,8 +980,8 @@ function renderTabs(tabs) {
       <span class="tab-id">${escHtml(String(id).slice(0,8))}</span>
       <span class="tab-url" title="${escHtml(url)}">${escHtml(url)}</span>
       <span class="tab-actions">
-        <button class="btn sm primary" onclick="switchTab('${id}')" title="Switch to tab"><i class="fas fa-arrow-right"></i></button>
-        <button class="btn sm danger" onclick="closeTab('${id}')" title="Close tab"><i class="fas fa-times"></i></button>
+        <button class="btn sm primary" onclick="switchTab('${id}')" title="Switch to tab" aria-label="Switch to tab ${escHtml(String(id).slice(0,8))}"><i class="fas fa-arrow-right" aria-hidden="true"></i></button>
+        <button class="btn sm danger" onclick="closeTab('${id}')" title="Close tab" aria-label="Close tab ${escHtml(String(id).slice(0,8))}" data-confirm="Close tab ${escHtml(String(id).slice(0,8))}?"><i class="fas fa-times" aria-hidden="true"></i></button>
       </span>
     </div>`;
   }).join('');
@@ -824,7 +989,11 @@ function renderTabs(tabs) {
 
 async function switchTab(tabId) {
   const data = await apiPost(`/switch_tab/${tabId}`);
-  if (data && data.status === 'ok') toast(`Switched to tab ${tabId.slice(0,8)}`, 'success');
+  if (data && data.status === 'ok') {
+    toast(`Switched to tab ${tabId.slice(0,8)}`, 'success');
+    window.BrowserHelperTabs.announceSwitch(tabId);
+    refreshTabs();
+  }
 }
 
 async function closeTab(tabId) {
@@ -836,8 +1005,8 @@ async function closeTab(tabId) {
 }
 
 function promptNewTab() {
-  const url = prompt('Enter URL to open in new tab:', 'https://example.com');
-  if (url) apiPost('/tab/new', { url });
+  const input = document.getElementById('tab-new-url');
+  if (input) { input.focus(); input.select(); }
 }
 
 // ============================================================
@@ -852,6 +1021,10 @@ async function refreshNetworkLog() {
 }
 
 function renderNetworkLog() {
+  if (window.BrowserHelperNetwork && window.BrowserHelperNetwork.render) {
+    window.BrowserHelperNetwork.render();
+    return;
+  }
   const tbody = document.getElementById('network-table-body');
   if (networkRequests.length === 0) {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#475569;padding:20px">No requests captured.</td></tr>';
@@ -917,6 +1090,11 @@ async function refreshCookies() {
 }
 
 function renderCookies(cookies) {
+  if (window.BrowserHelperCookies && window.BrowserHelperCookies.render) {
+    window.BrowserHelperCookies.setCookies(cookies || []);
+    window.BrowserHelperCookies.render();
+    return;
+  }
   const tbody = document.getElementById('cookie-table-body');
   if (!cookies || cookies.length === 0) {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#475569;padding:20px">No cookies found.</td></tr>';
@@ -924,13 +1102,12 @@ function renderCookies(cookies) {
   }
   tbody.innerHTML = cookies.map(c => {
     const name = c.name || '—';
-    const value = c.value || '';
     const domain = c.domain || '—';
     const path = c.path || '/';
     const secure = c.secure ? '<i class="fas fa-lock" style="color:#22c55e" title="Secure"></i>' : '—';
     return `<tr>
       <td style="font-weight:600;color:#e2e8f0">${escHtml(name)}</td>
-      <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;color:#94a3b8" title="${escHtml(value)}">${escHtml(shortVal(value))}</td>
+      <td style="color:#64748b" aria-label="Cookie value masked">••••••••</td>
       <td style="color:#64748b">${escHtml(domain)}</td>
       <td style="color:#64748b">${escHtml(path)}</td>
       <td>${secure}</td>
@@ -944,7 +1121,6 @@ function shortVal(v) {
 }
 
 function clearCookies() {
-  if (!confirm('Clear all cookies?')) return;
   apiPost('/clear_cookies').then(() => {
     toast('Cookies cleared', 'success');
     refreshCookies();
@@ -959,13 +1135,13 @@ async function runScript() {
   const resultDiv = document.getElementById('script-result');
   let steps;
   try {
-    steps = JSON.parse(area.value);
-    if (!Array.isArray(steps)) throw new Error('Must be a JSON array');
+    steps = window.BrowserHelperWorkflow.validate(area.value);
   } catch (e) {
-    toast(`<i class="fas fa-exclamation-triangle"></i> Invalid JSON: ${e.message}`, 'error');
+    toast(`<i class="fas fa-exclamation-triangle"></i> Invalid workflow: ${e.message}`, 'error');
     return;
   }
 
+  window.BrowserHelperWorkflow.setBusy(true);
   resultDiv.style.display = 'block';
   resultDiv.innerHTML = '<div class="spinner"></div> Running...';
 
@@ -987,33 +1163,46 @@ async function runScript() {
   } else {
     resultDiv.innerHTML = '<div class="step"><span class="step-err"><i class="fas fa-times-circle"></i> Request failed</span></div>';
   }
+  window.BrowserHelperWorkflow.setBusy(false);
 }
 
 // ============================================================
 //  SESSION MANAGER
 // ============================================================
 async function saveSession() {
+  window.BrowserHelperSession.setBusy(true);
   const data = await apiPost('/session/save');
   if (data && data.status === 'ok') {
-    const sessionStr = JSON.stringify(data.result || data.session || data, null, 2);
+    const sessionValue = data.result || data.session || data;
+    const sessionStr = JSON.stringify(sessionValue, null, 2);
     document.getElementById('session-data').value = sessionStr;
-    toast('<i class="fas fa-save"></i> Session saved', 'success');
+    window.BrowserHelperSession.validate(sessionStr);
+    toast('<i class="fas fa-save"></i> Session captured in the editor', 'success');
+  } else {
+    window.BrowserHelperSession.showStatus('Session capture failed.', 'error');
   }
+  window.BrowserHelperSession.setBusy(false);
 }
 
 async function restoreSession() {
   const area = document.getElementById('session-data');
   let sessionData;
   try {
-    sessionData = JSON.parse(area.value);
+    sessionData = window.BrowserHelperSession.validate(area.value);
   } catch (e) {
-    toast(`<i class="fas fa-exclamation-triangle"></i> Invalid session JSON: ${e.message}`, 'error');
+    toast(`<i class="fas fa-exclamation-triangle"></i> Invalid session state: ${e.message}`, 'error');
     return;
   }
+  if (!window.confirm('Restore this session state into the connected browser? Existing cookies or storage may be overwritten.')) return;
+  window.BrowserHelperSession.setBusy(true);
   const data = await apiPost('/session/restore', { session: sessionData });
   if (data && data.status === 'ok') {
     toast('<i class="fas fa-upload"></i> Session restored', 'success');
+    window.BrowserHelperSession.showStatus('Session restored successfully.', 'success');
+  } else {
+    window.BrowserHelperSession.showStatus('Session restore failed.', 'error');
   }
+  window.BrowserHelperSession.setBusy(false);
 }
 
 // ============================================================
@@ -1426,5 +1615,6 @@ function init() {
 // Run on page load
 document.addEventListener('DOMContentLoaded', init);
 </script>
+<script src="/static/dashboard_ux.js" defer></script>
 </body>
 </html>

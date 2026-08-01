@@ -2,6 +2,23 @@
 
 All notable changes to browser-helper will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Task-oriented dashboard workspaces for Overview, Live Browser, Automation, Diagnostics, and Agent Tools.
+- Persistent active context, Ctrl/Cmd+K command palette, connection-aware controls, safe destructive-action confirmation, and local privacy-preserving telemetry hooks.
+- Dashboard accessibility improvements: skip navigation, landmarks, live announcements, visible focus, textual status, and reduced-motion support.
+- Acceptance and integration coverage in `tests/test_dashboard_ux_v19.py`.
+- Guided Live Browser flow for validated navigation, screenshot capture, agent observation, recent URL reuse, and accessible busy/error/success feedback.
+- Privacy-safe guided run history with correlation IDs, timing, bounded session storage, retry, confirmed clear, and redacted JSON export.
+- Workflow assistant with safe starter templates, shared schema-oriented validation, formatting, explicit 64 KB local drafts, privacy guidance, and busy-state protection.
+- Privacy-safe session state assistant with validation, 5 MB JSON import, download, confirmed restore, sensitive editor clearing, and no dashboard persistence.
+- Diagnostics operation-log assistant with search, status filtering, visible counts, confirmed clearing, and bounded redacted JSON/CSV export.
+- Tab management assistant with non-destructive search, validated inline opening, Enter submission, accessible dynamic actions, confirmed closing, and context refresh.
+- Network diagnostics assistant with capture-state feedback, non-destructive filters, connection-aware controls, sensitive query redaction, and bounded JSON/CSV export.
+- Cookie privacy assistant with masked values, non-destructive metadata filtering, secure-status filtering, metadata-only export, and confirmed clearing.
+
+
 ### [1.8.0] — 2026-07-31
 
 #### Added

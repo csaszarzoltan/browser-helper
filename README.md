@@ -6,6 +6,10 @@
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
+### Improved task-oriented dashboard
+
+The dashboard now groups existing controls into **Overview**, **Live Browser**, **Automation**, **Diagnostics**, and **Agent Tools** workspaces. The Live Browser workspace includes a guided daily flow for validated navigation, screenshot capture, compact observation, and private local reuse of the five most recent URLs. Guided actions also receive tab-session-scoped correlation IDs, timing, outcomes, retry controls, and redacted JSON export. The Automation workspace now includes safe starter templates, preflight validation, formatting, and explicit bounded local draft persistence. Session state handling now adds validation, secure-use guidance, bounded JSON import, download, confirmed restore, and a no-dashboard-persistence policy. Diagnostics now supports non-destructive operation search, status filtering, visible counts, and bounded redacted JSON/CSV export. Tab management now adds title/URL search, inline validated tab opening, accessible dynamic actions, confirmed closing, and context refresh after switching. Network diagnostics now adds capture-state feedback, request search, method and status-family filters, sensitive query redaction, and bounded JSON/CSV export. Cookie diagnostics now masks values, supports metadata search and security filters, and exports metadata without cookie values. It includes a persistent active-context bar, connection-aware controls, destructive-action confirmation, accessible status announcements, and a **Ctrl/Cmd+K** command palette. Existing REST and WebSocket contracts are unchanged. See [Task-oriented dashboard workspaces](docs/dashboard-workspaces.md).
+
 ## Why?
 
 **The Problem:** AI agents (Hermes, etc.) running on a remote server need to control Chrome on your local machine through an SSH tunnel. Standard CDP tools (snapshot, vision) send megabytes over the tunnel — every operation takes seconds.
