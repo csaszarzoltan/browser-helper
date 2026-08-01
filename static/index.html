@@ -302,6 +302,10 @@ input[type="text"] { width: 100%; }
   <span id="context-connection" class="context-value">Disconnected</span>
   <span class="context-separator" aria-hidden="true">/</span>
   <span id="context-tab" class="context-value">No active tab</span>
+  <span class="context-separator" aria-hidden="true">/</span>
+  <span id="context-target" class="context-value" title="Current CDP target">No target</span>
+  <span class="context-separator" aria-hidden="true">/</span>
+  <span id="context-last-operation" class="context-value">No recent operation</span>
   <span class="context-actions"><button id="open-command-palette" type="button" class="btn"><i class="fas fa-search" aria-hidden="true"></i> Commands <span class="shortcut-hint">Ctrl+K</span></button></span>
 </section>
 <div id="connection-warning" class="connection-warning" role="status">Connect to Chrome to enable browser, diagnostic, and agent actions.</div>
@@ -341,6 +345,18 @@ input[type="text"] { width: 100%; }
         </header>
         <ol id="guided-run-list" class="guided-run-list" aria-live="polite"></ol>
       </section>
+    </div>
+  </section>
+
+  <section class="card full-width" id="capability-readiness-card" data-workspace="overview" aria-labelledby="capability-readiness-title">
+    <div class="card-header">
+      <h2 id="capability-readiness-title"><i class="fas fa-clipboard-check" aria-hidden="true"></i> Product readiness</h2>
+      <button id="refresh-capabilities" type="button" class="btn sm"><i class="fas fa-sync" aria-hidden="true"></i> Refresh</button>
+    </div>
+    <div class="card-body no-scroll">
+      <p class="privacy-guidance">Readiness distinguishes production-ready, experimental, and unavailable areas before you start work.</p>
+      <div id="capability-summary" class="capability-summary" role="status" aria-live="polite">Checking product capabilities…</div>
+      <ul id="capability-list" class="capability-list" aria-label="Product capability readiness"></ul>
     </div>
   </section>
 
@@ -525,6 +541,24 @@ input[type="text"] { width: 100%; }
   </div>
 
   <!-- ── Operation Log ── -->
+  <section class="card full-width" id="run-timeline-card" data-workspace="diagnostics" aria-labelledby="run-timeline-title">
+    <div class="card-header">
+      <h2 id="run-timeline-title"><i class="fas fa-stream" aria-hidden="true"></i> Unified run timeline</h2>
+      <div class="btn-group">
+        <button id="refresh-run-timeline" type="button" class="btn sm">Refresh</button>
+        <button id="clear-run-timeline" type="button" class="btn sm danger" data-confirm="Clear the process-local run timeline? Browser state will not be changed.">Clear</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="diagnostics-controls">
+        <label for="run-status-filter">Status</label>
+        <select id="run-status-filter"><option value="all">All statuses</option><option value="success">Success</option><option value="error">Error</option><option value="incomplete">Incomplete</option></select>
+      </div>
+      <p id="run-timeline-summary" role="status" aria-live="polite">Loading recent runs…</p>
+      <ol id="run-timeline-list" class="run-timeline-list" aria-label="Recent browser operation runs"></ol>
+    </div>
+  </section>
+
   <div class="card" data-workspace="diagnostics">
     <div class="card-header">
       <h2><i class="fas fa-list"></i> Operation Log</h2>

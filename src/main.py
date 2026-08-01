@@ -50,11 +50,13 @@ from agent_navigation import (
     validate_expectations,
 )
 from baseline_manager import BaselineManager
+from capability_registry import CapabilityRegistry
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
 from headless_manager import HeadlessManager
 from profile_manager import Profile, ProfileManager
 from screenshot_diff import ScreenshotDiffEngine
+from run_timeline import RunStore
 from settings_manager import SettingsManager
 
 from proxy_manager import ProxyParseError, ProxyPool
@@ -79,9 +81,10 @@ _compositor = AntiDetectCompositor(
     session_mgr=_session_mgr,
 )
 _detection_tester = DetectionTester()
+_capability_registry = CapabilityRegistry.default()
 
 # Paths excluded from auth and rate-limiting middleware
-PUBLIC_PATHS = {"/", "/health", "/ready", "/ws"}
+PUBLIC_PATHS = {"/", "/health", "/ready", "/ws", "/api/v1/capabilities"}
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -162,7 +165,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.0.0",
+    version="1.10.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -211,6 +214,7 @@ proxy_pool = ProxyPool()
 # Operation log: list of dicts, max 100 entries
 # Each entry: {timestamp, operation, status, duration_ms, details}
 operation_log: list[dict[str, Any]] = []
+run_store = RunStore(max_runs=100)
 
 # Connected WebSocket clients
 ws_clients: set[WebSocket] = set()
@@ -831,6 +835,7 @@ def log_operation(
         "details": details,
     }
     operation_log.append(entry)
+    run_store.record(operation, status, duration_ms, details)
     if len(operation_log) > 100:
         operation_log.pop(0)
 
@@ -899,6 +904,25 @@ async def root():
     if os.path.isfile(index_path):
         return FileResponse(index_path)
     return {"message": "Browser Helper API — install a static/index.html for the dashboard."}
+
+
+@app.get("/api/v1/runs")
+async def list_runs(status: str | None = None, limit: int = Query(50, ge=1, le=100)):
+    """Return newest-first, redacted operation runs with bounded retention."""
+    runs = run_store.list_runs(status=status, limit=limit)
+    return api_success("run_timeline_list", {"count": len(runs), "runs": runs})
+
+
+@app.delete("/api/v1/runs")
+async def clear_runs():
+    """Clear the process-local run timeline without affecting browser state."""
+    return api_success("run_timeline_clear", {"cleared": run_store.clear()})
+
+
+@app.get("/api/v1/capabilities")
+async def capability_readiness():
+    """Return privacy-safe product maturity and dependency guidance."""
+    return api_success("capability_readiness", _capability_registry.as_dict())
 
 
 @app.get("/status")

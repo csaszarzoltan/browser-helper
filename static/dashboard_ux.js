@@ -56,12 +56,20 @@
     emitTelemetry('workspace_selected', {workspace: valid});
   };
 
-  const setConnectedState = (connected, tabCount) => {
+  const setConnectedState = (connected, tabCount, details = {}) => {
     const connection = document.getElementById('context-connection');
     const tab = document.getElementById('context-tab');
+    const target = document.getElementById('context-target');
+    const lastOperation = document.getElementById('context-last-operation');
     const warning = document.getElementById('connection-warning');
     if (connection) connection.textContent = connected ? 'Connected' : 'Disconnected';
     if (tab) tab.textContent = connected ? `${Number(tabCount || 0)} tab${Number(tabCount) === 1 ? '' : 's'}` : 'No active tab';
+    if (target) {
+      const targetLabel = connected && details.cdp_url ? String(details.cdp_url).replace(/^wss?:\/\//, '').slice(0, 56) : 'No target';
+      target.textContent = targetLabel;
+      target.title = details.cdp_url || 'No current CDP target';
+    }
+    if (lastOperation) lastOperation.textContent = details.last_operation ? `Last: ${details.last_operation}` : 'No recent operation';
     if (warning) warning.classList.toggle('visible', !connected);
     document.querySelectorAll('[data-requires-connection]').forEach((control) => {
       control.disabled = !connected;
@@ -922,12 +930,121 @@
     renderRecentUrls();
   };
 
+
+
+  let currentRuns = [];
+  const renderRunTimeline = () => {
+    const list = document.getElementById('run-timeline-list');
+    const summary = document.getElementById('run-timeline-summary');
+    const filter = document.getElementById('run-status-filter')?.value || 'all';
+    if (!list || !summary) return;
+    const visible = filter === 'all' ? currentRuns : currentRuns.filter((run) => run.status === filter);
+    summary.textContent = `${visible.length} of ${currentRuns.length} recent runs shown.`;
+    list.replaceChildren();
+    if (!visible.length) {
+      const empty = document.createElement('li');
+      empty.className = 'empty-state';
+      empty.textContent = currentRuns.length ? 'No runs match this status.' : 'No operation runs recorded yet.';
+      list.appendChild(empty);
+      return;
+    }
+    visible.forEach((run) => {
+      const item = document.createElement('li');
+      item.className = `run-timeline-item ${run.status || 'incomplete'}`;
+      const operation = document.createElement('strong'); operation.textContent = run.operation || 'Unknown operation';
+      const detail = document.createElement('span'); detail.textContent = run.details || 'No detail recorded.';
+      const meta = document.createElement('small'); meta.textContent = `${run.status || 'incomplete'} · ${Number(run.duration_ms || 0).toFixed(2)} ms · ${run.verification || 'unverified'}`;
+      item.append(operation, detail, meta);
+      list.appendChild(item);
+    });
+  };
+
+  const loadRunTimeline = async () => {
+    const summary = document.getElementById('run-timeline-summary');
+    try {
+      if (summary) summary.textContent = 'Loading recent runs…';
+      const response = await fetch('/api/v1/runs?limit=100', {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Run timeline request failed (${response.status})`);
+      const payload = await response.json();
+      currentRuns = Array.isArray(payload?.data?.runs) ? payload.data.runs : [];
+      renderRunTimeline();
+      emitTelemetry('run_timeline_loaded', {count: currentRuns.length});
+    } catch (error) {
+      currentRuns = [];
+      if (summary) summary.textContent = 'Run timeline could not be loaded. Existing diagnostics remain available.';
+      emitTelemetry('run_timeline_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    }
+  };
+
+  const setupRunTimeline = () => {
+    document.getElementById('refresh-run-timeline')?.addEventListener('click', loadRunTimeline);
+    document.getElementById('run-status-filter')?.addEventListener('change', renderRunTimeline);
+    document.getElementById('clear-run-timeline')?.addEventListener('click', async () => {
+      const response = await fetch('/api/v1/runs', {method: 'DELETE', headers: {Accept: 'application/json'}});
+      if (response.ok) {
+        currentRuns = [];
+        renderRunTimeline();
+        announce('Run timeline cleared');
+      }
+    });
+    loadRunTimeline();
+  };
+
+  const renderCapabilityReadiness = (payload) => {
+    const summary = document.getElementById('capability-summary');
+    const list = document.getElementById('capability-list');
+    if (!summary || !list) return;
+    const data = payload?.data || payload?.result || payload || {};
+    const counts = data.summary || {};
+    const capabilities = Array.isArray(data.capabilities) ? data.capabilities : [];
+    summary.textContent = `${counts.ready || 0} ready, ${counts.experimental || 0} experimental, ${counts.unavailable || 0} unavailable.`;
+    list.replaceChildren();
+    capabilities.forEach((capability) => {
+      const item = document.createElement('li');
+      item.className = 'capability-item';
+      const title = document.createElement('strong');
+      title.textContent = capability.title || capability.id;
+      const status = document.createElement('span');
+      status.className = `capability-status ${capability.status || 'unavailable'}`;
+      status.textContent = capability.status || 'unavailable';
+      status.setAttribute('aria-label', `${title.textContent}: ${status.textContent}`);
+      const detail = document.createElement('span');
+      detail.textContent = capability.description || '';
+      if (capability.reason) {
+        const reason = document.createElement('small');
+        reason.className = 'capability-reason';
+        reason.textContent = capability.reason;
+        detail.appendChild(reason);
+      }
+      item.append(title, status, detail);
+      list.appendChild(item);
+    });
+  };
+
+  const loadCapabilityReadiness = async () => {
+    const summary = document.getElementById('capability-summary');
+    try {
+      if (summary) summary.textContent = 'Checking product capabilities…';
+      const response = await fetch('/api/v1/capabilities', {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Readiness request failed (${response.status})`);
+      const payload = await response.json();
+      renderCapabilityReadiness(payload);
+      emitTelemetry('capability_readiness_loaded', {count: payload?.data?.summary?.total || 0});
+    } catch (error) {
+      if (summary) summary.textContent = 'Capability readiness could not be loaded. Core browser controls remain available when connected.';
+      emitTelemetry('capability_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    }
+  };
+
   const bridgeExistingState = () => {
     const original = window.updateState;
     window.updateState = function updateStateWithContext(state) {
       if (typeof original === 'function') original(state);
       const data = state?.data || state?.result || state || {};
-      setConnectedState(Boolean(data.connected), data.tabs_count ?? data.tabs?.length ?? 0);
+      setConnectedState(Boolean(data.connected), data.tabs_count ?? data.tabs?.length ?? 0, {
+        cdp_url: data.cdp_url,
+        last_operation: data.last_operation
+      });
     };
   };
 
@@ -943,7 +1060,10 @@
     setupTabAssistant();
     setupNetworkAssistant();
     setupCookieAssistant();
+    setupRunTimeline();
     bridgeExistingState();
+    document.getElementById('refresh-capabilities')?.addEventListener('click', loadCapabilityReadiness);
+    loadCapabilityReadiness();
     document.querySelectorAll('#workspace-nav [data-workspace]').forEach((button) => button.addEventListener('click', () => showWorkspace(button.dataset.workspace)));
     showWorkspace(localStorage.getItem(WORKSPACE_KEY) || 'overview', {silent: true});
     setConnectedState(false, 0);

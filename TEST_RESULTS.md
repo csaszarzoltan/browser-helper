@@ -195,3 +195,68 @@ PYTHONPATH=src uv run pytest -q
 ```
 
 Result: **1,997 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed**. The original supplied archive produced **1,944 passed and 221 failed** in the same environment. The remaining failure count is unchanged from baseline; the cumulative UX work adds 53 passing tests without adding a regression failure.
+
+## 2026-08-01 - Capability readiness and execution context v1.9
+
+### TDD RED phase
+
+`tests/test_capability_readiness_v20.py` was written before implementation. The first run failed during collection with `ModuleNotFoundError: capability_registry`, confirming that the target behavior did not exist.
+
+### GREEN and targeted regression
+
+```bash
+PYTHONPATH=src uv run pytest -q \
+  tests/test_capability_readiness_v20.py \
+  tests/test_dashboard_ux_v19.py \
+  tests/test_guided_browser_flow_v19.py \
+  tests/test_guided_run_history_v19.py \
+  tests/test_workflow_assistant_v19.py \
+  tests/test_session_state_assistant_v19.py \
+  tests/test_diagnostics_log_assistant_v19.py \
+  tests/test_tab_management_assistant_v19.py \
+  tests/test_network_log_assistant_v19.py \
+  tests/test_cookie_privacy_assistant_v19.py \
+  tests/test_agent_api.py
+```
+
+Result before the final public-readiness assertion: **69 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full supplied regression
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,003 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 137.98 seconds. The failure count exactly matches the supplied baseline documented earlier in this file. The six new readiness tests add six passes and no regression failures. Remaining failures are existing RED-phase or incomplete-feature tests in the supplied archive.
+
+### Static checks
+
+- `node --check static/dashboard_ux.js`
+- `python -m compileall -q src tests run.py examples`
+- `ruff check src/capability_registry.py tests/test_capability_readiness_v20.py`
+
+All were rerun after final cleanup.
+
+## 2026-08-01 - Unified run timeline v1.10
+
+### TDD RED phase
+
+`tests/test_run_timeline_v20.py` was authored before the implementation. The initial attempt could not collect the application after the cleaned handoff environment removed development dependencies; after restoring the declared environment, the missing `run_timeline` module represented the expected target gap.
+
+### GREEN phase
+
+```bash
+PYTHONPATH=src uv run pytest -q tests/test_run_timeline_v20.py
+```
+
+Result: **5 passed, 0 failed, 1 third-party deprecation warning**.
+
+The tests cover bounded retention, newest-first ordering, credential redaction, stable record shape, endpoint listing/clearing, accessible dashboard markup, status filtering hooks, and graceful load-failure telemetry.
+
+### Full regression after v1.10 continuation
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,008 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 142.02 seconds. The five new timeline tests add five passing tests. The known failure count remains unchanged from the supplied baseline.

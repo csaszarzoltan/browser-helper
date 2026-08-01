@@ -22,6 +22,14 @@ All notable changes to browser-helper will be documented in this file.
 ### [1.8.0] — 2026-07-31
 
 #### Added
+- Bounded, privacy-safe unified operation run timeline with generated run IDs, duration, status, and explicit verification state.
+- `GET /api/v1/runs` and `DELETE /api/v1/runs` contracts for listing and clearing process-local run history.
+- Accessible Diagnostics timeline with status filtering, refresh, safe clear, responsive layout, and local telemetry.
+- TDD acceptance coverage in `tests/test_run_timeline_v20.py` and operator documentation in `docs/run-timeline.md`.
+- Product readiness registry and `GET /api/v1/capabilities` contract for ready, experimental, and unavailable product areas.
+- Accessible Overview readiness card with explicit reasons, manual refresh, local telemetry, and resilient failure feedback.
+- Expanded active execution context showing the current CDP target and most recent operation.
+- Acceptance coverage in `tests/test_capability_readiness_v20.py` and operator guide in `docs/capability-readiness.md`.
 
 **Anti-Detection Compositor** (`src/anti_detection/compositor.py`)
 - `AntiDetectCompositor` facade that composes a complete anti-detection profile: fingerprint spoofing (Canvas/WebGL/audio/navigator), proxy rotation strategy, session persistence, and stealth injection — selectable per browser session.
