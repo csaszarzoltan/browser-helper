@@ -134,3 +134,103 @@ Added `src/run_timeline.py`, `tests/test_run_timeline_v20.py`, and `docs/run-tim
 ## TDD
 
 Five acceptance tests were authored before implementation. They cover bounding, newest-first ordering, secret redaction, record shape, API list/clear integration, dashboard semantics, filtering hooks, and failure telemetry. The implementation then satisfied those tests without changing existing browser-action contracts.
+
+---
+
+# Browser Helper 1.11 continuation
+
+## Product rationale
+
+The unified timeline made recent operations visible, but users still had to copy several pieces of safe context manually when reporting a failure. This increment adds a per-run support artifact that is deliberately smaller and safer than a full diagnostic export.
+
+## Requirements implemented
+
+- Retrieve a defensive copy of one retained run by ID.
+- Return HTTP 404 with a stable `run_not_found` code after expiry or deletion.
+- Produce a versioned support contract containing the selected run, safe context counts, capability summary, and privacy declarations.
+- Exclude page content, credentials, cookie data, storage, screenshots, network bodies, proxy secrets, and the CDP target URL.
+- Download support JSON directly from each timeline row.
+- Announce export success or failure and emit local-only bounded telemetry.
+
+## Files changed
+
+Added `tests/test_run_support_bundle_v20.py` and `docs/run-support-bundles.md`. Updated `src/run_timeline.py`, `src/main.py`, dashboard HTML and JavaScript, README, changelog, package version, test results, and implementation report.
+
+## TDD result
+
+The four acceptance tests initially failed for the expected reasons: no run lookup, no endpoint, no stable 404 envelope, and no dashboard export interaction. The implementation then satisfied all four tests.
+
+---
+
+# Browser Helper 1.12 continuation
+
+## Product rationale
+
+The timeline and support export introduced generated run IDs, but ordinary API callers did not receive the same correlation ID in their immediate response. Users therefore could not reliably connect a client-side failure report to the matching timeline record. This increment closes that traceability gap.
+
+## Requirements implemented
+
+- Reuse one generated run ID in the run store and legacy operation entry.
+- Return the ID and explicit verification status in successful shared-operation response metadata.
+- Retrieve one retained redacted run by ID with a stable 404 error after expiry or deletion.
+- Show and copy run IDs from the Diagnostics timeline.
+- Preserve existing response data, result aliases, browser behavior, and API authentication.
+- Announce copy success and emit local-only bounded telemetry.
+
+## Files changed
+
+Added `tests/test_run_correlation_v20.py` and `docs/run-correlation.md`. Updated `src/main.py`, dashboard HTML and JavaScript, README, changelog, package metadata, test results, and this implementation report.
+
+## TDD result
+
+After correcting the test fixture to mock the CDP client rather than read-only properties, five tests failed for the expected target gaps: absent run ID reuse, absent response metadata, absent single-run API, absent stable 404, and absent copy interaction. The implementation then made all five pass.
+
+---
+
+# Browser Helper 1.13 continuation
+
+## Product rationale
+
+Run correlation made operations traceable, but all ordinary shared-path runs were still marked unverified even when an endpoint returned explicit verification evidence. Conversely, blindly marking every successful command as verified would create false confidence. This increment adds conservative evidence-based inference.
+
+## Requirements implemented
+
+- Recognize only explicit boolean verification evidence.
+- Keep generic successful responses unverified.
+- Represent explicit negative evidence as verification `failed` without converting transport success into an API error.
+- Propagate the truthful state to API metadata and the correlated run record.
+- Filter Diagnostics by verification state.
+- Explain the user-facing meaning of verified and unverified.
+
+## Files changed
+
+Added `tests/test_run_verification_v20.py` and `docs/verified-outcomes.md`. Updated `src/main.py`, dashboard HTML and JavaScript, README, changelog, package metadata, test results, and this report.
+
+## TDD result
+
+The initial test run failed during collection because the verification inference function did not exist. Implementation then satisfied all five focused tests for positive evidence, negative evidence, no-evidence behavior, run propagation, and UI filtering.
+
+---
+
+# Browser Helper 1.14 continuation
+
+## Product rationale
+
+Once operations became correlated and truthfully verified, the next daily friction was deciding what to do after a failure without accidentally repeating a side effect. This increment provides bounded advice while deliberately avoiding autonomous retries.
+
+## Requirements implemented
+
+- Distinguish execution failure, verification failure, missing evidence, and verified outcomes.
+- Mark known read-only retries as safe and mutating retries as requiring review.
+- Never echo run details or sensitive values in advice.
+- Never automatically retry an operation.
+- Return stable guidance through a per-run API.
+- Present guidance inline in Diagnostics with accessible live feedback.
+
+## Files changed
+
+Added `src/run_recovery.py`, `tests/test_run_recovery_v20.py`, and `docs/run-recovery-guidance.md`. Updated `src/main.py`, dashboard HTML and JavaScript, README, changelog, package metadata, test results, and this report.
+
+## TDD result
+
+The initial test run failed during collection because `run_recovery` did not exist. The implementation then satisfied all five tests for category selection, retry safety, privacy, API behavior, missing-run handling, and non-automatic accessible UI behavior.

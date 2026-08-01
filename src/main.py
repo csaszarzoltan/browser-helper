@@ -57,6 +57,7 @@ from headless_manager import HeadlessManager
 from profile_manager import Profile, ProfileManager
 from screenshot_diff import ScreenshotDiffEngine
 from run_timeline import RunStore
+from run_recovery import RecoveryAdvisor
 from settings_manager import SettingsManager
 
 from proxy_manager import ProxyParseError, ProxyPool
@@ -165,7 +166,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.10.0",
+    version="1.14.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -215,6 +216,7 @@ proxy_pool = ProxyPool()
 # Each entry: {timestamp, operation, status, duration_ms, details}
 operation_log: list[dict[str, Any]] = []
 run_store = RunStore(max_runs=100)
+recovery_advisor = RecoveryAdvisor()
 
 # Connected WebSocket clients
 ws_clients: set[WebSocket] = set()
@@ -825,6 +827,8 @@ def log_operation(
     status: str,
     duration_ms: float,
     details: str = "",
+    *,
+    verification: str = "unverified",
 ) -> dict[str, Any]:
     """Append an operation entry to the ring buffer and update global state."""
     entry = {
@@ -834,8 +838,12 @@ def log_operation(
         "duration_ms": round(duration_ms, 2),
         "details": details,
     }
+    run = run_store.record(
+        operation, status, duration_ms, details, verification=verification
+    )
+    entry["run_id"] = run["run_id"]
+    entry["verification"] = run["verification"]
     operation_log.append(entry)
-    run_store.record(operation, status, duration_ms, details)
     if len(operation_log) > 100:
         operation_log.pop(0)
 
@@ -871,6 +879,24 @@ def ensure_connected():
         raise HTTPException(status_code=400, detail="Not connected to CDP. Call POST /connect first.")
 
 
+def infer_verification(result: Any) -> str:
+    """Infer only explicit outcome verification; never equate transport success with proof."""
+    if not isinstance(result, dict):
+        return "unverified"
+    direct = result.get("verified")
+    if isinstance(direct, bool):
+        return "verified" if direct else "failed"
+    verification = result.get("verification")
+    if isinstance(verification, dict) and isinstance(verification.get("verified"), bool):
+        return "verified" if verification["verified"] else "failed"
+    confirmation = result.get("confirmation")
+    if isinstance(confirmation, dict):
+        state_change = confirmation.get("state_change")
+        if isinstance(state_change, dict) and isinstance(state_change.get("changed"), bool):
+            return "verified" if state_change["changed"] else "failed"
+    return "unverified"
+
+
 async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
     """
     Execute a CDP client method, time it, log it, broadcast state,
@@ -881,13 +907,20 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
     try:
         result = await method(*args, **kwargs)
         elapsed = (time.monotonic() - start) * 1000
-        log_operation(operation, "success", elapsed, str(result)[:200])
+        verification = infer_verification(result)
+        entry = log_operation(
+            operation, "success", elapsed, str(result)[:200], verification=verification
+        )
         await broadcast_state()
-        return api_success(operation, result)
+        return api_success(
+            operation,
+            result,
+            meta={"run_id": entry["run_id"], "verification": entry["verification"]},
+        )
     except Exception as exc:
         elapsed = (time.monotonic() - start) * 1000
         logger.exception("Operation '%s' failed", operation)
-        log_operation(operation, "error", elapsed, str(exc))
+        entry = log_operation(operation, "error", elapsed, str(exc))
         await broadcast_state()
         status = 504 if isinstance(exc, TimeoutError) else 503 if "connect" in str(exc).lower() else 400
         return api_error(operation, "operation_failed", str(exc), status)
@@ -911,6 +944,55 @@ async def list_runs(status: str | None = None, limit: int = Query(50, ge=1, le=1
     """Return newest-first, redacted operation runs with bounded retention."""
     runs = run_store.list_runs(status=status, limit=limit)
     return api_success("run_timeline_list", {"count": len(runs), "runs": runs})
+
+
+@app.get("/api/v1/runs/{run_id}")
+async def get_run(run_id: str):
+    """Return one retained, redacted run by its correlation ID."""
+    run = run_store.get(run_id)
+    if run is None:
+        return api_error("run_get", "run_not_found", "The requested run is no longer available.", 404)
+    return api_success("run_get", run)
+
+
+@app.get("/api/v1/runs/{run_id}/recovery")
+async def run_recovery(run_id: str):
+    """Return deterministic recovery guidance without automatically retrying."""
+    run = run_store.get(run_id)
+    if run is None:
+        return api_error(
+            "run_recovery", "run_not_found", "The requested run is no longer available.", 404
+        )
+    return api_success("run_recovery", recovery_advisor.advise(run))
+
+
+@app.get("/api/v1/runs/{run_id}/support")
+async def run_support_bundle(run_id: str):
+    """Build a bounded, redacted support document for one operation run."""
+    run = run_store.get(run_id)
+    if run is None:
+        return api_error(
+            "run_support_bundle", "run_not_found", "The requested run is no longer available.", 404
+        )
+    capabilities = _capability_registry.as_dict()
+    bundle = {
+        "schema_version": 1,
+        "generated_at": datetime.now(_UTC).isoformat(),
+        "run": run,
+        "browser_context": {
+            "connected": bool(client.is_connected),
+            "tabs_count": int(client.tabs_count),
+            "last_operation": state.get("last_operation"),
+            "last_operation_time": state.get("last_operation_time"),
+        },
+        "capability_summary": capabilities["summary"],
+        "privacy": {
+            "redacted": True,
+            "includes_page_content": False,
+            "includes_credentials": False,
+        },
+    }
+    return api_success("run_support_bundle", bundle)
 
 
 @app.delete("/api/v1/runs")

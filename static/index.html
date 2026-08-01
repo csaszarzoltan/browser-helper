@@ -553,7 +553,14 @@ input[type="text"] { width: 100%; }
       <div class="diagnostics-controls">
         <label for="run-status-filter">Status</label>
         <select id="run-status-filter"><option value="all">All statuses</option><option value="success">Success</option><option value="error">Error</option><option value="incomplete">Incomplete</option></select>
+        <label for="run-verification-filter">Verification</label>
+        <select id="run-verification-filter"><option value="all">All verification states</option><option value="verified">Verified</option><option value="unverified">Unverified</option><option value="failed">Verification failed</option></select>
       </div>
+      <p id="verification-guidance" class="privacy-guidance"><strong>Verified</strong> means explicit evidence confirmed the outcome. <strong>Unverified</strong> means the command completed without proof of the user goal.</p>
+      <p id="recovery-guidance" class="privacy-guidance">Recovery guidance is advisory and never retries an operation automatically. Review side effects before repeating a mutating action.</p>
+      <p id="run-correlation-guidance" class="privacy-guidance">Run IDs correlate API responses, operation history, and support exports. Copy an ID when reporting a problem.</p>
+      <p id="run-support-guidance" class="privacy-guidance">Support JSON excludes page content, cookie values, credentials, and the CDP target URL.</p>
+      <div id="run-recovery-result" class="guided-result" role="status" aria-live="polite" hidden></div>
       <p id="run-timeline-summary" role="status" aria-live="polite">Loading recent runs…</p>
       <ol id="run-timeline-list" class="run-timeline-list" aria-label="Recent browser operation runs"></ol>
     </div>

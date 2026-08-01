@@ -61,6 +61,15 @@ class RunStore:
             items = [item for item in items if item["status"] == status]
         return [dict(item) for item in items[:safe_limit]]
 
+    def get(self, run_id: str) -> dict[str, Any] | None:
+        """Return a defensive copy of one run, or ``None`` when absent."""
+        safe_id = str(run_id)[:80]
+        with self._lock:
+            for item in self._runs:
+                if item["run_id"] == safe_id:
+                    return dict(item)
+        return None
+
     def clear(self) -> int:
         with self._lock:
             count = len(self._runs)

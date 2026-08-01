@@ -933,12 +933,73 @@
 
 
   let currentRuns = [];
+  const loadRunRecovery = async (runId, button) => {
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Checking…';
+    try {
+      const response = await fetch(`/api/v1/runs/${encodeURIComponent(runId)}/recovery`, {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Recovery request failed (${response.status})`);
+      const payload = await response.json();
+      const advice = payload.data || {};
+      const message = [advice.summary, ...(advice.steps || [])].filter(Boolean).join(' ');
+      const result = document.getElementById('run-recovery-result');
+      if (result) {
+        result.hidden = false;
+        result.className = `guided-result ${advice.category === 'none' ? 'success' : ''}`.trim();
+        result.textContent = message || 'No recovery guidance is available.';
+        result.focus?.();
+      }
+      announce(`Recovery guidance: ${advice.summary || 'available'}`);
+      emitTelemetry('run_recovery_loaded', {run_id: runId, category: advice.category || 'unknown', retry_safety: advice.retry_safety || 'unknown'});
+    } catch (error) {
+      announce('Recovery guidance could not be loaded');
+      emitTelemetry('run_recovery_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    } finally {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  };
+
+  const copyRunId = async (runId) => {
+    try {
+      await navigator.clipboard.writeText(runId);
+      announce('Run ID copied');
+      emitTelemetry('run_id_copied', {run_id: runId});
+    } catch (_) {
+      announce('Run ID could not be copied');
+    }
+  };
+
+  const downloadRunSupportBundle = async (runId) => {
+    try {
+      const response = await fetch(`/api/v1/runs/${encodeURIComponent(runId)}/support`, {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Support bundle request failed (${response.status})`);
+      const payload = await response.json();
+      const blob = new Blob([JSON.stringify(payload.data, null, 2)], {type: 'application/json'});
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${runId}-support.json`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      announce('Redacted run support JSON exported');
+      emitTelemetry('run_support_exported', {run_id: runId});
+    } catch (error) {
+      announce('Run support export failed');
+      emitTelemetry('run_support_export_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    }
+  };
+
   const renderRunTimeline = () => {
     const list = document.getElementById('run-timeline-list');
     const summary = document.getElementById('run-timeline-summary');
     const filter = document.getElementById('run-status-filter')?.value || 'all';
+    const verificationFilter = document.getElementById('run-verification-filter')?.value || 'all';
     if (!list || !summary) return;
-    const visible = filter === 'all' ? currentRuns : currentRuns.filter((run) => run.status === filter);
+    const visible = currentRuns.filter((run) =>
+      (filter === 'all' || run.status === filter) &&
+      (verificationFilter === 'all' || run.verification === verificationFilter)
+    );
     summary.textContent = `${visible.length} of ${currentRuns.length} recent runs shown.`;
     list.replaceChildren();
     if (!visible.length) {
@@ -954,7 +1015,21 @@
       const operation = document.createElement('strong'); operation.textContent = run.operation || 'Unknown operation';
       const detail = document.createElement('span'); detail.textContent = run.details || 'No detail recorded.';
       const meta = document.createElement('small'); meta.textContent = `${run.status || 'incomplete'} · ${Number(run.duration_ms || 0).toFixed(2)} ms · ${run.verification || 'unverified'}`;
-      item.append(operation, detail, meta);
+      const support = document.createElement('button');
+      support.type = 'button'; support.className = 'btn sm'; support.textContent = 'Support JSON';
+      support.setAttribute('aria-label', `Download redacted support JSON for ${run.operation || 'operation'}`);
+      support.addEventListener('click', () => downloadRunSupportBundle(run.run_id));
+      const recovery = document.createElement('button');
+      recovery.type = 'button'; recovery.className = 'btn sm'; recovery.textContent = 'Recovery guidance';
+      recovery.setAttribute('aria-label', `Open recovery guidance for ${run.operation || 'operation'}`);
+      recovery.addEventListener('click', () => loadRunRecovery(run.run_id, recovery));
+      const copy = document.createElement('button');
+      copy.type = 'button'; copy.className = 'btn sm'; copy.textContent = 'Copy run ID';
+      copy.setAttribute('aria-label', `Copy run ID for ${run.operation || 'operation'}`);
+      copy.addEventListener('click', () => copyRunId(run.run_id));
+      const runId = document.createElement('code'); runId.textContent = run.run_id;
+      const actions = document.createElement('span'); actions.append(meta, runId, recovery, copy, support);
+      item.append(operation, detail, actions);
       list.appendChild(item);
     });
   };
@@ -979,6 +1054,7 @@
   const setupRunTimeline = () => {
     document.getElementById('refresh-run-timeline')?.addEventListener('click', loadRunTimeline);
     document.getElementById('run-status-filter')?.addEventListener('change', renderRunTimeline);
+    document.getElementById('run-verification-filter')?.addEventListener('change', renderRunTimeline);
     document.getElementById('clear-run-timeline')?.addEventListener('click', async () => {
       const response = await fetch('/api/v1/runs', {method: 'DELETE', headers: {Accept: 'application/json'}});
       if (response.ok) {

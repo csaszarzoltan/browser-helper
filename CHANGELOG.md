@@ -22,6 +22,22 @@ All notable changes to browser-helper will be documented in this file.
 ### [1.8.0] — 2026-07-31
 
 #### Added
+- Deterministic per-run recovery advisor for execution failures, verification failures, missing evidence, and verified outcomes.
+- `GET /api/v1/runs/{run_id}/recovery` with retry-safety classification and no automatic execution.
+- Inline accessible recovery guidance in Diagnostics with privacy-safe local telemetry.
+- TDD coverage in `tests/test_run_recovery_v20.py` and documentation in `docs/run-recovery-guidance.md`.
+- Truthful verification inference for shared operations based only on explicit result evidence.
+- Propagation of `verified`, `unverified`, and `failed` states into API metadata and correlated run records.
+- Verification-state filtering and explanatory guidance in the Diagnostics run timeline.
+- TDD coverage in `tests/test_run_verification_v20.py` and documentation in `docs/verified-outcomes.md`.
+- End-to-end run correlation across shared operation responses, legacy operation entries, timeline records, and support exports.
+- `GET /api/v1/runs/{run_id}` for retrieving one retained, redacted run.
+- Copyable run IDs in Diagnostics with keyboard-accessible controls, live announcements, and local telemetry.
+- TDD coverage in `tests/test_run_correlation_v20.py` and operator documentation in `docs/run-correlation.md`.
+- Per-run redacted support JSON export from the unified Diagnostics timeline.
+- `GET /api/v1/runs/{run_id}/support` with a versioned support contract and explicit privacy metadata.
+- Defensive run lookup, accessible export controls, success/failure announcements, and local-only telemetry.
+- TDD acceptance coverage in `tests/test_run_support_bundle_v20.py` and documentation in `docs/run-support-bundles.md`.
 - Bounded, privacy-safe unified operation run timeline with generated run IDs, duration, status, and explicit verification state.
 - `GET /api/v1/runs` and `DELETE /api/v1/runs` contracts for listing and clearing process-local run history.
 - Accessible Diagnostics timeline with status filtering, refresh, safe clear, responsive layout, and local telemetry.

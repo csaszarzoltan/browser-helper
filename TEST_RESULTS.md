@@ -260,3 +260,91 @@ PYTHONPATH=src uv run pytest -q
 ```
 
 Result: **2,008 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 142.02 seconds. The five new timeline tests add five passing tests. The known failure count remains unchanged from the supplied baseline.
+
+## 2026-08-01 - Redacted run support bundles v1.11
+
+### TDD RED phase
+
+Four acceptance tests were written before implementation. The first executable run reported four expected failures: missing `RunStore.get`, missing support endpoint, missing stable `run_not_found` response, and missing dashboard export behavior.
+
+### GREEN phase
+
+```bash
+PYTHONPATH=src uv run pytest -q tests/test_run_support_bundle_v20.py
+```
+
+Result: **4 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full regression after v1.11 continuation
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,012 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 137.03 seconds. The four new support-bundle tests add four passing tests. The known failure count remains unchanged from the supplied baseline.
+
+## 2026-08-01 - End-to-end run correlation v1.12
+
+### TDD RED phase
+
+Five acceptance tests were authored before implementation. After correcting the test fixture to replace the CDP client rather than patch read-only properties, all five failed for the intended missing behaviors.
+
+### GREEN phase
+
+```bash
+PYTHONPATH=src uv run pytest -q tests/test_run_correlation_v20.py
+```
+
+Result: **5 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full regression after v1.12 continuation
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,017 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 138.50 seconds. The five new correlation tests add five passing tests. The known failure count remains unchanged from the supplied baseline.
+
+## 2026-08-01 - Truthful verified outcomes v1.13
+
+### TDD RED phase
+
+Five focused tests were authored first. The initial run failed during collection because `infer_verification` did not exist.
+
+### GREEN phase
+
+```bash
+PYTHONPATH=src uv run pytest -q tests/test_run_verification_v20.py
+```
+
+Result: **5 passed, 0 failed**.
+
+### Full regression after v1.13 continuation
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,022 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 142.03 seconds. The five new verification tests add five passing tests. The known failure count remains unchanged from the supplied baseline.
+
+## 2026-08-01 - Safe run recovery guidance v1.14
+
+### TDD RED phase
+
+Five acceptance tests were written first. The initial run failed during collection because the recovery advisor module did not exist.
+
+### GREEN phase
+
+```bash
+PYTHONPATH=src uv run pytest -q tests/test_run_recovery_v20.py
+```
+
+Result: **5 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full regression after v1.14 continuation
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,027 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 138.51 seconds. The five new recovery tests add five passing tests. The known failure count remains unchanged from the supplied baseline.
