@@ -348,3 +348,43 @@ PYTHONPATH=src uv run pytest -q
 ```
 
 Result: **2,027 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 138.51 seconds. The five new recovery tests add five passing tests. The known failure count remains unchanged from the supplied baseline.
+
+## 2026-08-02 - Reusable environment recipes v1.15
+
+### TDD RED phase
+
+Four acceptance tests were written first. The initial run failed during collection because `environment_store` did not exist. The first implementation candidate then exposed a 201 response-contract mismatch, which was corrected before regression validation.
+
+### GREEN phase
+
+```bash
+uv run --extra dev pytest -q tests/test_environment_workspace_v21.py
+```
+
+Result: **4 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Targeted regression
+
+```bash
+uv run --extra dev pytest -q tests/test_environment_workspace_v21.py tests/test_dashboard_ux_v19.py tests/test_capability_readiness_v20.py tests/test_run_timeline_v20.py tests/test_run_recovery_v20.py
+```
+
+Result: **27 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full regression after v1.15
+
+```bash
+uv run --extra dev pytest -q
+```
+
+Result: **2,031 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 138.34 seconds. The four new environment tests add four passing tests. The known supplied baseline failure count remains unchanged.
+
+### Static validation
+
+```bash
+node --check static/dashboard_ux.js
+uv run --extra dev python -m compileall -q src tests
+uv run --extra dev ruff check src/environment_store.py tests/test_environment_workspace_v21.py
+```
+
+Result: **passed**. Project-wide Ruff still contains pre-existing findings in `src/main.py`; focused lint for new code is clean.

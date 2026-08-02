@@ -3085,3 +3085,15 @@ For portal or modal controls missing from a semantic snapshot, send `search_text
 ### Verified and reusable workflows (v1.5)
 
 Use `verify_after` on actions that must produce visible evidence. Prefer the autocomplete resolver for suggestion fields, `wait_for_element` instead of fixed sleeps, `select_tab` for DOM-only tabs, and `include_hidden` only when normal AX observation omits a known control. Use `page_with_history` before discovering lazy SPA content. Recorded workflows can be replayed with `data_overrides`.
+
+## Reusable environment recipes (v1.15)
+
+Use the environment catalog to save non-secret runtime combinations for repeated work:
+
+- `GET /api/v1/environments` lists recipes.
+- `POST /api/v1/environments` creates a recipe.
+- `GET /api/v1/environments/{environment_id}` retrieves one recipe.
+- `POST /api/v1/environments/{environment_id}/activate` makes the recipe current context without launching a browser.
+- `DELETE /api/v1/environments/{environment_id}` deletes a non-active recipe.
+
+Recipes reject credential-like fields. Provider API keys and proxy credentials must remain in protected server configuration. See `docs/environment-recipes.md`.

@@ -22,6 +22,7 @@
     overview: 'Connection, readiness, and the browser process at a glance.',
     browser: 'Operate the active tab and review the current page.',
     automation: 'Run repeatable scripts and save or restore browser state.',
+    environments: 'Create and activate reusable, non-secret browser environment recipes.',
     diagnostics: 'Inspect operations, network activity, cookies, and console output.',
     agent: 'Observe and act through the compact LLM agent interface.'
   };
@@ -60,6 +61,7 @@
     const connection = document.getElementById('context-connection');
     const tab = document.getElementById('context-tab');
     const target = document.getElementById('context-target');
+    const environment = document.getElementById('context-environment');
     const lastOperation = document.getElementById('context-last-operation');
     const warning = document.getElementById('connection-warning');
     if (connection) connection.textContent = connected ? 'Connected' : 'Disconnected';
@@ -69,6 +71,7 @@
       target.textContent = targetLabel;
       target.title = details.cdp_url || 'No current CDP target';
     }
+    if (environment) environment.textContent = details.active_environment ? `Environment: ${details.active_environment}` : 'No environment';
     if (lastOperation) lastOperation.textContent = details.last_operation ? `Last: ${details.last_operation}` : 'No recent operation';
     if (warning) warning.classList.toggle('visible', !connected);
     document.querySelectorAll('[data-requires-connection]').forEach((control) => {
@@ -1112,6 +1115,82 @@
     }
   };
 
+
+  let currentEnvironments = [];
+
+  const renderEnvironments = () => {
+    const list = document.getElementById('environment-list');
+    const status = document.getElementById('environment-status');
+    if (!list || !status) return;
+    list.replaceChildren();
+    status.textContent = currentEnvironments.length ? `${currentEnvironments.length} saved environment${currentEnvironments.length === 1 ? '' : 's'}.` : 'No environments saved yet.';
+    currentEnvironments.forEach((environment) => {
+      const item = document.createElement('li');
+      item.className = `environment-item${environment.active ? ' active' : ''}`;
+      const summary = document.createElement('div');
+      const title = document.createElement('strong'); title.textContent = environment.name;
+      const detail = document.createElement('small');
+      detail.textContent = [environment.runtime, environment.profile && `profile: ${environment.profile}`, environment.proxy_strategy && `proxy: ${environment.proxy_strategy}`].filter(Boolean).join(' · ');
+      summary.append(title, detail);
+      const actions = document.createElement('div'); actions.className = 'btn-group';
+      const activate = document.createElement('button'); activate.type = 'button'; activate.className = 'btn sm'; activate.textContent = environment.active ? 'Active' : 'Activate'; activate.disabled = Boolean(environment.active);
+      activate.addEventListener('click', () => activateEnvironment(environment.environment_id));
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn sm danger'; remove.textContent = 'Delete'; remove.disabled = Boolean(environment.active);
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(`Delete environment "${environment.name}"? This cannot be undone.`)) return;
+        const response = await fetch(`/api/v1/environments/${encodeURIComponent(environment.environment_id)}`, {method: 'DELETE', headers: {Accept: 'application/json'}});
+        if (!response.ok) { announce('Environment could not be deleted'); return; }
+        emitTelemetry('environment_deleted', {environment_id: environment.environment_id});
+        await loadEnvironments();
+      });
+      actions.append(activate, remove); item.append(summary, actions); list.appendChild(item);
+    });
+  };
+
+  const loadEnvironments = async () => {
+    const status = document.getElementById('environment-status');
+    try {
+      if (status) status.textContent = 'Loading environments…';
+      const response = await fetch('/api/v1/environments', {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Environment request failed (${response.status})`);
+      const payload = await response.json();
+      currentEnvironments = payload?.data?.environments || [];
+      renderEnvironments();
+      emitTelemetry('environments_loaded', {count: currentEnvironments.length});
+    } catch (error) {
+      currentEnvironments = [];
+      if (status) status.textContent = 'Environments could not be loaded. Existing browser controls remain available.';
+      emitTelemetry('environment_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    }
+  };
+
+  const activateEnvironment = async (environmentId) => {
+    const response = await fetch(`/api/v1/environments/${encodeURIComponent(environmentId)}/activate`, {method: 'POST', headers: {Accept: 'application/json'}});
+    if (!response.ok) { announce('Environment could not be activated'); return; }
+    const payload = await response.json();
+    announce(`${payload?.data?.name || 'Environment'} activated`);
+    emitTelemetry('environment_activated', {environment_id: environmentId, runtime: payload?.data?.runtime || 'unknown'});
+    await loadEnvironments();
+  };
+
+  const setupEnvironmentWorkspace = () => {
+    document.getElementById('refresh-environments')?.addEventListener('click', loadEnvironments);
+    document.getElementById('environment-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form).entries());
+      if (!data.proxy_strategy) data.proxy_strategy = null;
+      const response = await fetch('/api/v1/environments', {method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify(data)});
+      const payload = await response.json();
+      if (!response.ok) { document.getElementById('environment-status').textContent = payload?.error?.message || 'Environment could not be saved.'; announce('Environment validation failed'); return; }
+      form.reset();
+      announce(`${payload.data.name} environment saved`);
+      emitTelemetry('environment_created', {runtime: payload.data.runtime});
+      await loadEnvironments();
+    });
+    loadEnvironments();
+  };
+
   const bridgeExistingState = () => {
     const original = window.updateState;
     window.updateState = function updateStateWithContext(state) {
@@ -1119,7 +1198,8 @@
       const data = state?.data || state?.result || state || {};
       setConnectedState(Boolean(data.connected), data.tabs_count ?? data.tabs?.length ?? 0, {
         cdp_url: data.cdp_url,
-        last_operation: data.last_operation
+        last_operation: data.last_operation,
+        active_environment: data.active_environment
       });
     };
   };
@@ -1137,6 +1217,7 @@
     setupNetworkAssistant();
     setupCookieAssistant();
     setupRunTimeline();
+    setupEnvironmentWorkspace();
     bridgeExistingState();
     document.getElementById('refresh-capabilities')?.addEventListener('click', loadCapabilityReadiness);
     loadCapabilityReadiness();
@@ -1146,6 +1227,7 @@
   });
 
   window.BrowserHelperUX = {showWorkspace, setConnectedState, emitTelemetry};
+  window.BrowserHelperEnvironments = {load: loadEnvironments, activate: activateEnvironment};
   window.BrowserHelperWorkflow = {validate: validateWorkflowSteps, setBusy: setWorkflowBusy};
   window.BrowserHelperSession = {validate: validateSessionState, setBusy: setSessionBusy, showStatus: setSessionStatus};
   window.BrowserHelperDiagnostics = {render: renderFilteredOperationLog};

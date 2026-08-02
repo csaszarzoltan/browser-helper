@@ -51,6 +51,7 @@ from agent_navigation import (
 )
 from baseline_manager import BaselineManager
 from capability_registry import CapabilityRegistry
+from environment_store import EnvironmentStore
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
 from headless_manager import HeadlessManager
@@ -83,6 +84,7 @@ _compositor = AntiDetectCompositor(
 )
 _detection_tester = DetectionTester()
 _capability_registry = CapabilityRegistry.default()
+environment_store = EnvironmentStore()
 
 # Paths excluded from auth and rate-limiting middleware
 PUBLIC_PATHS = {"/", "/health", "/ready", "/ws", "/api/v1/capabilities"}
@@ -227,6 +229,7 @@ state: dict[str, Any] = {
     "tabs_count": 0,
     "last_operation": None,
     "last_operation_time": None,
+    "active_environment": environment_store.active_id,
     "cdp_url": None,
 }
 
@@ -939,6 +942,52 @@ async def root():
     return {"message": "Browser Helper API — install a static/index.html for the dashboard."}
 
 
+@app.get("/api/v1/environments")
+async def list_environments():
+    """List reusable environment recipes without credential values."""
+    items = environment_store.list()
+    return api_success("environment_list", {"count": len(items), "environments": items})
+
+
+@app.post("/api/v1/environments", status_code=201)
+async def create_environment(body: dict[str, Any]):
+    """Create a validated, privacy-safe environment recipe."""
+    try:
+        item = environment_store.create(body)
+    except ValueError as exc:
+        return api_error("environment_create", "invalid_environment", str(exc), 422)
+    return api_success("environment_create", item, 201)
+
+
+@app.get("/api/v1/environments/{environment_id}")
+async def get_environment(environment_id: str):
+    item = environment_store.get(environment_id)
+    if item is None:
+        return api_error("environment_get", "environment_not_found", "Environment was not found.", 404)
+    return api_success("environment_get", item)
+
+
+@app.post("/api/v1/environments/{environment_id}/activate")
+async def activate_environment(environment_id: str):
+    """Select a recipe as active context; launching remains an explicit action."""
+    item = environment_store.activate(environment_id)
+    if item is None:
+        return api_error("environment_activate", "environment_not_found", "Environment was not found.", 404)
+    state["active_environment"] = item["environment_id"]
+    await broadcast_state()
+    return api_success("environment_activate", item)
+
+
+@app.delete("/api/v1/environments/{environment_id}")
+async def delete_environment(environment_id: str):
+    result = environment_store.delete(environment_id)
+    if result == "active":
+        return api_error("environment_delete", "environment_active", "Deactivate or activate another environment before deletion.", 409)
+    if result == "missing":
+        return api_error("environment_delete", "environment_not_found", "Environment was not found.", 404)
+    return api_success("environment_delete", {"environment_id": environment_id, "deleted": True})
+
+
 @app.get("/api/v1/runs")
 async def list_runs(status: str | None = None, limit: int = Query(50, ge=1, le=100)):
     """Return newest-first, redacted operation runs with bounded retention."""
@@ -1015,6 +1064,7 @@ async def get_status():
         "tabs_count": client.tabs_count,
         "last_operation": state["last_operation"],
         "last_operation_time": state["last_operation_time"],
+        "active_environment": state.get("active_environment"),
         "cdp_url": state["cdp_url"],
         "log_size": len(operation_log),
     }

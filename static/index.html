@@ -294,6 +294,7 @@ input[type="text"] { width: 100%; }
   <button type="button" class="btn" data-workspace="overview">Overview</button>
   <button type="button" class="btn" data-workspace="browser">Live Browser</button>
   <button type="button" class="btn" data-workspace="automation">Automation</button>
+  <button type="button" class="btn" data-workspace="environments">Environments</button>
   <button type="button" class="btn" data-workspace="diagnostics">Diagnostics</button>
   <button type="button" class="btn" data-workspace="agent">Agent Tools</button>
 </nav>
@@ -304,6 +305,8 @@ input[type="text"] { width: 100%; }
   <span id="context-tab" class="context-value">No active tab</span>
   <span class="context-separator" aria-hidden="true">/</span>
   <span id="context-target" class="context-value" title="Current CDP target">No target</span>
+  <span class="context-separator" aria-hidden="true">/</span>
+  <span id="context-environment" class="context-value">No environment</span>
   <span class="context-separator" aria-hidden="true">/</span>
   <span id="context-last-operation" class="context-value">No recent operation</span>
   <span class="context-actions"><button id="open-command-palette" type="button" class="btn"><i class="fas fa-search" aria-hidden="true"></i> Commands <span class="shortcut-hint">Ctrl+K</span></button></span>
@@ -357,6 +360,25 @@ input[type="text"] { width: 100%; }
       <p class="privacy-guidance">Readiness distinguishes production-ready, experimental, and unavailable areas before you start work.</p>
       <div id="capability-summary" class="capability-summary" role="status" aria-live="polite">Checking product capabilities…</div>
       <ul id="capability-list" class="capability-list" aria-label="Product capability readiness"></ul>
+    </div>
+  </section>
+
+  <section class="card full-width" id="environment-workspace-card" data-workspace="environments" aria-labelledby="environment-workspace-title">
+    <div class="card-header">
+      <h2 id="environment-workspace-title"><i class="fas fa-layer-group" aria-hidden="true"></i> Reusable environments</h2>
+      <button id="refresh-environments" type="button" class="btn sm"><i class="fas fa-sync" aria-hidden="true"></i> Refresh</button>
+    </div>
+    <div class="card-body no-scroll environment-workspace">
+      <p class="privacy-guidance">Combine runtime and non-secret browser settings into a reusable recipe. Credentials are intentionally excluded.</p>
+      <form id="environment-form" class="environment-form">
+        <div class="environment-field"><label for="environment-name">Name</label><input id="environment-name" name="name" maxlength="100" required placeholder="Daily QA"></div>
+        <div class="environment-field"><label for="environment-runtime">Runtime</label><select id="environment-runtime" name="runtime"><option value="visible">Visible Chrome</option><option value="headless">Local headless</option><option value="browserbase">Browserbase</option><option value="steel">Steel</option></select></div>
+        <div class="environment-field"><label for="environment-profile">Profile, optional</label><input id="environment-profile" name="profile" maxlength="100" pattern="[A-Za-z0-9._-]+" placeholder="qa-profile"></div>
+        <div class="environment-field"><label for="environment-proxy-strategy">Proxy strategy</label><select id="environment-proxy-strategy" name="proxy_strategy"><option value="">No proxy recipe</option><option value="round-robin">Round robin</option><option value="random">Random</option><option value="sticky">Sticky</option><option value="by-tag">By tag</option><option value="health-check">Lowest healthy latency</option></select></div>
+        <button type="submit" class="btn primary">Save environment</button>
+      </form>
+      <div id="environment-status" class="environment-status" role="status" aria-live="polite">Loading environments…</div>
+      <ul id="environment-list" class="environment-list" aria-label="Saved environments"></ul>
     </div>
   </section>
 
