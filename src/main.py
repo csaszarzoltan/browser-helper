@@ -52,6 +52,7 @@ from agent_navigation import (
 from baseline_manager import BaselineManager
 from capability_registry import CapabilityRegistry
 from environment_store import EnvironmentStore
+from daily_launchpad import build_daily_launchpad
 from workflow_catalog import WorkflowCatalog
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
@@ -943,6 +944,19 @@ async def root():
     if os.path.isfile(index_path):
         return FileResponse(index_path)
     return {"message": "Browser Helper API — install a static/index.html for the dashboard."}
+
+
+@app.get("/api/v1/launchpad")
+async def get_daily_launchpad():
+    """Return one bounded, privacy-safe daily-work summary for the dashboard."""
+    data = build_daily_launchpad(
+        environments=environment_store.list(),
+        workflows=workflow_catalog.list(),
+        runs=run_store.list_runs(limit=20),
+        connected=bool(state.get("connected")),
+        tab_count=int(state.get("tabs_count", 0) or 0),
+    )
+    return api_success("daily_launchpad", data)
 
 
 @app.get("/api/v1/workflows")

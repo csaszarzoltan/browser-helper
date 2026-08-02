@@ -1,10 +1,20 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.17.0-blue)
+![Version](https://img.shields.io/badge/version-1.19.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-1986%20passed-brightgreen)
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
+
+## Latest UX improvements
+
+### v1.19 - Visual workflow builder
+
+The Automation workspace now includes a **Visual workflow builder** for common repeated actions: navigate, click, type, wait for element, screenshot, analyze page, and get page text. Users can add, duplicate, reorder, and remove steps, switch between visual and JSON modes, and explicitly synchronize generated steps for review before running. JSON remains available for the full action set. See [Visual workflow builder](docs/visual-workflow-builder.md).
+
+### v1.18 - Daily work launchpad
+
+The Overview workspace starts with a privacy-safe **Continue your work** launchpad. It recommends the next useful workspace from connection state, active environment, saved workflows, and runs that need attention, while excluding page content, URLs, run details, workflow values, cookies, storage, and secrets. See [Daily work launchpad](docs/daily-work-launchpad.md).
 
 ### Improved task-oriented dashboard
 

@@ -5,6 +5,12 @@ All notable changes to browser-helper will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Accessible visual workflow builder for navigate, click, type, wait-for-element, screenshot, page analysis, and page text actions.
+- Bidirectional visual/JSON editing with explicit synchronization, validation, add, duplicate, reorder, and remove controls.
+- Responsive workflow step cards, focus-visible states, screen-reader announcements, and local privacy-safe builder telemetry.
+- TDD acceptance coverage in `tests/test_visual_workflow_builder_v219.py` and operator documentation in `docs/visual-workflow-builder.md`.
+- Privacy-safe daily work launchpad and `GET /api/v1/launchpad` from v1.18.0.
+
 - Task-oriented dashboard workspaces for Overview, Live Browser, Automation, Diagnostics, and Agent Tools.
 - Persistent active context, Ctrl/Cmd+K command palette, connection-aware controls, safe destructive-action confirmation, and local privacy-preserving telemetry hooks.
 - Dashboard accessibility improvements: skip navigation, landmarks, live announcements, visible focus, textual status, and reduced-motion support.

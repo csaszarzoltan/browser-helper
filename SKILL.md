@@ -3114,3 +3114,7 @@ Use `{{parameter_name}}` placeholders. Secret values are never stored as default
 ## Privacy-safe run comparison (v1.17)
 
 Use `GET /api/v1/runs/compare?left={run_id}&right={run_id}` to compare two retained runs. The contract includes operation, status, verification, duration, and field-level change flags. It intentionally excludes run detail text, page content, cookies, storage, credentials, screenshots, network bodies, and CDP target URLs. See `docs/run-comparison.md`.
+
+### Daily work launchpad API (v1.18.0)
+
+`GET /api/v1/launchpad` returns the bounded daily work summary used by Overview. It is informational only and never executes a browser action.

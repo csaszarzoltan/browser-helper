@@ -612,6 +612,135 @@
     }
   };
 
+  const WORKFLOW_STEP_DEFINITIONS = {
+    navigate: {label: 'Navigate', fields: [{name: 'url', label: 'Page URL', type: 'url', required: true, placeholder: 'https://example.com'}]},
+    click: {label: 'Click element', fields: [{name: 'selector', label: 'CSS selector', type: 'text', required: true, placeholder: '#submit'}]},
+    type: {label: 'Type text', fields: [{name: 'selector', label: 'CSS selector', type: 'text', required: true, placeholder: '#email'}, {name: 'text', label: 'Text', type: 'text', required: true, placeholder: 'Value to type'}]},
+    wait_for_element: {label: 'Wait for element', fields: [{name: 'selector', label: 'CSS selector', type: 'text', required: true, placeholder: '.result'}, {name: 'timeout', label: 'Timeout (seconds)', type: 'number', required: false, placeholder: '10'}]},
+    screenshot: {label: 'Screenshot', fields: []},
+    analyze_page: {label: 'Analyze page', fields: []},
+    get_text: {label: 'Get page text', fields: []}
+  };
+  let visualWorkflowSteps = [];
+
+  const normalizeVisualStep = (step) => {
+    const definition = WORKFLOW_STEP_DEFINITIONS[step?.action];
+    if (!definition) return null;
+    const normalized = {action: step.action};
+    definition.fields.forEach((field) => {
+      if (step[field.name] !== undefined && step[field.name] !== '') normalized[field.name] = step[field.name];
+    });
+    return normalized;
+  };
+
+  const readVisualWorkflowFields = () => {
+    document.querySelectorAll('#workflow-step-list .workflow-step-card').forEach((card) => {
+      const index = Number(card.dataset.index);
+      const step = visualWorkflowSteps[index];
+      if (!step) return;
+      card.querySelectorAll('[data-step-field]').forEach((input) => {
+        const value = input.value.trim();
+        if (!value) delete step[input.dataset.stepField];
+        else step[input.dataset.stepField] = input.type === 'number' ? Number(value) : value;
+      });
+    });
+  };
+
+  const renderVisualWorkflowBuilder = () => {
+    const list = document.getElementById('workflow-step-list');
+    if (!list) return;
+    list.replaceChildren();
+    if (!visualWorkflowSteps.length) {
+      const empty = document.createElement('li'); empty.className = 'workflow-builder-empty'; empty.textContent = 'No visual steps yet. Add a common action or import supported steps from JSON.'; list.appendChild(empty); return;
+    }
+    visualWorkflowSteps.forEach((step, index) => {
+      const definition = WORKFLOW_STEP_DEFINITIONS[step.action];
+      if (!definition) return;
+      const item = document.createElement('li'); item.className = 'workflow-step-card'; item.dataset.index = String(index); item.tabIndex = -1;
+      const header = document.createElement('header');
+      const title = document.createElement('strong'); title.textContent = `${index + 1}. ${definition.label}`;
+      const actions = document.createElement('div'); actions.className = 'btn-group';
+      const makeAction = (label, handler, disabled = false) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'btn sm'; button.textContent = label; button.disabled = disabled; button.addEventListener('click', handler); return button; };
+      actions.append(
+        makeAction('Up', () => moveVisualWorkflowStep(index, -1), index === 0),
+        makeAction('Down', () => moveVisualWorkflowStep(index, 1), index === visualWorkflowSteps.length - 1),
+        makeAction('Duplicate', () => duplicateVisualWorkflowStep(index)),
+        makeAction('Remove', () => removeVisualWorkflowStep(index))
+      );
+      header.append(title, actions); item.appendChild(header);
+      if (definition.fields.length) {
+        const fields = document.createElement('div'); fields.className = 'workflow-step-fields';
+        definition.fields.forEach((field) => {
+          const wrapper = document.createElement('div'); wrapper.className = 'workflow-step-field';
+          const label = document.createElement('label'); const id = `workflow-step-${index}-${field.name}`; label.htmlFor = id; label.textContent = `${field.label}${field.required ? ' *' : ''}`;
+          const input = document.createElement('input'); input.id = id; input.type = field.type; input.required = field.required; input.placeholder = field.placeholder || ''; input.dataset.stepField = field.name; input.value = step[field.name] ?? '';
+          input.addEventListener('input', () => { readVisualWorkflowFields(); setWorkflowStatus('Visual changes are not yet copied to JSON. Choose Update JSON.', 'warning'); });
+          wrapper.append(label, input); fields.appendChild(wrapper);
+        });
+        item.appendChild(fields);
+      }
+      list.appendChild(item);
+    });
+  };
+
+  const addVisualWorkflowStep = (action) => {
+    readVisualWorkflowFields();
+    if (!WORKFLOW_STEP_DEFINITIONS[action] || visualWorkflowSteps.length >= 100) return;
+    visualWorkflowSteps.push({action}); renderVisualWorkflowBuilder();
+    setWorkflowStatus(`${WORKFLOW_STEP_DEFINITIONS[action].label} added. Complete required fields.`, 'warning');
+    emitTelemetry('workflow_builder_step_added', {action, step_count: visualWorkflowSteps.length});
+  };
+  const duplicateVisualWorkflowStep = (index) => { readVisualWorkflowFields(); const step = visualWorkflowSteps[index]; if (!step || visualWorkflowSteps.length >= 100) return; visualWorkflowSteps.splice(index + 1, 0, JSON.parse(JSON.stringify(step))); renderVisualWorkflowBuilder(); announce(`Step ${index + 1} duplicated`); };
+  const moveVisualWorkflowStep = (index, direction) => { readVisualWorkflowFields(); const target = index + direction; if (target < 0 || target >= visualWorkflowSteps.length) return; [visualWorkflowSteps[index], visualWorkflowSteps[target]] = [visualWorkflowSteps[target], visualWorkflowSteps[index]]; renderVisualWorkflowBuilder(); announce(`Step moved to position ${target + 1}`); };
+  const removeVisualWorkflowStep = (index) => { readVisualWorkflowFields(); visualWorkflowSteps.splice(index, 1); renderVisualWorkflowBuilder(); announce(`Step ${index + 1} removed`); };
+
+  const syncVisualBuilderToJson = () => {
+    readVisualWorkflowFields();
+    const area = document.getElementById('script-area');
+    try {
+      const steps = validateWorkflowSteps(visualWorkflowSteps);
+      if (area) area.value = JSON.stringify(steps, null, 2);
+      setWorkflowStatus(`${steps.length} visual step${steps.length === 1 ? '' : 's'} copied to JSON. Review the generated JSON before running.`, 'success');
+      emitTelemetry('workflow_builder_synced', {direction: 'visual_to_json', step_count: steps.length});
+      return true;
+    } catch (error) { setWorkflowStatus(error.message, 'error'); return false; }
+  };
+
+  const syncJsonToVisualBuilder = () => {
+    const area = document.getElementById('script-area');
+    try {
+      const steps = validateWorkflowSteps(area?.value || '');
+      const unsupported = steps.filter((step) => !WORKFLOW_STEP_DEFINITIONS[step.action]);
+      if (unsupported.length) throw new Error(`Visual builder does not yet support: ${[...new Set(unsupported.map((step) => step.action))].join(', ')}. Keep using JSON mode for these steps.`);
+      visualWorkflowSteps = steps.map(normalizeVisualStep).filter(Boolean);
+      renderVisualWorkflowBuilder();
+      setWorkflowStatus(`${steps.length} JSON step${steps.length === 1 ? '' : 's'} loaded into the visual builder.`, 'success');
+      emitTelemetry('workflow_builder_synced', {direction: 'json_to_visual', step_count: steps.length});
+      return true;
+    } catch (error) { setWorkflowStatus(error.message, 'error'); return false; }
+  };
+
+  const setWorkflowEditorMode = (mode) => {
+    const visual = mode === 'visual';
+    const builder = document.getElementById('workflow-visual-builder'); const area = document.getElementById('script-area');
+    if (visual && area?.value.trim() && !syncJsonToVisualBuilder()) return false;
+    if (!visual && visualWorkflowSteps.length && !syncVisualBuilderToJson()) return false;
+    if (builder) builder.hidden = !visual; if (area) area.hidden = visual;
+    document.getElementById('workflow-mode-visual')?.setAttribute('aria-pressed', String(visual));
+    document.getElementById('workflow-mode-json')?.setAttribute('aria-pressed', String(!visual));
+    document.getElementById('workflow-mode-visual')?.classList.toggle('primary', visual);
+    document.getElementById('workflow-mode-json')?.classList.toggle('primary', !visual);
+    return true;
+  };
+
+  const setupVisualWorkflowBuilder = () => {
+    document.getElementById('workflow-add-step')?.addEventListener('click', () => addVisualWorkflowStep(document.getElementById('workflow-new-step-action')?.value));
+    document.getElementById('workflow-sync-json')?.addEventListener('click', syncVisualBuilderToJson);
+    document.getElementById('workflow-mode-visual')?.addEventListener('click', () => setWorkflowEditorMode('visual'));
+    document.getElementById('workflow-mode-json')?.addEventListener('click', () => setWorkflowEditorMode('json'));
+    renderVisualWorkflowBuilder(); setWorkflowEditorMode('visual');
+  };
+
   const setWorkflowStatus = (message, state = '') => {
     const status = document.getElementById('workflow-validation-status');
     if (!status) return;
@@ -694,6 +823,7 @@
       if (area.value.trim() && !window.confirm('Replace the current workflow editor content with this template?')) return;
       area.value = JSON.stringify(selected.steps, null, 2);
       setWorkflowStatus(`${selected.name} template applied. Review placeholder values before running.`, 'warning');
+      syncJsonToVisualBuilder();
       area.focus();
     });
     document.getElementById('workflow-validate')?.addEventListener('click', () => {
@@ -1166,6 +1296,81 @@
 
 
 
+  const launchpadButton = (label, workspace, telemetryId, className = 'btn sm') => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.textContent = label;
+    button.addEventListener('click', () => {
+      showWorkspace(workspace);
+      emitTelemetry('launchpad_action_selected', {action: telemetryId, workspace});
+    });
+    return button;
+  };
+
+  const renderDailyLaunchpad = (data) => {
+    const card = document.getElementById('daily-launchpad');
+    const next = document.getElementById('launchpad-next-action');
+    const workflows = document.getElementById('launchpad-workflows');
+    const attention = document.getElementById('launchpad-attention');
+    if (!card || !next || !workflows || !attention) return;
+    card.querySelector('.card-body')?.setAttribute('aria-busy', 'false');
+
+    next.replaceChildren();
+    const nextCopy = document.createElement('div'); nextCopy.className = 'launchpad-next-action';
+    const nextTitle = document.createElement('strong'); nextTitle.textContent = data.next_action?.label || 'Review your workspace';
+    const nextReason = document.createElement('p'); nextReason.textContent = data.next_action?.reason || 'Choose a workspace to continue.';
+    nextCopy.append(nextTitle, nextReason, launchpadButton('Continue', data.next_action?.workspace || 'overview', data.next_action?.id || 'continue', 'btn primary'));
+    next.appendChild(nextCopy);
+
+    workflows.replaceChildren();
+    const workflowItems = Array.isArray(data.recent_workflows) ? data.recent_workflows : [];
+    if (!workflowItems.length) {
+      const empty = document.createElement('li'); empty.className = 'launchpad-empty'; empty.textContent = 'No saved workflows yet. Build one in Automation.'; workflows.appendChild(empty);
+    } else workflowItems.forEach((workflow) => {
+      const item = document.createElement('li'); item.className = 'launchpad-list-item';
+      const copy = document.createElement('span');
+      const title = document.createElement('strong'); title.textContent = workflow.name;
+      const meta = document.createElement('small'); meta.textContent = `v${workflow.version} · ${workflow.step_count} steps · ${workflow.parameter_count} parameters`;
+      copy.append(title, meta); item.append(copy, launchpadButton('Review', 'automation', 'review_workflow')); workflows.appendChild(item);
+    });
+
+    attention.replaceChildren();
+    const attentionItems = Array.isArray(data.attention_runs) ? data.attention_runs : [];
+    if (!attentionItems.length) {
+      const empty = document.createElement('li'); empty.className = 'launchpad-empty'; empty.textContent = 'No runs need attention.'; attention.appendChild(empty);
+    } else attentionItems.forEach((run) => {
+      const item = document.createElement('li'); item.className = 'launchpad-list-item';
+      const copy = document.createElement('span');
+      const title = document.createElement('strong'); title.textContent = run.operation;
+      const meta = document.createElement('small'); meta.textContent = `${run.status} · ${run.verification} · ${run.duration_ms} ms`;
+      copy.append(title, meta); item.append(copy, launchpadButton('Inspect', 'diagnostics', 'inspect_run')); attention.appendChild(item);
+    });
+  };
+
+  const loadDailyLaunchpad = async () => {
+    const card = document.getElementById('daily-launchpad');
+    const next = document.getElementById('launchpad-next-action');
+    card?.querySelector('.card-body')?.setAttribute('aria-busy', 'true');
+    if (next) next.textContent = 'Loading your daily context…';
+    try {
+      const response = await fetch('/api/v1/launchpad', {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Launchpad request failed (${response.status})`);
+      const payload = await response.json();
+      renderDailyLaunchpad(payload.data || {});
+      emitTelemetry('launchpad_loaded', {workflow_count: payload.data?.summary?.saved_workflows || 0, attention_count: payload.data?.summary?.attention_runs || 0});
+    } catch (error) {
+      card?.querySelector('.card-body')?.setAttribute('aria-busy', 'false');
+      if (next) next.textContent = 'Daily context could not be loaded. Existing workspaces remain available.';
+      emitTelemetry('launchpad_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    }
+  };
+
+  const setupDailyLaunchpad = () => {
+    document.getElementById('refresh-launchpad')?.addEventListener('click', loadDailyLaunchpad);
+    loadDailyLaunchpad();
+  };
+
   let savedWorkflows = [];
   let selectedWorkflow = null;
 
@@ -1345,9 +1550,11 @@
     decorateControls();
     protectDangerousActions();
     setupPalette();
+    setupDailyLaunchpad();
     setupGuidedFlow();
     setupGuidedRunHistory();
     setupWorkflowAssistant();
+    setupVisualWorkflowBuilder();
     setupWorkflowCatalog();
     setupSessionAssistant();
     setupDiagnosticsAssistant();
@@ -1364,9 +1571,9 @@
     setConnectedState(false, 0);
   });
 
-  window.BrowserHelperUX = {showWorkspace, setConnectedState, emitTelemetry};
+  window.BrowserHelperUX = {showWorkspace, setConnectedState, emitTelemetry, loadDailyLaunchpad};
   window.BrowserHelperEnvironments = {load: loadEnvironments, activate: activateEnvironment};
-  window.BrowserHelperWorkflow = {validate: validateWorkflowSteps, setBusy: setWorkflowBusy};
+  window.BrowserHelperWorkflow = {validate: validateWorkflowSteps, setBusy: setWorkflowBusy, syncVisualBuilderToJson, syncJsonToVisualBuilder};
   window.BrowserHelperWorkflowCatalog = {load: loadWorkflowCatalog, resolve: resolveWorkflowParameters};
   window.BrowserHelperSession = {validate: validateSessionState, setBusy: setSessionBusy, showStatus: setSessionStatus};
   window.BrowserHelperDiagnostics = {render: renderFilteredOperationLog};

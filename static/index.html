@@ -351,6 +351,30 @@ input[type="text"] { width: 100%; }
     </div>
   </section>
 
+  <section class="card full-width" id="daily-launchpad" data-workspace="overview" aria-labelledby="daily-launchpad-title">
+    <div class="card-header">
+      <h2 id="daily-launchpad-title"><i class="fas fa-bolt" aria-hidden="true"></i> Continue your work</h2>
+      <button id="refresh-launchpad" type="button" class="btn sm"><i class="fas fa-sync" aria-hidden="true"></i> Refresh</button>
+    </div>
+    <div class="card-body no-scroll" aria-busy="true">
+      <p class="privacy-guidance">A privacy-safe daily summary. Page content, run details, URLs, and secrets are never included.</p>
+      <div class="daily-launchpad-grid">
+        <section class="launchpad-next" aria-labelledby="launchpad-next-title">
+          <h3 id="launchpad-next-title">Recommended next step</h3>
+          <div id="launchpad-next-action" role="status" aria-live="polite">Loading your daily context…</div>
+        </section>
+        <section aria-labelledby="launchpad-workflows-title">
+          <h3 id="launchpad-workflows-title">Saved workflows</h3>
+          <ul id="launchpad-workflows" class="launchpad-list"></ul>
+        </section>
+        <section aria-labelledby="launchpad-attention-title">
+          <h3 id="launchpad-attention-title">Needs attention</h3>
+          <ul id="launchpad-attention" class="launchpad-list"></ul>
+        </section>
+      </div>
+    </div>
+  </section>
+
   <section class="card full-width" id="capability-readiness-card" data-workspace="overview" aria-labelledby="capability-readiness-title">
     <div class="card-header">
       <h2 id="capability-readiness-title"><i class="fas fa-clipboard-check" aria-hidden="true"></i> Product readiness</h2>
@@ -807,6 +831,23 @@ input[type="text"] { width: 100%; }
         <button id="workflow-clear-draft" type="button" class="btn sm danger" data-confirm="Clear the locally saved workflow draft?">Clear draft</button>
       </div>
       <p class="workflow-privacy-note"><i class="fas fa-shield-alt" aria-hidden="true"></i> Drafts may contain sensitive data. Saving is explicit, local to this browser, and limited to 64 KB.</p>
+      <div id="workflow-editor-mode" class="workflow-editor-mode" role="group" aria-label="Workflow editor mode">
+        <button id="workflow-mode-visual" type="button" class="btn sm primary" aria-pressed="true">Visual builder</button>
+        <button id="workflow-mode-json" type="button" class="btn sm" aria-pressed="false">JSON editor</button>
+      </div>
+      <section id="workflow-visual-builder" class="workflow-builder" aria-labelledby="workflow-builder-title">
+        <header class="workflow-builder-header">
+          <div><h3 id="workflow-builder-title">Workflow steps</h3><small>Build common daily actions visually. This does not run automatically.</small></div>
+          <div class="btn-group">
+            <select id="workflow-new-step-action" aria-label="New step action">
+              <option value="navigate">Navigate</option><option value="click">Click element</option><option value="type">Type text</option><option value="wait_for_element">Wait for element</option><option value="screenshot">Screenshot</option><option value="analyze_page">Analyze page</option><option value="get_text">Get page text</option>
+            </select>
+            <button id="workflow-add-step" type="button" class="btn sm">Add step</button>
+            <button id="workflow-sync-json" type="button" class="btn sm primary">Update JSON</button>
+          </div>
+        </header>
+        <ol id="workflow-step-list" class="workflow-step-list" aria-label="Visual workflow steps" aria-live="polite"></ol>
+      </section>
       <label for="script-area" class="sr-only">Workflow JSON steps</label>
       <textarea id="script-area" placeholder='[{"action":"navigate","url":"https://example.com"},{"action":"screenshot"},{"action":"get_text"}]' spellcheck="false" aria-describedby="workflow-validation-status"></textarea>
       <div id="workflow-validation-status" class="workflow-validation" role="status" aria-live="polite">Choose a template or enter a JSON action array.</div>

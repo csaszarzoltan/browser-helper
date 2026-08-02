@@ -456,3 +456,91 @@ Result: **2,040 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 148.89
 ### Static validation
 
 JavaScript syntax, Python compilation, and focused Ruff checks for `src/run_comparison.py` and `tests/test_run_comparison_v217.py` passed.
+
+## 2026-08-02 - v1.18 daily work launchpad
+
+### TDD sequence
+
+The five acceptance tests in `tests/test_daily_launchpad_v218.py` were written before implementation. The first run failed during collection because `daily_launchpad.py` did not exist. After implementation, the focused suite passed.
+
+### Focused acceptance
+
+```bash
+PYTHONPATH=src uv run pytest -q tests/test_daily_launchpad_v218.py
+```
+
+Result: **5 passed, 0 failed**.
+
+### Targeted regression
+
+```bash
+PYTHONPATH=src uv run pytest -q \
+  tests/test_daily_launchpad_v218.py \
+  tests/test_dashboard_ux_v19.py \
+  tests/test_capability_readiness_v20.py \
+  tests/test_environment_workspace_v21.py \
+  tests/test_workflow_catalog_v216.py \
+  tests/test_run_timeline_v20.py \
+  tests/test_run_comparison_v217.py
+```
+
+Result: **36 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full regression
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,045 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 145.52 seconds. The failures are in the supplied RED-phase and incomplete-feature areas such as behavioral simulation, Camofox, rate limiting, stealth configuration, and legacy form-fill compatibility. The new launchpad tests and all targeted neighboring regressions are green.
+
+### Static checks
+
+- `python -m compileall -q src tests run.py examples`: passed.
+- `node --check static/dashboard_ux.js`: passed.
+- `uv run ruff check src/daily_launchpad.py tests/test_daily_launchpad_v218.py`: passed.
+
+## 2026-08-02 - v1.19 visual workflow builder continuation
+
+### TDD sequence
+
+Six acceptance contracts were written first in `tests/test_visual_workflow_builder_v219.py`. All six failed before the builder markup, behavior, styles, and documentation existed. After incremental implementation and safe mode-switch refinement, the focused tests passed.
+
+### Focused acceptance
+
+```bash
+PYTHONPATH=src uv run pytest -q tests/test_visual_workflow_builder_v219.py
+```
+
+Result: **6 passed, 0 failed**.
+
+### Targeted dashboard regression
+
+```bash
+PYTHONPATH=src uv run pytest -q \
+  tests/test_visual_workflow_builder_v219.py \
+  tests/test_daily_launchpad_v218.py \
+  tests/test_dashboard_ux_v19.py \
+  tests/test_workflow_assistant_v19.py \
+  tests/test_workflow_catalog_v216.py \
+  tests/test_environment_workspace_v21.py \
+  tests/test_run_timeline_v20.py \
+  tests/test_run_comparison_v217.py \
+  tests/test_capability_readiness_v20.py
+```
+
+Result: **48 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Static checks
+
+- `python -m compileall -q src tests run.py examples`: passed.
+- `node --check static/dashboard_ux.js`: passed.
+- Focused Ruff checks for new Python test and launchpad files: passed.
+
+### Full regression after v1.19
+
+```bash
+PYTHONPATH=src uv run pytest -q
+```
+
+Result: **2,051 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 148.44 seconds. The six additional passing tests are the new visual-builder acceptance contracts. The failure count is unchanged from the v1.18 baseline and remains concentrated in supplied RED-phase and incomplete domains.
