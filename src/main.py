@@ -52,6 +52,7 @@ from agent_navigation import (
 from baseline_manager import BaselineManager
 from capability_registry import CapabilityRegistry
 from environment_store import EnvironmentStore
+from workflow_catalog import WorkflowCatalog
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
 from headless_manager import HeadlessManager
@@ -59,6 +60,7 @@ from profile_manager import Profile, ProfileManager
 from screenshot_diff import ScreenshotDiffEngine
 from run_timeline import RunStore
 from run_recovery import RecoveryAdvisor
+from run_comparison import compare_runs
 from settings_manager import SettingsManager
 
 from proxy_manager import ProxyParseError, ProxyPool
@@ -85,6 +87,7 @@ _compositor = AntiDetectCompositor(
 _detection_tester = DetectionTester()
 _capability_registry = CapabilityRegistry.default()
 environment_store = EnvironmentStore()
+workflow_catalog = WorkflowCatalog()
 
 # Paths excluded from auth and rate-limiting middleware
 PUBLIC_PATHS = {"/", "/health", "/ready", "/ws", "/api/v1/capabilities"}
@@ -942,6 +945,58 @@ async def root():
     return {"message": "Browser Helper API — install a static/index.html for the dashboard."}
 
 
+@app.get("/api/v1/workflows")
+async def list_workflow_catalog(include_archived: bool = False):
+    items = workflow_catalog.list(include_archived=include_archived)
+    return api_success("workflow_catalog_list", {"count": len(items), "workflows": items})
+
+
+@app.post("/api/v1/workflows", status_code=201)
+async def create_catalog_workflow(body: dict[str, Any]):
+    try:
+        return api_success("workflow_catalog_create", workflow_catalog.create(body), 201)
+    except ValueError as exc:
+        return api_error("workflow_catalog_create", "invalid_workflow", str(exc), 422)
+
+
+@app.get("/api/v1/workflows/{workflow_id}")
+async def get_catalog_workflow(workflow_id: str, version: int | None = None):
+    item = workflow_catalog.get(workflow_id, version)
+    if item is None:
+        return api_error("workflow_catalog_get", "workflow_not_found", "Workflow was not found.", 404)
+    return api_success("workflow_catalog_get", item)
+
+
+@app.post("/api/v1/workflows/{workflow_id}/versions", status_code=201)
+async def create_catalog_workflow_version(workflow_id: str, body: dict[str, Any]):
+    try:
+        item = workflow_catalog.create_version(workflow_id, body)
+    except KeyError:
+        return api_error("workflow_catalog_version", "workflow_not_found", "Workflow was not found.", 404)
+    except ValueError as exc:
+        return api_error("workflow_catalog_version", "invalid_workflow", str(exc), 422)
+    return api_success("workflow_catalog_version", item, 201)
+
+
+@app.post("/api/v1/workflows/{workflow_id}/resolve")
+async def resolve_catalog_workflow(workflow_id: str, body: dict[str, Any]):
+    try:
+        item = workflow_catalog.resolve(workflow_id, body.get("parameters", {}), body.get("version"))
+    except KeyError:
+        return api_error("workflow_catalog_resolve", "workflow_not_found", "Workflow was not found.", 404)
+    except ValueError as exc:
+        return api_error("workflow_catalog_resolve", "invalid_parameters", str(exc), 422)
+    return api_success("workflow_catalog_resolve", item)
+
+
+@app.post("/api/v1/workflows/{workflow_id}/archive")
+async def archive_catalog_workflow(workflow_id: str):
+    item = workflow_catalog.archive(workflow_id)
+    if item is None:
+        return api_error("workflow_catalog_archive", "workflow_not_found", "Workflow was not found.", 404)
+    return api_success("workflow_catalog_archive", item)
+
+
 @app.get("/api/v1/environments")
 async def list_environments():
     """List reusable environment recipes without credential values."""
@@ -993,6 +1048,19 @@ async def list_runs(status: str | None = None, limit: int = Query(50, ge=1, le=1
     """Return newest-first, redacted operation runs with bounded retention."""
     runs = run_store.list_runs(status=status, limit=limit)
     return api_success("run_timeline_list", {"count": len(runs), "runs": runs})
+
+
+@app.get("/api/v1/runs/compare")
+async def compare_retained_runs(left: str, right: str):
+    """Compare privacy-safe metadata for two retained runs."""
+    left_run = run_store.get(left)
+    right_run = run_store.get(right)
+    if left_run is None or right_run is None:
+        missing = left if left_run is None else right
+        return api_error(
+            "run_compare", "run_not_found", f"Run {missing[:80]} is no longer available.", 404
+        )
+    return api_success("run_compare", compare_runs(left_run, right_run))
 
 
 @app.get("/api/v1/runs/{run_id}")

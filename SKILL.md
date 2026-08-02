@@ -3097,3 +3097,20 @@ Use the environment catalog to save non-secret runtime combinations for repeated
 - `DELETE /api/v1/environments/{environment_id}` deletes a non-active recipe.
 
 Recipes reject credential-like fields. Provider API keys and proxy credentials must remain in protected server configuration. See `docs/environment-recipes.md`.
+
+## Durable parameterized workflows (v1.16)
+
+The workflow catalog preserves named, immutable workflow versions and resolves typed parameters without executing browser actions.
+
+- `GET /api/v1/workflows`
+- `POST /api/v1/workflows`
+- `GET /api/v1/workflows/{workflow_id}`
+- `POST /api/v1/workflows/{workflow_id}/versions`
+- `POST /api/v1/workflows/{workflow_id}/resolve`
+- `POST /api/v1/workflows/{workflow_id}/archive`
+
+Use `{{parameter_name}}` placeholders. Secret values are never stored as defaults and are redacted from recorded parameter metadata. Review resolved steps in the Script Runner before execution. See `docs/workflow-catalog.md`.
+
+## Privacy-safe run comparison (v1.17)
+
+Use `GET /api/v1/runs/compare?left={run_id}&right={run_id}` to compare two retained runs. The contract includes operation, status, verification, duration, and field-level change flags. It intentionally excludes run detail text, page content, cookies, storage, credentials, screenshots, network bodies, and CDP target URLs. See `docs/run-comparison.md`.

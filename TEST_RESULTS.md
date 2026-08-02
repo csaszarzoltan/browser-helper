@@ -388,3 +388,71 @@ uv run --extra dev ruff check src/environment_store.py tests/test_environment_wo
 ```
 
 Result: **passed**. Project-wide Ruff still contains pre-existing findings in `src/main.py`; focused lint for new code is clean.
+
+## 2026-08-02 - Durable parameterized workflow catalog v1.16
+
+### TDD RED phase
+
+Five acceptance tests were authored first. The initial run failed during collection because `workflow_catalog` did not exist.
+
+### GREEN phase
+
+```bash
+uv run --extra dev pytest -q tests/test_workflow_catalog_v216.py
+```
+
+Result: **5 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Targeted regression after v1.16
+
+```bash
+uv run --extra dev pytest -q tests/test_workflow_catalog_v216.py tests/test_workflow_assistant_v19.py tests/test_environment_workspace_v21.py tests/test_dashboard_ux_v19.py tests/test_capability_readiness_v20.py tests/test_run_timeline_v20.py tests/test_run_recovery_v20.py
+```
+
+Result: **38 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full regression after v1.16
+
+```bash
+uv run --extra dev pytest -q
+```
+
+Result: **2,036 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 133.11 seconds. The five new workflow-catalog tests increased the passing total while the known supplied baseline failure count remained unchanged.
+
+### Static validation
+
+JavaScript syntax, Python compilation, and focused Ruff checks for `src/workflow_catalog.py` and `tests/test_workflow_catalog_v216.py` passed.
+
+## 2026-08-02 - Privacy-safe run detail and comparison v1.17
+
+### TDD RED phase
+
+Four acceptance tests were authored first. The initial run failed during collection because `run_comparison` did not exist. The first implementation candidate then exposed a privacy-contract naming mismatch, which was corrected.
+
+### GREEN phase
+
+```bash
+uv run --extra dev pytest -q tests/test_run_comparison_v217.py
+```
+
+Result: **4 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Targeted regression after v1.17
+
+```bash
+uv run --extra dev pytest -q tests/test_run_comparison_v217.py tests/test_run_timeline_v20.py tests/test_run_correlation_v20.py tests/test_run_support_bundle_v20.py tests/test_run_verification_v20.py tests/test_run_recovery_v20.py tests/test_dashboard_ux_v19.py
+```
+
+Result: **35 passed, 0 failed, 1 third-party deprecation warning**.
+
+### Full regression after v1.17
+
+```bash
+uv run --extra dev pytest -q
+```
+
+Result: **2,040 passed, 221 failed, 3 skipped, 8 xfailed, 32 xpassed** in 148.89 seconds. The four new run-comparison tests increased the passing total while the known supplied baseline failure count remained unchanged.
+
+### Static validation
+
+JavaScript syntax, Python compilation, and focused Ruff checks for `src/run_comparison.py` and `tests/test_run_comparison_v217.py` passed.

@@ -993,6 +993,51 @@
     }
   };
 
+  const loadRunDetail = async (runId) => {
+    const panel = document.getElementById('run-detail-panel');
+    const fields = document.getElementById('run-detail-fields');
+    if (!panel || !fields) return;
+    try {
+      const response = await fetch(`/api/v1/runs/${encodeURIComponent(runId)}`, {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Run detail request failed (${response.status})`);
+      const payload = await response.json(); const run = payload?.data || {};
+      const visible = [
+        ['Run ID', run.run_id], ['Operation', run.operation], ['Status', run.status],
+        ['Verification', run.verification], ['Duration', `${run.duration_ms || 0} ms`], ['Timestamp', run.timestamp]
+      ];
+      fields.replaceChildren();
+      visible.forEach(([label, value]) => { const term = document.createElement('dt'); term.textContent = label; const detail = document.createElement('dd'); detail.textContent = String(value || 'Not available'); fields.append(term, detail); });
+      panel.hidden = false; panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      announce(`Run detail loaded for ${run.operation || 'operation'}`); emitTelemetry('run_detail_loaded', {run_id: runId});
+    } catch (error) { announce('Run detail could not be loaded'); emitTelemetry('run_detail_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)}); }
+  };
+
+  const populateRunComparisonChoices = () => {
+    ['run-compare-left', 'run-compare-right'].forEach((id) => {
+      const select = document.getElementById(id); if (!select) return; const previous = select.value; select.replaceChildren();
+      const empty = document.createElement('option'); empty.value = ''; empty.textContent = 'Choose a run'; select.appendChild(empty);
+      currentRuns.forEach((run) => { const option = document.createElement('option'); option.value = run.run_id; option.textContent = `${run.operation} · ${run.status} · ${run.run_id.slice(-8)}`; select.appendChild(option); });
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+    });
+  };
+
+  const compareSelectedRuns = async () => {
+    const leftId = document.getElementById('run-compare-left')?.value;
+    const rightId = document.getElementById('run-compare-right')?.value;
+    const result = document.getElementById('run-compare-result');
+    if (!result) return;
+    if (!leftId || !rightId || leftId === rightId) { result.textContent = 'Choose two different retained runs.'; announce(result.textContent); return; }
+    try {
+      result.textContent = 'Comparing safe run metadata…';
+      const response = await fetch(`/api/v1/runs/compare?left=${encodeURIComponent(leftId)}&right=${encodeURIComponent(rightId)}`, {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Comparison request failed (${response.status})`);
+      const payload = await response.json(); const comparison = payload?.data || {}; const differences = comparison.differences || {};
+      const changes = Object.entries(differences).filter(([, value]) => value.changed).map(([field, value]) => `${field}: ${value.left} → ${value.right}`);
+      const delta = Number(comparison.duration_delta_ms || 0); result.textContent = `${changes.length ? changes.join('; ') : 'No status, operation, or verification changes.'} Duration change: ${delta >= 0 ? '+' : ''}${delta} ms.`;
+      announce('Run comparison loaded'); emitTelemetry('run_comparison_loaded', {left_run_id: leftId, right_run_id: rightId, changed_fields: changes.length});
+    } catch (error) { result.textContent = 'Run comparison could not be loaded.'; announce(result.textContent); emitTelemetry('run_comparison_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)}); }
+  };
+
   const renderRunTimeline = () => {
     const list = document.getElementById('run-timeline-list');
     const summary = document.getElementById('run-timeline-summary');
@@ -1018,6 +1063,7 @@
       const operation = document.createElement('strong'); operation.textContent = run.operation || 'Unknown operation';
       const detail = document.createElement('span'); detail.textContent = run.details || 'No detail recorded.';
       const meta = document.createElement('small'); meta.textContent = `${run.status || 'incomplete'} · ${Number(run.duration_ms || 0).toFixed(2)} ms · ${run.verification || 'unverified'}`;
+      const detailButton = document.createElement('button'); detailButton.type = 'button'; detailButton.className = 'btn sm'; detailButton.textContent = 'Details'; detailButton.setAttribute('aria-label', `Open safe details for ${run.operation || 'operation'}`); detailButton.addEventListener('click', () => loadRunDetail(run.run_id));
       const support = document.createElement('button');
       support.type = 'button'; support.className = 'btn sm'; support.textContent = 'Support JSON';
       support.setAttribute('aria-label', `Download redacted support JSON for ${run.operation || 'operation'}`);
@@ -1031,7 +1077,7 @@
       copy.setAttribute('aria-label', `Copy run ID for ${run.operation || 'operation'}`);
       copy.addEventListener('click', () => copyRunId(run.run_id));
       const runId = document.createElement('code'); runId.textContent = run.run_id;
-      const actions = document.createElement('span'); actions.append(meta, runId, recovery, copy, support);
+      const actions = document.createElement('span'); actions.append(meta, runId, detailButton, recovery, copy, support);
       item.append(operation, detail, actions);
       list.appendChild(item);
     });
@@ -1046,6 +1092,7 @@
       const payload = await response.json();
       currentRuns = Array.isArray(payload?.data?.runs) ? payload.data.runs : [];
       renderRunTimeline();
+      populateRunComparisonChoices();
       emitTelemetry('run_timeline_loaded', {count: currentRuns.length});
     } catch (error) {
       currentRuns = [];
@@ -1058,6 +1105,8 @@
     document.getElementById('refresh-run-timeline')?.addEventListener('click', loadRunTimeline);
     document.getElementById('run-status-filter')?.addEventListener('change', renderRunTimeline);
     document.getElementById('run-verification-filter')?.addEventListener('change', renderRunTimeline);
+    document.getElementById('run-compare-action')?.addEventListener('click', compareSelectedRuns);
+    document.getElementById('run-detail-close')?.addEventListener('click', () => { document.getElementById('run-detail-panel').hidden = true; });
     document.getElementById('clear-run-timeline')?.addEventListener('click', async () => {
       const response = await fetch('/api/v1/runs', {method: 'DELETE', headers: {Accept: 'application/json'}});
       if (response.ok) {
@@ -1115,6 +1164,94 @@
     }
   };
 
+
+
+  let savedWorkflows = [];
+  let selectedWorkflow = null;
+
+  const renderWorkflowCatalog = () => {
+    const list = document.getElementById('workflow-catalog-list');
+    const status = document.getElementById('workflow-catalog-status');
+    if (!list || !status) return;
+    list.replaceChildren();
+    status.textContent = savedWorkflows.length ? `${savedWorkflows.length} saved workflow${savedWorkflows.length === 1 ? '' : 's'}.` : 'No saved workflows yet. Save the current editor to create one.';
+    savedWorkflows.forEach((workflow) => {
+      const item = document.createElement('li'); item.className = 'workflow-catalog-item';
+      const summary = document.createElement('div');
+      const title = document.createElement('strong'); title.textContent = `${workflow.name} · v${workflow.version}`;
+      const detail = document.createElement('small'); detail.textContent = `${workflow.steps.length} steps · ${workflow.parameters.length} parameters${workflow.description ? ` · ${workflow.description}` : ''}`;
+      summary.append(title, detail);
+      const actions = document.createElement('div'); actions.className = 'btn-group';
+      const use = document.createElement('button'); use.type = 'button'; use.className = 'btn sm primary'; use.textContent = 'Use'; use.addEventListener('click', () => openWorkflowParameters(workflow));
+      const archive = document.createElement('button'); archive.type = 'button'; archive.className = 'btn sm danger'; archive.textContent = 'Archive'; archive.addEventListener('click', async () => {
+        if (!window.confirm(`Archive workflow "${workflow.name}" version ${workflow.version}?`)) return;
+        const response = await fetch(`/api/v1/workflows/${encodeURIComponent(workflow.workflow_id)}/archive`, {method: 'POST', headers: {Accept: 'application/json'}});
+        if (!response.ok) { announce('Workflow could not be archived'); return; }
+        emitTelemetry('workflow_catalog_archived', {workflow_id: workflow.workflow_id, version: workflow.version}); await loadWorkflowCatalog();
+      });
+      actions.append(use, archive); item.append(summary, actions); list.appendChild(item);
+    });
+  };
+
+  const loadWorkflowCatalog = async () => {
+    const status = document.getElementById('workflow-catalog-status');
+    try {
+      if (status) status.textContent = 'Loading saved workflows…';
+      const response = await fetch('/api/v1/workflows', {headers: {Accept: 'application/json'}});
+      if (!response.ok) throw new Error(`Workflow catalog request failed (${response.status})`);
+      const payload = await response.json(); savedWorkflows = payload?.data?.workflows || []; renderWorkflowCatalog();
+      emitTelemetry('workflow_catalog_loaded', {count: savedWorkflows.length});
+    } catch (error) {
+      savedWorkflows = []; if (status) status.textContent = 'Saved workflows could not be loaded. The local Script Runner remains available.';
+      emitTelemetry('workflow_catalog_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    }
+  };
+
+  const openWorkflowParameters = (workflow) => {
+    selectedWorkflow = workflow;
+    const panel = document.getElementById('workflow-parameter-panel'); const form = document.getElementById('workflow-parameter-form');
+    if (!panel || !form) return; form.replaceChildren();
+    workflow.parameters.forEach((parameter) => {
+      const field = document.createElement('div'); field.className = 'workflow-catalog-field';
+      const label = document.createElement('label'); label.htmlFor = `workflow-param-${parameter.name}`; label.textContent = `${parameter.name}${parameter.required ? ' *' : ''}`;
+      let input;
+      if (parameter.type === 'enum') { input = document.createElement('select'); parameter.choices.forEach((choice) => { const option = document.createElement('option'); option.value = choice; option.textContent = choice; input.appendChild(option); }); }
+      else { input = document.createElement('input'); input.type = parameter.type === 'secret' ? 'password' : parameter.type === 'number' ? 'number' : parameter.type === 'url' ? 'url' : 'text'; }
+      input.id = `workflow-param-${parameter.name}`; input.name = parameter.name; input.required = Boolean(parameter.required); input.autocomplete = parameter.type === 'secret' ? 'off' : 'on';
+      if (parameter.default !== undefined) input.value = String(parameter.default); field.append(label, input); form.appendChild(field);
+    });
+    panel.hidden = false; panel.scrollIntoView({behavior: 'smooth', block: 'nearest'}); announce(`Parameters ready for ${workflow.name}`);
+  };
+
+  const resolveWorkflowParameters = async () => {
+    if (!selectedWorkflow) return;
+    const form = document.getElementById('workflow-parameter-form'); if (!form?.reportValidity()) return;
+    const parameters = Object.fromEntries(new FormData(form).entries());
+    const response = await fetch(`/api/v1/workflows/${encodeURIComponent(selectedWorkflow.workflow_id)}/resolve`, {method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify({version: selectedWorkflow.version, parameters})});
+    const payload = await response.json();
+    if (!response.ok) { setWorkflowStatus(payload?.error?.message || 'Parameters could not be resolved.', 'error'); announce('Workflow parameter validation failed'); return; }
+    const area = document.getElementById('script-area'); if (area) area.value = JSON.stringify(payload.data.steps, null, 2);
+    document.getElementById('workflow-parameter-panel').hidden = true; setWorkflowStatus(`${payload.data.name} v${payload.data.version} loaded into the editor. Review before running.`, 'success');
+    emitTelemetry('workflow_catalog_resolved', {workflow_id: payload.data.workflow_id, version: payload.data.version, parameter_count: Object.keys(payload.data.recorded_parameters || {}).length});
+  };
+
+  const setupWorkflowCatalog = () => {
+    document.getElementById('workflow-catalog-refresh')?.addEventListener('click', loadWorkflowCatalog);
+    document.getElementById('workflow-catalog-save')?.addEventListener('click', async () => {
+      try {
+        const steps = JSON.parse(document.getElementById('script-area')?.value || '[]');
+        const parameters = JSON.parse(document.getElementById('workflow-parameters')?.value || '[]');
+        const body = {name: document.getElementById('workflow-name')?.value || '', description: document.getElementById('workflow-description')?.value || '', steps, parameters};
+        const response = await fetch('/api/v1/workflows', {method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'application/json'}, body: JSON.stringify(body)}); const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.error?.message || 'Workflow could not be saved.');
+        document.getElementById('workflow-name').value = ''; document.getElementById('workflow-description').value = ''; document.getElementById('workflow-parameters').value = '';
+        announce(`${payload.data.name} saved`); emitTelemetry('workflow_catalog_created', {workflow_id: payload.data.workflow_id, step_count: payload.data.steps.length, parameter_count: payload.data.parameters.length}); await loadWorkflowCatalog();
+      } catch (error) { document.getElementById('workflow-catalog-status').textContent = String(error?.message || error); announce('Workflow could not be saved'); }
+    });
+    document.getElementById('workflow-resolve')?.addEventListener('click', resolveWorkflowParameters);
+    document.getElementById('workflow-parameter-cancel')?.addEventListener('click', () => { document.getElementById('workflow-parameter-panel').hidden = true; selectedWorkflow = null; });
+    loadWorkflowCatalog();
+  };
 
   let currentEnvironments = [];
 
@@ -1211,6 +1348,7 @@
     setupGuidedFlow();
     setupGuidedRunHistory();
     setupWorkflowAssistant();
+    setupWorkflowCatalog();
     setupSessionAssistant();
     setupDiagnosticsAssistant();
     setupTabAssistant();
@@ -1229,6 +1367,7 @@
   window.BrowserHelperUX = {showWorkspace, setConnectedState, emitTelemetry};
   window.BrowserHelperEnvironments = {load: loadEnvironments, activate: activateEnvironment};
   window.BrowserHelperWorkflow = {validate: validateWorkflowSteps, setBusy: setWorkflowBusy};
+  window.BrowserHelperWorkflowCatalog = {load: loadWorkflowCatalog, resolve: resolveWorkflowParameters};
   window.BrowserHelperSession = {validate: validateSessionState, setBusy: setSessionBusy, showStatus: setSessionStatus};
   window.BrowserHelperDiagnostics = {render: renderFilteredOperationLog};
   window.BrowserHelperCookies = {setCookies: (cookies) => { currentCookies = Array.isArray(cookies) ? [...cookies] : []; }, render: renderFilteredCookies};

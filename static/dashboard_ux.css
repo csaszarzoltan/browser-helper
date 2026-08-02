@@ -135,3 +135,30 @@
 .environment-item small { display: block; color: var(--muted); margin-top: .2rem; }
 @media (max-width: 1000px) { .environment-form { grid-template-columns: 1fr 1fr; } .environment-form button { min-height: 42px; } }
 @media (max-width: 600px) { .environment-form { grid-template-columns: 1fr; } .environment-item { align-items: flex-start; flex-direction: column; } }
+
+/* v1.16 durable parameterized workflow catalog */
+.workflow-catalog-body { display: grid; gap: .8rem; }
+.workflow-catalog-create { display: grid; grid-template-columns: minmax(170px,.8fr) minmax(220px,1.2fr) minmax(280px,1.5fr) auto; gap: .65rem; align-items: end; }
+.workflow-catalog-field { display: grid; gap: .25rem; }
+.workflow-catalog-field label { color: var(--muted); font-size: .72rem; font-weight: 650; }
+.workflow-catalog-field textarea { min-height: 76px; }
+.workflow-catalog-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .55rem; }
+.workflow-catalog-item { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .75rem; border: 1px solid rgba(148,163,184,.25); border-radius: .5rem; background: #0f172a; }
+.workflow-catalog-item small { display: block; color: var(--muted); margin-top: .2rem; }
+.workflow-parameter-panel { padding: .8rem; border: 1px solid #38bdf8; border-radius: .5rem; background: #082f49; display: grid; gap: .7rem; }
+.workflow-parameter-panel[hidden] { display: none; }
+#workflow-parameter-form { display: grid; grid-template-columns: repeat(3,minmax(180px,1fr)); gap: .65rem; }
+@media (max-width: 1000px) { .workflow-catalog-create { grid-template-columns: 1fr 1fr; } #workflow-parameter-form { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 650px) { .workflow-catalog-create, #workflow-parameter-form { grid-template-columns: 1fr; } .workflow-catalog-item { flex-direction: column; align-items: flex-start; } }
+
+/* v1.17 privacy-safe run detail and comparison */
+.run-compare-panel, .run-detail-panel { margin: .75rem 0; padding: .75rem; border: 1px solid rgba(148,163,184,.3); border-radius: .5rem; background: #0f172a; }
+.run-compare-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: .65rem; align-items: end; }
+.run-compare-controls > div { display: grid; gap: .25rem; }
+.run-compare-controls label { color: var(--muted); font-size: .72rem; font-weight: 650; }
+#run-compare-result { margin-top: .65rem; color: var(--muted); }
+.run-detail-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.run-detail-panel dl { display: grid; grid-template-columns: minmax(110px,.4fr) 1fr; gap: .35rem .8rem; margin: .75rem 0; }
+.run-detail-panel dt { color: var(--muted); font-weight: 650; }
+.run-detail-panel dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .run-compare-controls { grid-template-columns: 1fr; } .run-detail-panel dl { grid-template-columns: 1fr; } }

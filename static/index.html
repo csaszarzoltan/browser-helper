@@ -583,6 +583,20 @@ input[type="text"] { width: 100%; }
       <p id="run-correlation-guidance" class="privacy-guidance">Run IDs correlate API responses, operation history, and support exports. Copy an ID when reporting a problem.</p>
       <p id="run-support-guidance" class="privacy-guidance">Support JSON excludes page content, cookie values, credentials, and the CDP target URL.</p>
       <div id="run-recovery-result" class="guided-result" role="status" aria-live="polite" hidden></div>
+      <section id="run-compare-panel" class="run-compare-panel" aria-labelledby="run-compare-title">
+        <h3 id="run-compare-title">Compare retained runs</h3>
+        <div class="run-compare-controls">
+          <div><label for="run-compare-left">Earlier run</label><select id="run-compare-left"><option value="">Choose a run</option></select></div>
+          <div><label for="run-compare-right">Later run</label><select id="run-compare-right"><option value="">Choose a run</option></select></div>
+          <button id="run-compare-action" type="button" class="btn sm">Compare</button>
+        </div>
+        <div id="run-compare-result" role="status" aria-live="polite">Choose two retained runs to compare safe metadata.</div>
+      </section>
+      <section id="run-detail-panel" class="run-detail-panel" aria-labelledby="run-detail-title" hidden>
+        <div class="run-detail-header"><h3 id="run-detail-title">Run detail</h3><button id="run-detail-close" type="button" class="btn sm">Close</button></div>
+        <dl id="run-detail-fields"></dl>
+        <p class="privacy-guidance">Detail text remains redacted and is not used in run comparison.</p>
+      </section>
       <p id="run-timeline-summary" role="status" aria-live="polite">Loading recent runs…</p>
       <ol id="run-timeline-list" class="run-timeline-list" aria-label="Recent browser operation runs"></ol>
     </div>
@@ -746,6 +760,29 @@ input[type="text"] { width: 100%; }
       </div>
     </div>
   </div>
+
+  <section class="card full-width" id="workflow-catalog" data-workspace="automation" aria-labelledby="workflow-catalog-title">
+    <div class="card-header">
+      <h2 id="workflow-catalog-title"><i class="fas fa-list-check" aria-hidden="true"></i> Saved workflows</h2>
+      <button id="workflow-catalog-refresh" type="button" class="btn sm"><i class="fas fa-sync" aria-hidden="true"></i> Refresh</button>
+    </div>
+    <div class="card-body workflow-catalog-body">
+      <p class="privacy-guidance">Save a validated workflow with typed parameters. Secret parameter definitions are stored, but secret values are never saved or exported.</p>
+      <div class="workflow-catalog-create">
+        <div class="workflow-catalog-field"><label for="workflow-name">Workflow name</label><input id="workflow-name" maxlength="100" placeholder="Daily smoke check"></div>
+        <div class="workflow-catalog-field"><label for="workflow-description">Description</label><input id="workflow-description" maxlength="1000" placeholder="Purpose and expected outcome"></div>
+        <div class="workflow-catalog-field"><label for="workflow-parameters">Parameter definitions JSON</label><textarea id="workflow-parameters" spellcheck="false" placeholder='[{"name":"target_url","type":"url","required":true}]'></textarea></div>
+        <button id="workflow-catalog-save" type="button" class="btn primary">Save current editor</button>
+      </div>
+      <div id="workflow-catalog-status" class="workflow-validation" role="status" aria-live="polite">Loading saved workflows…</div>
+      <ul id="workflow-catalog-list" class="workflow-catalog-list" aria-label="Saved workflows"></ul>
+      <section id="workflow-parameter-panel" class="workflow-parameter-panel" aria-labelledby="workflow-parameter-title" hidden>
+        <h3 id="workflow-parameter-title">Run parameters</h3>
+        <form id="workflow-parameter-form"></form>
+        <div class="btn-group"><button id="workflow-resolve" type="button" class="btn primary">Load resolved steps into editor</button><button id="workflow-parameter-cancel" type="button" class="btn">Cancel</button></div>
+      </section>
+    </div>
+  </section>
 
   <!-- ── Script Runner ── -->
   <div class="card" data-workspace="automation">
