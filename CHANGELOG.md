@@ -10,7 +10,16 @@ All notable changes to browser-helper will be documented in this file.
 - Responsive workflow step cards, focus-visible states, screen-reader announcements, and local privacy-safe builder telemetry.
 - TDD acceptance coverage in `tests/test_visual_workflow_builder_v219.py` and operator documentation in `docs/visual-workflow-builder.md`.
 - Privacy-safe daily work launchpad and `GET /api/v1/launchpad` from v1.18.0.
-- Fleet orchestration (v1.18.0): node registry, health polling, least-loaded session pool with FIFO queueing and 503+`Retry-After` backpressure, and save/restore failover — REST surface under `/fleet/*` (see `src/fleet/api.py`), `python -m fleet.cli node list` / `session list`, Fleet dashboard tab, and SQLite state in `~/.browser-helper/fleet.db`. Contract coverage in `tests/test_fleet_v115.py` (29 integration tests).
+- Fleet orchestration (v1.20.0): distributed multi-node browser fleet management under `/fleet/*` (see `src/fleet/api.py` and the `src/fleet/` package) — a coordinator registers worker nodes, probes their `/health` endpoints, schedules sessions across the least-loaded healthy node, queues allocation requests at capacity, and fails sessions over when a node dies.
+  - Node registry (`src/fleet/node_registry.py`): `POST /fleet/nodes/register` (201/409), `POST /fleet/nodes/{node_id}/unregister` (200/404), `GET /fleet/nodes` with per-node health, load, and capability metadata.
+  - Health checking (`src/fleet/health_checker.py`): async poller (15s interval, 30s cooldown on a down node); `GET /fleet/nodes/{node_id}/health`, `POST /fleet/nodes/health-check`, `POST /fleet/nodes/{node_id}/health-check`.
+  - Session pool (`src/fleet/session_pool.py`): `POST /fleet/session` (200, 202 queued, 409 duplicate, 503 queue full / no healthy node), `GET /fleet/session/{session_id}`, `POST /fleet/session/{session_id}/release`, `GET /fleet/sessions`.
+  - Queueing (`src/fleet/queue_manager.py`): FIFO queue (default depth 10) with TTL and 503 + `Retry-After` backpressure; `POST /fleet/queue/sweep` purges expired entries.
+  - Failover (`src/fleet/failover.py`): `POST /fleet/failover` re-allocates a dead node's sessions with save/restore state transfer; the health poller triggers it automatically when a node goes unhealthy.
+  - CLI (`src/fleet/cli.py`): `python -m fleet.cli node list` / `session list` over httpx, honouring `FLEET_API_URL`, `--base-url`, and `API_TOKEN`.
+  - Dashboard: Fleet workspace tab in the dashboard plus the standalone `GET /fleet` console page (`static/fleet.html`).
+  - SQLite state in `~/.browser-helper/fleet.db` (override with `FLEET_DB_PATH`; `src/fleet/storage.py`, WAL + foreign keys).
+  - Contract coverage in `tests/test_fleet_v115.py` (29 integration tests).
 
 - Task-oriented dashboard workspaces for Overview, Live Browser, Automation, Diagnostics, and Agent Tools.
 - Persistent active context, Ctrl/Cmd+K command palette, connection-aware controls, safe destructive-action confirmation, and local privacy-preserving telemetry hooks.

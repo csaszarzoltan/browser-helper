@@ -20,7 +20,7 @@ The Overview workspace starts with a privacy-safe **Continue your work** launchp
 
 The dashboard now groups existing controls into **Overview**, **Live Browser**, **Automation**, **Diagnostics**, and **Agent Tools** workspaces. The Live Browser workspace includes a guided daily flow for validated navigation, screenshot capture, compact observation, and private local reuse of the five most recent URLs. Guided actions also receive tab-session-scoped correlation IDs, timing, outcomes, retry controls, and redacted JSON export. The Automation workspace now includes safe starter templates, preflight validation, formatting, and explicit bounded local draft persistence. Session state handling now adds validation, secure-use guidance, bounded JSON import, download, confirmed restore, and a no-dashboard-persistence policy. Diagnostics now supports non-destructive operation search, status filtering, visible counts, and bounded redacted JSON/CSV export. Tab management now adds title/URL search, inline validated tab opening, accessible dynamic actions, confirmed closing, and context refresh after switching. Network diagnostics now adds capture-state feedback, request search, method and status-family filters, sensitive query redaction, and bounded JSON/CSV export. Cookie diagnostics now masks values, supports metadata search and security filters, and exports metadata without cookie values. It includes a persistent active-context bar, connection-aware controls, destructive-action confirmation, accessible status announcements, and a **Ctrl/Cmd+K** command palette. Existing REST and WebSocket contracts are unchanged. See [Task-oriented dashboard workspaces](docs/dashboard-workspaces.md).
 
-## Fleet Orchestration (v1.18.0)
+## Fleet Orchestration (v1.20.0)
 
 Distributed browser fleet management: a coordinator registers worker nodes,
 probes their `/health` endpoints, schedules sessions across the least-loaded
@@ -29,16 +29,86 @@ when a node dies.
 
 - **Node registry** — `POST /fleet/nodes/register`,
   `POST /fleet/nodes/{node_id}/unregister`, `GET /fleet/nodes`
-- **Health checking** — `GET /fleet/nodes/{node_id}/health`,
-  `POST /fleet/nodes/health-check`
+- **Health checking** — async poller (15s interval, 30s cooldown on a down
+  node); `GET /fleet/nodes/{node_id}/health`,
+  `POST /fleet/nodes/health-check`, `POST /fleet/nodes/{node_id}/health-check`
 - **Session pool** — `POST /fleet/session`, `GET /fleet/session/{session_id}`,
   `POST /fleet/session/{session_id}/release`, `GET /fleet/sessions`
-- **Queueing** — FIFO queue with TTL and 503 + `Retry-After` backpressure;
-  `POST /fleet/queue/sweep` purges expired entries
+- **Queueing** — FIFO queue (default depth 10) with TTL and 503 +
+  `Retry-After` backpressure; `POST /fleet/queue/sweep` purges expired entries
 - **Failover** — `POST /fleet/failover` re-allocates a dead node's sessions
-  with save/restore state transfer
+  with save/restore state transfer; the health poller triggers it
+  automatically when a node goes unhealthy
 - **CLI** — `python -m fleet.cli node list`, `python -m fleet.cli session list`
 - **Dashboard** — the Fleet workspace tab and `GET /fleet` console page
+
+### Quick start
+
+1. **Start the coordinator** — any Browser Helper instance runs the fleet
+   API. Point it at its own SQLite state (optional; defaults to
+   `~/.browser-helper/fleet.db`):
+
+   ```bash
+   FLEET_DB_PATH=/var/lib/browser-helper/fleet.db python run.py
+   ```
+
+2. **Register a worker node** (returns HTTP 201 with a generated `node_id`):
+
+   ```bash
+   curl -X POST http://localhost:8000/fleet/nodes/register \
+     -H 'Content-Type: application/json' \
+     -d '{"url":"http://worker-1:8000","capabilities":["cdp","headless","screenshot"],"capacity":5,"metadata":{"region":"us-east","name":"worker-1"}}'
+   ```
+
+   → `{"status":"ok","operation":"fleet_node_register","data":{"node_id":"node_...","url":"http://worker-1:8000","capacity":5,"active_sessions":0,"healthy":true,...},"meta":{...}}`
+
+3. **Allocate a session** — the pool picks the least-loaded healthy node and
+   POSTs to its `/browser/launch` (then `/headless/launch`) endpoint:
+
+   ```bash
+   curl -X POST http://localhost:8000/fleet/session \
+     -H 'Content-Type: application/json' \
+     -d '{"ttl_seconds":300}'
+   ```
+
+   → HTTP 200 with the session (including `node_id` and `cdp_url`) when a
+   healthy node has capacity; HTTP 202 with `queued:true`, `queue_position`
+   and `estimated_wait_seconds` when every node is at capacity; HTTP 503 with
+   `Retry-After` when the queue is full.
+
+4. **Inspect the fleet** — list nodes/sessions over REST or via the CLI:
+
+   ```bash
+   curl http://localhost:8000/fleet/nodes
+   curl http://localhost:8000/fleet/sessions
+   python -m fleet.cli node list          # → GET /fleet/nodes
+   python -m fleet.cli session list       # → GET /fleet/sessions
+   ```
+
+   The CLI reads `FLEET_API_URL` (default `http://localhost:8000`), a
+   `--base-url` flag, and `API_TOKEN` for Bearer auth — the same token the
+   server's auth middleware checks.
+
+### Fleet API
+
+All endpoints live under the `/fleet` prefix and return the standard
+`{"status","operation","data","error","meta"}` envelope.
+
+| Method | Endpoint | Description | Success | Errors |
+|--------|----------|-------------|---------|--------|
+| POST | `/fleet/nodes/register` | Register a worker node | 201 | 409 duplicate URL |
+| POST | `/fleet/nodes/{node_id}/unregister` | Soft-remove a node | 200 | 404 unknown node |
+| GET | `/fleet/nodes` | List nodes with health + load | 200 | — |
+| GET | `/fleet/nodes/{node_id}/health` | Probe one node's `/health` | 200 | 404 unknown node |
+| POST | `/fleet/nodes/health-check` | Recheck every node now | 200 | — |
+| POST | `/fleet/nodes/{node_id}/health-check` | Recheck one node now | 200 | 404 unknown node |
+| POST | `/fleet/session` | Allocate a session (least-loaded node) | 200 | 202 queued, 409 duplicate id, 503 queue full / no healthy node |
+| GET | `/fleet/session/{session_id}` | Session status | 200 | 404 unknown session |
+| POST | `/fleet/session/{session_id}/release` | Release a session | 200 | 404 unknown session |
+| GET | `/fleet/sessions` | List sessions (active/queued counts) | 200 | — |
+| POST | `/fleet/queue/sweep` | Purge expired queue entries | 200 | — |
+| POST | `/fleet/failover` | Fail a node's sessions over | 200 | — |
+| GET | `/fleet` | Fleet console page (HTML) | 200 | — |
 
 State persists in `~/.browser-helper/fleet.db` (override with
 `FLEET_DB_PATH`); the coordinator is `src/fleet/api.py`, backed by the
