@@ -8,9 +8,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-import pytest  # noqa: E402
+import pytest
 
-from fleet import (  # noqa: E402
+from fleet import (
     FailoverManager,
     FleetHealthChecker,
     FleetQueueManager,
@@ -37,6 +37,7 @@ def test_v115_failures_are_404_only():
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
     out = proc.stdout + proc.stderr
     assert "29 failed" in out, out[-2000:]
