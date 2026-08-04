@@ -4,7 +4,9 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
-### Added
+### [1.20.0] — 2026-08-04
+
+#### Added
 - Accessible visual workflow builder for navigate, click, type, wait-for-element, screenshot, page analysis, and page text actions.
 - Bidirectional visual/JSON editing with explicit synchronization, validation, add, duplicate, reorder, and remove controls.
 - Responsive workflow step cards, focus-visible states, screen-reader announcements, and local privacy-safe builder telemetry.
