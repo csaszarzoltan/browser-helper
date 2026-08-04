@@ -10,6 +10,7 @@ All notable changes to browser-helper will be documented in this file.
 - Responsive workflow step cards, focus-visible states, screen-reader announcements, and local privacy-safe builder telemetry.
 - TDD acceptance coverage in `tests/test_visual_workflow_builder_v219.py` and operator documentation in `docs/visual-workflow-builder.md`.
 - Privacy-safe daily work launchpad and `GET /api/v1/launchpad` from v1.18.0.
+- Fleet orchestration (v1.18.0): node registry, health polling, least-loaded session pool with FIFO queueing and 503+`Retry-After` backpressure, and save/restore failover — REST surface under `/fleet/*` (see `src/fleet/api.py`), `python -m fleet.cli node list` / `session list`, Fleet dashboard tab, and SQLite state in `~/.browser-helper/fleet.db`. Contract coverage in `tests/test_fleet_v115.py` (29 integration tests).
 
 - Task-oriented dashboard workspaces for Overview, Live Browser, Automation, Diagnostics, and Agent Tools.
 - Persistent active context, Ctrl/Cmd+K command palette, connection-aware controls, safe destructive-action confirmation, and local privacy-preserving telemetry hooks.

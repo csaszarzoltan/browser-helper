@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fleet — Browser Helper</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      margin: 0; padding: 2rem; line-height: 1.5;
+      background: #f6f7f9; color: #1c1e21;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #121417; color: #e7e9ec; }
+    }
+    header h1 { margin: 0 0 0.25rem; }
+    header p { margin: 0 0 1.5rem; opacity: 0.8; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .card { background: #fff; border: 1px solid #d5d9de; border-radius: 10px; padding: 1rem; }
+    @media (prefers-color-scheme: dark) {
+      .card { background: #1b1e22; border-color: #2c3138; }
+    }
+    .card h2 { margin: 0 0 0.5rem; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+    .card .value { font-size: 1.8rem; font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; }
+    @media (prefers-color-scheme: dark) { table { background: #1b1e22; } }
+    th, td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid #e2e5e9; }
+    @media (prefers-color-scheme: dark) { th, td { border-bottom-color: #2c3138; } }
+    th { opacity: 0.7; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+    .badge.ok { background: #e2f4e5; color: #176b2f; }
+    .badge.down { background: #fde3e3; color: #a11f1f; }
+    @media (prefers-color-scheme: dark) { .badge.ok { background: #16301d; color: #6fd48a; } .badge.down { background: #3a1616; color: #ff9b9b; } }
+    #status { opacity: 0.7; font-size: 0.85rem; }
+    .error { color: #a11f1f; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Fleet</h1>
+    <p>Fleet orchestration console — distributed browser-helper worker nodes.</p>
+    <p id="status">Loading fleet state…</p>
+  </header>
+
+  <section class="cards" aria-label="Fleet summary">
+    <div class="card"><h2>Nodes</h2><div class="value" id="stat-total">–</div></div>
+    <div class="card"><h2>Healthy</h2><div class="value" id="stat-healthy">–</div></div>
+    <div class="card"><h2>Unhealthy</h2><div class="value" id="stat-unhealthy">–</div></div>
+    <div class="card"><h2>Active sessions</h2><div class="value" id="stat-sessions">–</div></div>
+  </section>
+
+  <table aria-label="Registered fleet nodes">
+    <thead>
+      <tr>
+        <th>Node</th><th>URL</th><th>Capabilities</th>
+        <th>Load</th><th>Status</th><th>Last error</th>
+      </tr>
+    </thead>
+    <tbody id="nodes-body">
+      <tr><td colspan="6">No nodes registered yet.</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    async function refresh() {
+      const statusEl = document.getElementById("status");
+      try {
+        const resp = await fetch("/fleet/nodes");
+        const body = await resp.json();
+        const data = body.data || {};
+        const nodes = data.nodes || [];
+        document.getElementById("stat-total").textContent = data.total ?? nodes.length;
+        document.getElementById("stat-healthy").textContent = data.healthy ?? 0;
+        document.getElementById("stat-unhealthy").textContent = data.unhealthy ?? 0;
+        const active = nodes.reduce((sum, n) => sum + (n.active_sessions || 0), 0);
+        document.getElementById("stat-sessions").textContent = active;
+        const tbody = document.getElementById("nodes-body");
+        if (!nodes.length) {
+          tbody.innerHTML = '<tr><td colspan="6">No nodes registered yet.</td></tr>';
+        } else {
+          tbody.innerHTML = nodes.map((n) => `
+            <tr>
+              <td><code>${n.node_id}</code></td>
+              <td>${n.url}</td>
+              <td>${(n.capabilities || []).join(", ") || "—"}</td>
+              <td>${n.active_sessions}/${n.capacity}</td>
+              <td>${n.healthy ? '<span class="badge ok">healthy</span>' : '<span class="badge down">unhealthy</span>'}</td>
+              <td>${n.last_error ? escapeHtml(n.last_error) : "—"}</td>
+            </tr>`).join("");
+        }
+        statusEl.textContent = "Updated " + new Date().toLocaleTimeString();
+      } catch (err) {
+        statusEl.textContent = "Fleet API unreachable: " + err;
+        statusEl.className = "error";
+      }
+    }
+    function escapeHtml(s) {
+      const div = document.createElement("div");
+      div.textContent = s;
+      return div.innerHTML;
+    }
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

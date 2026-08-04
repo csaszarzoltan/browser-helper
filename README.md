@@ -20,6 +20,31 @@ The Overview workspace starts with a privacy-safe **Continue your work** launchp
 
 The dashboard now groups existing controls into **Overview**, **Live Browser**, **Automation**, **Diagnostics**, and **Agent Tools** workspaces. The Live Browser workspace includes a guided daily flow for validated navigation, screenshot capture, compact observation, and private local reuse of the five most recent URLs. Guided actions also receive tab-session-scoped correlation IDs, timing, outcomes, retry controls, and redacted JSON export. The Automation workspace now includes safe starter templates, preflight validation, formatting, and explicit bounded local draft persistence. Session state handling now adds validation, secure-use guidance, bounded JSON import, download, confirmed restore, and a no-dashboard-persistence policy. Diagnostics now supports non-destructive operation search, status filtering, visible counts, and bounded redacted JSON/CSV export. Tab management now adds title/URL search, inline validated tab opening, accessible dynamic actions, confirmed closing, and context refresh after switching. Network diagnostics now adds capture-state feedback, request search, method and status-family filters, sensitive query redaction, and bounded JSON/CSV export. Cookie diagnostics now masks values, supports metadata search and security filters, and exports metadata without cookie values. It includes a persistent active-context bar, connection-aware controls, destructive-action confirmation, accessible status announcements, and a **Ctrl/Cmd+K** command palette. Existing REST and WebSocket contracts are unchanged. See [Task-oriented dashboard workspaces](docs/dashboard-workspaces.md).
 
+## Fleet Orchestration (v1.18.0)
+
+Distributed browser fleet management: a coordinator registers worker nodes,
+probes their `/health` endpoints, schedules sessions across the least-loaded
+healthy node, queues allocation requests at capacity, and fails sessions over
+when a node dies.
+
+- **Node registry** — `POST /fleet/nodes/register`,
+  `POST /fleet/nodes/{node_id}/unregister`, `GET /fleet/nodes`
+- **Health checking** — `GET /fleet/nodes/{node_id}/health`,
+  `POST /fleet/nodes/health-check`
+- **Session pool** — `POST /fleet/session`, `GET /fleet/session/{session_id}`,
+  `POST /fleet/session/{session_id}/release`, `GET /fleet/sessions`
+- **Queueing** — FIFO queue with TTL and 503 + `Retry-After` backpressure;
+  `POST /fleet/queue/sweep` purges expired entries
+- **Failover** — `POST /fleet/failover` re-allocates a dead node's sessions
+  with save/restore state transfer
+- **CLI** — `python -m fleet.cli node list`, `python -m fleet.cli session list`
+- **Dashboard** — the Fleet workspace tab and `GET /fleet` console page
+
+State persists in `~/.browser-helper/fleet.db` (override with
+`FLEET_DB_PATH`); the coordinator is `src/fleet/api.py`, backed by the
+`src/fleet/` package (storage, node registry, health checker, session pool,
+queue manager, failover).
+
 ## Why?
 
 **The Problem:** AI agents (Hermes, etc.) running on a remote server need to control Chrome on your local machine through an SSH tunnel. Standard CDP tools (snapshot, vision) send megabytes over the tunnel — every operation takes seconds.

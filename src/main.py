@@ -155,8 +155,24 @@ async def lifespan(application: FastAPI):
                 logger.warning("Chrome auto-launch failed: %s", result.get("error", "unknown"))
         except Exception as exc3:
             logger.warning("Chrome auto-launch exception: %s", exc3)
+    # ── Fleet orchestration (v1.18.0): start the health poller ──
+    try:
+        from fleet.api import get_fleet_coordinator
+
+        _fleet_coordinator = get_fleet_coordinator()
+        _fleet_coordinator.start()
+        logger.info("Fleet health poller started")
+    except Exception as exc:  # noqa: BLE001 — startup must never abort the server
+        logger.warning("Fleet coordinator startup failed: %s", exc)
     yield
     # Shutdown
+    # Stop the fleet health poller / release its HTTP client
+    try:
+        from fleet.api import get_fleet_coordinator
+
+        await get_fleet_coordinator().stop()
+    except Exception as exc:  # noqa: BLE001 — shutdown must never abort teardown
+        logger.warning("Fleet coordinator shutdown failed: %s", exc)
     if client.is_connected:
         try:
             await client.disconnect()
@@ -3656,6 +3672,21 @@ if os.path.isdir(STATIC_DIR):
     logger.info("Serving static files from %s", STATIC_DIR)
 else:
     logger.warning("Static directory not found: %s", STATIC_DIR)
+
+
+# ---------------------------------------------------------------------------
+# Fleet orchestration router (v1.18.0) — /fleet/* endpoints
+# ---------------------------------------------------------------------------
+from fleet.api import router as fleet_router  # imported after app is created
+
+# NOTE: we extend ``app.routes`` with the router's concrete APIRoute objects
+# instead of ``app.include_router()``.  This FastAPI version wraps included
+# routers in a lazy ``_IncludedRouter`` placeholder that has no ``.path``
+# attribute, which breaks route-introspection tests (e.g.
+# ``test_enterprise_workspace.py::test_enterprise_routes_are_present``) that
+# iterate ``app.routes``.  The router's routes carry the ``/fleet`` prefix
+# baked in, so extending the list is equivalent for matching and schema.
+app.routes.extend(fleet_router.routes)
 
 
 # ---------------------------------------------------------------------------

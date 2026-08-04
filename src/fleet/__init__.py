@@ -15,12 +15,11 @@ Module layout::
         session_pool.py    FleetSessionPool — least-loaded allocation + failover
         queue_manager.py   FleetQueueManager — FIFO queue, TTL, 503 + Retry-After
         failover.py        FailoverManager — state transfer on node failure
-
-The API router (``src/fleet/api.py``), CLI, dashboard, and the
-``FleetCoordinator`` facade that ties the services together land in the
-API-wiring task; they consume the exports below.
+        api.py             FleetCoordinator facade + FastAPI router (/fleet/*)
+        cli.py             ``python -m fleet.cli node list`` / ``session list``
 """
 
+from fleet.api import FleetCoordinator
 from fleet.failover import FailoverManager
 from fleet.health_checker import FleetHealthChecker
 from fleet.node_registry import DuplicateNodeError, Node, NodeRegistry
@@ -38,6 +37,7 @@ __all__ = [
     "DEFAULT_MAX_QUEUE",
     "DuplicateNodeError",
     "FailoverManager",
+    "FleetCoordinator",
     "FleetHealthChecker",
     "FleetQueueManager",
     "FleetSQLite",
