@@ -4,11 +4,12 @@ Usage::
 
     python -m fleet.cli node list       # → GET  http://localhost:8000/fleet/nodes
     python -m fleet.cli session list    # → GET  http://localhost:8000/fleet/sessions
+    python -m fleet.cli --base-url http://localhost:9000 node list
 
-The coordinator base URL comes from ``FLEET_API_URL`` (default
-``http://localhost:8000``) and the Bearer token from ``API_TOKEN`` (the same
-variable the server's auth middleware reads).  When the coordinator is
-unreachable the CLI prints a readable message and exits 0 — the integration
+The coordinator base URL comes from ``--base-url`` or ``FLEET_API_URL``
+(default ``http://localhost:8000``) and the Bearer token from ``API_TOKEN``
+(the same variable the server's auth middleware reads).  When the coordinator
+is unreachable the CLI prints a readable message and exits 0 — the integration
 tests exercise the CLI without a live server, so a clean, explanatory report
 is the contract, not a non-zero exit.
 """
@@ -25,9 +26,9 @@ import httpx
 DEFAULT_BASE_URL = "http://localhost:8000"
 
 
-def _base_url() -> str:
-    """Resolve the coordinator base URL from ``FLEET_API_URL``."""
-    return os.environ.get("FLEET_API_URL", DEFAULT_BASE_URL).rstrip("/")
+def _base_url(explicit: str | None = None) -> str:
+    """Resolve the coordinator base URL from ``--base-url`` or ``FLEET_API_URL``."""
+    return (explicit or os.environ.get("FLEET_API_URL") or DEFAULT_BASE_URL).rstrip("/")
 
 
 def _headers() -> dict[str, str]:
@@ -36,9 +37,9 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def _fetch(path: str) -> dict[str, Any] | None:
+def _fetch(path: str, base_url: str | None = None) -> dict[str, Any] | None:
     """GET ``path`` on the coordinator; None when unreachable or erroring."""
-    url = f"{_base_url()}{path}"
+    url = f"{_base_url(base_url)}{path}"
     try:
         resp = httpx.get(url, headers=_headers(), timeout=5.0)
     except httpx.HTTPError as exc:
@@ -57,9 +58,9 @@ def _fetch(path: str) -> dict[str, Any] | None:
     return body if isinstance(body, dict) else {}
 
 
-def _node_list() -> int:
+def _node_list(base_url: str | None = None) -> int:
     """``fleet node list`` — print registered nodes and a health summary."""
-    body = _fetch("/fleet/nodes")
+    body = _fetch("/fleet/nodes", base_url)
     if body is None:
         return 0
     data = body.get("data") or {}
@@ -77,9 +78,9 @@ def _node_list() -> int:
     return 0
 
 
-def _session_list() -> int:
+def _session_list(base_url: str | None = None) -> int:
     """``fleet session list`` — print fleet sessions and a status summary."""
-    body = _fetch("/fleet/sessions")
+    body = _fetch("/fleet/sessions", base_url)
     if body is None:
         return 0
     data = body.get("data") or {}
@@ -102,6 +103,14 @@ def main(argv: list[str] | None = None) -> int:
         prog="fleet.cli",
         description="Fleet orchestration CLI (thin wrapper over the REST API).",
     )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help=(
+            "Coordinator base URL (default: $FLEET_API_URL or "
+            f"{DEFAULT_BASE_URL})"
+        ),
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     node_parser = sub.add_parser("node", help="fleet node operations")
@@ -115,9 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "node" and args.action == "list":
-        return _node_list()
+        return _node_list(args.base_url)
     if args.command == "session" and args.action == "list":
-        return _session_list()
+        return _session_list(args.base_url)
     parser.print_help()
     return 0
 

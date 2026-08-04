@@ -24,7 +24,8 @@
     automation: 'Run repeatable scripts and save or restore browser state.',
     environments: 'Create and activate reusable, non-secret browser environment recipes.',
     diagnostics: 'Inspect operations, network activity, cookies, and console output.',
-    agent: 'Observe and act through the compact LLM agent interface.'
+    agent: 'Observe and act through the compact LLM agent interface.',
+    fleet: 'Registered fleet nodes, session allocation, and fleet health.'
   };
 
   const emitTelemetry = (name, detail = {}) => {
@@ -1533,6 +1534,96 @@
     loadEnvironments();
   };
 
+  // ── Fleet workspace ──────────────────────────────────────
+  let fleetRefreshTimer = null;
+  const FLEET_REFRESH_MS = 5000;
+
+  const escapeHtml = (value) => {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  };
+
+  const fleetStatusPill = (healthy) =>
+    healthy ? '<span class="fleet-pill ok">healthy</span>' : '<span class="fleet-pill down">unhealthy</span>';
+
+  const renderFleetNodes = (nodes, summary = {}) => {
+    const totalEl = document.getElementById('fleet-stat-total');
+    const healthyEl = document.getElementById('fleet-stat-healthy');
+    const unhealthyEl = document.getElementById('fleet-stat-unhealthy');
+    if (totalEl) totalEl.textContent = summary.total ?? nodes.length;
+    if (healthyEl) healthyEl.textContent = summary.healthy ?? 0;
+    if (unhealthyEl) unhealthyEl.textContent = summary.unhealthy ?? 0;
+    const badge = document.getElementById('fleet-nodes-badge');
+    if (badge) badge.textContent = `${nodes.length} node${nodes.length === 1 ? '' : 's'}`;
+    const tbody = document.getElementById('fleet-nodes-body');
+    if (!tbody) return;
+    if (!nodes.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No nodes registered yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = nodes.map((node) => `
+      <tr>
+        <td><code>${escapeHtml(node.node_id)}</code></td>
+        <td title="${escapeHtml(node.url)}">${escapeHtml(node.url)}</td>
+        <td>${fleetStatusPill(Boolean(node.healthy))}</td>
+        <td>${Number(node.active_sessions || 0)}/${Number(node.capacity || 0)}</td>
+        <td>${escapeHtml((node.capabilities || []).join(', ') || '—')}</td>
+      </tr>`).join('');
+  };
+
+  const renderFleetSessions = (sessions, summary = {}) => {
+    const activeEl = document.getElementById('fleet-stat-sessions');
+    if (activeEl) activeEl.textContent = summary.active ?? sessions.filter((s) => s.status !== 'queued').length;
+    const badge = document.getElementById('fleet-sessions-badge');
+    if (badge) badge.textContent = `${sessions.length} session${sessions.length === 1 ? '' : 's'}`;
+    const tbody = document.getElementById('fleet-sessions-body');
+    if (!tbody) return;
+    if (!sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No fleet sessions yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = sessions.map((session) => `
+      <tr>
+        <td><code>${escapeHtml(session.session_id)}</code></td>
+        <td>${escapeHtml(session.status)}${session.queued ? ' (queued)' : ''}</td>
+        <td><code>${escapeHtml(session.node_id || '—')}</code></td>
+        <td title="${escapeHtml(session.node_url || '')}">${escapeHtml(session.node_url || '—')}</td>
+      </tr>`).join('');
+  };
+
+  const loadFleetState = async () => {
+    const status = document.getElementById('fleet-status');
+    try {
+      const [nodesResp, sessionsResp] = await Promise.all([
+        fetch('/fleet/nodes', {headers: {Accept: 'application/json'}}),
+        fetch('/fleet/sessions', {headers: {Accept: 'application/json'}})
+      ]);
+      if (!nodesResp.ok || !sessionsResp.ok) {
+        throw new Error(`Fleet request failed (nodes ${nodesResp.status}, sessions ${sessionsResp.status})`);
+      }
+      const nodesPayload = await nodesResp.json();
+      const sessionsPayload = await sessionsResp.json();
+      renderFleetNodes(nodesPayload?.data?.nodes || [], nodesPayload?.data || {});
+      renderFleetSessions(sessionsPayload?.data?.sessions || [], sessionsPayload?.data || {});
+      if (status) status.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      emitTelemetry('fleet_state_loaded', {nodes: nodesPayload?.data?.nodes?.length || 0, sessions: sessionsPayload?.data?.sessions?.length || 0});
+    } catch (error) {
+      if (status) status.textContent = 'Fleet API unreachable. Start the fleet coordinator to see live state.';
+      emitTelemetry('fleet_state_load_failed', {reason: String(error?.message || 'unknown').slice(0, 120)});
+    }
+  };
+
+  const setupFleetWorkspace = () => {
+    document.getElementById('refresh-fleet')?.addEventListener('click', loadFleetState);
+    // Periodic refresh while the fleet workspace is visible (mirrors static/fleet.html).
+    fleetRefreshTimer = window.setInterval(() => {
+      const fleetCard = document.querySelector('#workspace-main .card[data-workspace="fleet"]');
+      if (fleetCard && !fleetCard.hidden) loadFleetState();
+    }, FLEET_REFRESH_MS);
+    loadFleetState();
+  };
+
   const bridgeExistingState = () => {
     const original = window.updateState;
     window.updateState = function updateStateWithContext(state) {
@@ -1563,6 +1654,7 @@
     setupCookieAssistant();
     setupRunTimeline();
     setupEnvironmentWorkspace();
+    setupFleetWorkspace();
     bridgeExistingState();
     document.getElementById('refresh-capabilities')?.addEventListener('click', loadCapabilityReadiness);
     loadCapabilityReadiness();

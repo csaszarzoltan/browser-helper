@@ -264,6 +264,18 @@ input[type="text"] { width: 100%; }
 /* ── Empty state ───────────────────────────────────────────── */
 .empty-state { padding: 16px; text-align: center; color: #475569; font-size: .8rem; }
 
+/* ── Fleet workspace ───────────────────────────────────────── */
+.fleet-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+.fleet-stat { background: #1f2b3d; border: 1px solid #2a3a4e; border-radius: 8px; padding: 10px 12px; }
+.fleet-stat-label { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: #94a3b8; margin-bottom: 4px; }
+.fleet-stat-value { font-size: 1.4rem; font-weight: 700; color: #e2e8f0; }
+.fleet-stat-value.fleet-ok { color: #22c55e; }
+.fleet-stat-value.fleet-down { color: #ef4444; }
+.fleet-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .72rem; font-weight: 600; }
+.fleet-pill.ok { background: rgba(34,197,94,.15); color: #22c55e; }
+.fleet-pill.down { background: rgba(239,68,68,.15); color: #ef4444; }
+.fleet-pill.muted { background: #2a3a4e; color: #94a3b8; }
+
 /* ── Responsive tweaks ─────────────────────────────────────── */
 @media (max-width: 600px) {
   .dashboard-header { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -914,6 +926,65 @@ input[type="text"] { width: 100%; }
     <pre id="agent-output" style="max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:12px">Agent API ready.</pre>
   </div>
 </section>
+
+  <!-- ═══════════════ FLEET WORKSPACE ═══════════════ -->
+  <section class="card full-width" id="fleet-overview-card" data-workspace="fleet" aria-labelledby="fleet-overview-title">
+    <div class="card-header">
+      <h2 id="fleet-overview-title"><i class="fas fa-network-wired" aria-hidden="true"></i> Fleet overview</h2>
+      <button id="refresh-fleet" type="button" class="btn sm"><i class="fas fa-sync" aria-hidden="true"></i> Refresh</button>
+    </div>
+    <div class="card-body no-scroll">
+      <p id="fleet-status" role="status" aria-live="polite">Loading fleet state…</p>
+      <div class="fleet-summary">
+        <div class="fleet-stat"><span class="fleet-stat-label">Nodes</span><span class="fleet-stat-value" id="fleet-stat-total">–</span></div>
+        <div class="fleet-stat"><span class="fleet-stat-label">Healthy</span><span class="fleet-stat-value fleet-ok" id="fleet-stat-healthy">–</span></div>
+        <div class="fleet-stat"><span class="fleet-stat-label">Unhealthy</span><span class="fleet-stat-value fleet-down" id="fleet-stat-unhealthy">–</span></div>
+        <div class="fleet-stat"><span class="fleet-stat-label">Active sessions</span><span class="fleet-stat-value" id="fleet-stat-sessions">–</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card full-width" id="fleet-nodes-card" data-workspace="fleet" aria-labelledby="fleet-nodes-title">
+    <div class="card-header">
+      <h2 id="fleet-nodes-title"><i class="fas fa-server" aria-hidden="true"></i> Registered nodes</h2>
+      <span class="badge" id="fleet-nodes-badge">0 nodes</span>
+    </div>
+    <div class="card-body no-scroll">
+      <div class="table-wrap">
+        <table class="cookie-table">
+          <thead>
+            <tr>
+              <th>Node</th><th>URL</th><th>Status</th><th>Load</th><th>Capabilities</th>
+            </tr>
+          </thead>
+          <tbody id="fleet-nodes-body">
+            <tr><td colspan="5" class="empty-state">No nodes registered yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card full-width" id="fleet-sessions-card" data-workspace="fleet" aria-labelledby="fleet-sessions-title">
+    <div class="card-header">
+      <h2 id="fleet-sessions-title"><i class="fas fa-window-restore" aria-hidden="true"></i> Fleet sessions</h2>
+      <span class="badge" id="fleet-sessions-badge">0 sessions</span>
+    </div>
+    <div class="card-body no-scroll">
+      <div class="table-wrap">
+        <table class="cookie-table">
+          <thead>
+            <tr>
+              <th>Session</th><th>Status</th><th>Node</th><th>Node URL</th>
+            </tr>
+          </thead>
+          <tbody id="fleet-sessions-body">
+            <tr><td colspan="4" class="empty-state">No fleet sessions yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 </main>
 <dialog id="command-palette" class="command-palette" aria-modal="true" aria-labelledby="command-palette-title">
   <header><strong id="command-palette-title">Find a workspace or action</strong><button type="button" class="btn sm" data-close-palette aria-label="Close command palette">Close</button></header>
