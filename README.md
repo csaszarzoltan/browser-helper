@@ -138,7 +138,89 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 See [LLM Agent API](docs/agent-api.md).
 
-### v1.8 — Anti-Detection Platform (Latest)
+### v1.21 — MCP Server (Latest)
+
+Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server exposing the browser and fleet engine as 12 MCP tools — for Claude Code, Codex CLI, Cursor, Windsurf, or any MCP client. Tools call the same engine the REST API uses, in-process (no HTTP self-calls, no LLM).
+
+#### Quick start
+
+```bash
+# stdio (default) — for local agents: Claude Code, Codex CLI, Cursor
+bh mcp
+# streamable HTTP — for remote/HTTP agents: Cursor/Windsurf MCP settings, custom clients
+bh mcp --http --host 0.0.0.0 --port 8765
+```
+
+Other entry points: `bh-mcp` / `browser-helper-mcp` (console scripts), `python -m browser_helper.mcp` (argparse shim). Transports: `stdio` (default), `sse` (`bh mcp --sse`), `streamable-http` (`bh mcp --http`; `http` is not a valid `--transport` literal — use `streamable-http`).
+
+#### Client configuration
+
+**Claude Code / Claude Desktop (stdio)** — `~/.claude.json` under `mcpServers`, or `claude mcp add browser-helper -- bh mcp` (when installed with `pip install -e .`):
+
+```json
+{
+  "mcpServers": {
+    "browser-helper": {
+      "command": "python",
+      "args": ["-m", "browser_helper.mcp"],
+      "cwd": "/path/to/browser-helper"
+    }
+  }
+}
+```
+
+**Codex CLI (stdio)** — run from the repo root (or add `cwd`):
+
+```bash
+codex mcp add browser-helper -- python -m browser_helper.mcp
+```
+
+**Cursor / Windsurf (HTTP)** — start the server bound to a reachable address, then point the client at `http://localhost:8765/mcp`:
+
+```bash
+bh mcp --http --host 0.0.0.0 --port 8765
+```
+
+```json
+{
+  "mcpServers": {
+    "browser-helper": {
+      "url": "http://localhost:8765/mcp"
+    }
+  }
+}
+```
+
+(Cursor: project/global `.cursor/mcp.json`; Windsurf: `~/.codeium/windsurf/mcp_config.json`. For a client on another machine, replace `localhost` with the server host.)
+
+#### Tool reference (12 tools)
+
+All tools are backed by READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`); EXPERIMENTAL/UNAVAILABLE capabilities never surface. Every tool returns a JSON string with the REST envelope shape (`status`/`operation`/`data`/`error`/`meta`).
+
+| Tool | Parameters | Capability | REST mirror |
+|------|-----------|------------|-------------|
+| `navigate` | `url` (str, required) | `browser.core` | `POST /navigate` |
+| `click` | `selector` (str, required) | `browser.core` | `POST /click` |
+| `type` | `selector` (str, required), `text` (str, required) | `browser.core` | `POST /type` |
+| `screenshot` | — | `browser.core` | `POST /screenshot` |
+| `snapshot` | — | `agent.semantic` | `POST /page/analyze` |
+| `get_tabs` | — | `browser.core` | `GET /tabs` |
+| `switch_tab` | `id` (str, required) | `browser.core` | `POST /switch_tab/{tab_id}` |
+| `close_tab` | `id` (str, required) | `browser.core` | `POST /tab/close/{tab_id}` |
+| `session_status` | — | `diagnostics.privacy` | `GET /api/v1/session` |
+| `fleet_nodes` | — | `workflow.local` | `GET /fleet/nodes` |
+| `fleet_status` | — | `workflow.local` | `GET /fleet/sessions` |
+| `fleet_queue` | — | `workflow.local` | (allocation-queue peek) |
+
+Fleet tools are read-only (`meta.read_only: true`); browser tools need a live CDP connection (start Browser Helper / Chrome with `--remote-debugging-port=9555` first).
+
+#### Configuration
+
+Precedence: **CLI > env > settings.json > defaults**. `MCP_ENABLED`/`mcp_enabled` gates only auto-start scenarios (never blocks explicit `bh mcp`); `MCP_PORT`/`mcp_port` (default `8765`) applies to HTTP/SSE binds only — stdio binds no port.
+
+See [MCP Server](docs/mcp-server.md) for architecture, transport modes, fleet integration, troubleshooting, and the full tool reference.
+
+### v1.8 — Anti-Detection Platform
 
 | Feature | Endpoint / Module | Description |
 |---------|------------------|-------------|
@@ -148,7 +230,7 @@ See [LLM Agent API](docs/agent-api.md).
 | ✅ Anti-Detection Compositor | `POST /api/v1/compose`, `POST /api/v1/compose/test`, `POST /api/v1/compose/export`, `POST /api/v1/compose/import`, `POST /api/v1/compose/resolve`, `POST /api/v1/compose/resolve-stealth` | `AntiDetectCompositor` (src/anti_detection/compositor.py) — one bundle combining fingerprint template + proxy strategy + stealth level + session TTL; compose, detect-test, export/import JSON, resolve JS patches |
 | ✅ Stealth Injection (real CDP) | `StealthInjector` (src/stealth_injector.py) | Real `Page.addScriptToEvaluateOnNewDocument` injection with correctly escaped JS payloads; `low`/`medium`/`high` patch levels |
 
-See [Proxy Rotation Manager](docs/proxy-rotation-manager.md), [Fingerprint Database](docs/fingerprint-database.md), [Session Persistence](docs/session-persistence.md), [Anti-Detection Compositor](docs/anti-detection-compositor.md).
+See [Proxy Rotation Manager](docs/proxy-rotation-manager.md), [Fingerprint Database](docs/fingerprint-database.md), [Session Persistence](docs/session-persistence.md), [Anti-Detection Compositor](docs/anti-detection-compositor.md), [MCP Server](docs/mcp-server.md).
 
 ### v1.7 — Anti-Detection & Cloud Providers
 
@@ -868,6 +950,7 @@ Current test suite: **1,986 tests passed** (release v1.8.0 gate, 2026-07-31), in
 | [Fingerprint Database Example](examples/fingerprint_database.py) | List, generate, add, update, export/import fingerprint templates |
 | [Session Persistence Example](examples/session_persistence.py) | Capture, list, restore, delete, cleanup browser sessions |
 | [Anti-Detection Compositor Example](examples/anti_detect_compositor.py) | Compose bundles, resolve JS patches, export/import, detection test |
+| [MCP Server](docs/mcp-server.md) | v1.21 MCP server — architecture, transports (stdio/SSE/streamable-http), client config (Claude Code, Codex, Cursor/Windsurf), fleet tools, troubleshooting, 12-tool reference |
 
 ## Agent Navigation Engine (v1.3)
 

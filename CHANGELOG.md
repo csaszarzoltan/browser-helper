@@ -4,6 +4,21 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+### [1.21.0] — 2026-08-07
+
+#### Added
+
+**MCP Server** (`src/mcp_server/`, entry points in `pyproject.toml` `[project.scripts]`)
+- Model Context Protocol server exposing the browser and fleet engine as MCP tools for Claude Code, Codex CLI, Cursor, and Windsurf. Backed by the capability registry (`src/capability_registry.py`): 12 READY-backed tools across `browser.core`, `agent.semantic`, `diagnostics.privacy`, and `workflow.local`; EXPERIMENTAL/UNAVAILABLE capabilities never surface (spec `docs/architecture/mcp-server-design.md`).
+- Transports: `stdio` (default, for Claude Code/Codex/Cursor), `sse`, and `streamable-http` (`--http` maps to streamable-http; `http` is not a valid transport literal). Endpoints: `/mcp` (streamable-http), `/sse` (SSE).
+- Entry points: `bh mcp` (Click router in `src/browser_helper/__main__.py`), `bh-mcp` / `browser-helper-mcp` (console scripts), and the argparse shim `python -m browser_helper.mcp` (`src/browser_helper/mcp.py`). Precedence CLI > env (`MCP_ENABLED`/`MCP_PORT`) > settings.json (`mcp_enabled`/`mcp_port`, default `8765`) > defaults.
+- Browser tools (`src/mcp_server/tools.py`): `navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`, `session_status` — each calls the real engine in-process (`main.run_op` + `client.*`, the same path behind the REST endpoints; no LLM, no HTTP self-calls).
+- Fleet tools (`src/mcp_server/fleet_tools.py`): read-only `fleet_nodes`, `fleet_status`, `fleet_queue` over the shared `get_fleet_coordinator()` singleton (SQLite `~/.browser-helper/fleet.db`, `FLEET_DB_PATH` override) — no register/allocate/release/sweep anywhere.
+- Envelope contract (`src/mcp_server/serialization.py`): every tool returns a JSON string with the REST envelope shape (`status`/`operation`/`data`/`error`/`meta`); fleet and `session_status` handlers normalize their own exceptions, and engine failures inside `run_op` return the envelope — so agents can branch on `error.code`/`error.message` uniformly. (Caveat: a missing CDP connection raises `HTTPException` 400 in `run_op`'s pre-flight `ensure_connected()` before the handler can normalize — the agent sees a tool-call error, not an envelope.)
+- Configuration: `MCPSettings` dataclass + `MCPTransport` enum (`src/mcp_server/config.py`); `mcp_enabled` gates only auto-start scenarios and never blocks explicit CLI start; `MCP_PORT` applies only to HTTP/SSE binds.
+- Docs: [MCP Server](docs/mcp-server.md) — quick start, client config (Claude Code, Codex CLI, Cursor/Windsurf), 12-tool reference table, architecture, fleet integration, troubleshooting, verification commands.
+- Tests: `tests/test_mcp_server.py` (55 tests) — interface contract, engine-binding assertions (anti-LLM gate), read-only fleet gates, real FastMCP `list_tools()` integration.
+
 ### [1.20.0] — 2026-08-04
 
 #### Added
