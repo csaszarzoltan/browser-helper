@@ -6,9 +6,9 @@ to a JSON file so that settings survive restarts.
 """
 
 import json
+import logging
 import os
 import platform
-import logging
 
 logger = logging.getLogger("browser-helper.settings")
 
@@ -41,6 +41,8 @@ DEFAULT_SETTINGS = {
     "chrome_path": "",
     "chrome_launched_port": 0,
     "chrome_pid": 0,
+    "mcp_enabled": False,
+    "mcp_port": 8765,
 }
 
 

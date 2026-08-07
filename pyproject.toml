@@ -18,16 +18,27 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-xdist>=3.5",
+    "pytest-testmon>=1.4",
     "ruff>=0.4.0",
 ]
 
 [tool.pytest.ini_options]
 markers = [
+    "quick: fast unit tests (< 1s each) - run with 'pytest -m quick'",
+    "integration: integration tests (may need external services)",
+    "slow: slow tests (> 5s each) - skipped in quick suite",
     "integration: mark tests that require real API keys (skipped by default)",
     "quick: fast unit tests with mocks",
 ]
+addopts = "-n auto -q"
 asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[project.scripts]
+bh = "browser_helper.__main__:bh"
+bh-mcp = "mcp_server.cli:app"
+browser-helper-mcp = "mcp_server.cli:app"

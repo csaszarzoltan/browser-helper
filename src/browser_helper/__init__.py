@@ -1,0 +1,1 @@
+# browser_helper namespace package (only mcp.py and __main__.py live here)
