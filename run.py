@@ -36,6 +36,8 @@ def main():
     parser.add_argument("--backend", type=str, default="cdp",
                         choices=["cdp", "playwright"],
                         help="Automation backend: cdp (default) or playwright")
+    parser.add_argument("--display", type=str, default=None,
+                        help="X11 display for Chrome (e.g. :1); forwarded as CHROME_DISPLAY")
     args = parser.parse_args()
 
     # Pass launch parameters to the server via environment variables
@@ -45,6 +47,8 @@ def main():
             os.environ["CHROME_AUTO_PROFILE"] = args.profile_dir
         if args.debug_port:
             os.environ["CHROME_AUTO_PORT"] = str(args.debug_port)
+    if args.display:
+        os.environ["CHROME_DISPLAY"] = args.display
 
     import uvicorn
 

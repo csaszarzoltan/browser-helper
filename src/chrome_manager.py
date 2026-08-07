@@ -73,6 +73,26 @@ def _find_chrome_with_profile(profile_dir: str) -> int | None:
     return None
 
 
+def _clear_stale_singleton(profile_dir: str) -> None:
+    """Remove Chrome's SingletonLock/SingletonSocket/SingletonCookie.
+
+    These files are created by a running Chrome instance. If the instance
+    crashed, the lock remains and blocks a fresh launch with the same
+    profile (Chrome exits immediately thinking another instance owns it).
+    Called only when no Chrome process actually holds the profile.
+    """
+    import glob as _glob
+
+    for pattern in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        for path in _glob.glob(os.path.join(profile_dir, pattern)):
+            try:
+                if os.path.islink(path) or os.path.isfile(path):
+                    os.unlink(path)
+                    logger.info("Cleared stale %s: %s", pattern, path)
+            except OSError as exc:  # pragma: no cover - defensive
+                logger.warning("Could not clear %s: %s", path, exc)
+
+
 def _kill_process(pid: int) -> None:
     """Kill a process by PID.  Works cross-platform."""
     try:
@@ -183,6 +203,16 @@ class ChromeManager:
                 "already_running": True,
             }
 
+        # ── Clear stale SingletonLock before launching ──
+        # If a previous Chrome instance crashed, Chrome's SingletonLock
+        # (a symlink pointing at a dead PID) remains. A fresh launch with
+        # the same profile sees the lock, assumes another instance owns
+        # the profile, and exits immediately — the browser never comes up
+        # and CDP never answers. Only remove it when no Chrome actually
+        # holds the profile (checked via process scan).
+        if profile_dir and _find_chrome_with_profile(profile_dir) is None:
+            _clear_stale_singleton(profile_dir)
+
         # ── Already running with the SAME profile on another port? ──
         # A second Chrome instance with the same --user-data-dir silently
         # hands off to the first one and exits — so a fresh launch here
@@ -247,11 +277,23 @@ class ChromeManager:
 
         logger.info("Launching: %s", " ".join(cmd))
 
+        # ── X display for Chrome ──
+        # The systemd unit passes --display :1 (via CHROME_DISPLAY env) so
+        # Chrome can attach to the VNC X server. Without DISPLAY set in the
+        # child env, Chrome exits immediately with "Missing X server or
+        # $DISPLAY" — the CDP port never opens.
+        child_env = os.environ.copy()
+        display = os.environ.get("CHROME_DISPLAY") or self.settings.get("chrome_display") or ""
+        if display:
+            child_env["DISPLAY"] = display
+            child_env["CHROME_DISPLAY"] = display
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=child_env,
             )
         except FileNotFoundError:
             return {
