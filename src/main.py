@@ -128,10 +128,13 @@ async def lifespan(application: FastAPI):
         launch_kwargs = {}
         profile = os.environ.get("CHROME_AUTO_PROFILE")
         port = os.environ.get("CHROME_AUTO_PORT")
+        display = os.environ.get("CHROME_DISPLAY")
         if profile:
             launch_kwargs["profile_dir"] = profile
         if port:
             launch_kwargs["port"] = int(port)
+        if display:
+            os.environ["CHROME_DISPLAY"] = display
         try:
             result = await chrome_mgr.launch(**launch_kwargs)
             if result.get("status") == "ok":
@@ -335,6 +338,17 @@ class LaunchRequest(BaseModel):
 
 class StopRequest(BaseModel):
     pid: int | None = None
+
+
+class StealthConfigRequest(BaseModel):
+    """Stealth configuration: ``enabled`` is required, ``level`` optional.
+
+    ``enabled`` is required so a bare POST without intent returns 422
+    (matches the RED-phase contract tests).
+    """
+
+    enabled: bool
+    level: str | None = Field(default=None, pattern=r"^(low|medium|high)$")
 
 
 class DOMClickAllRequest(BaseModel):
@@ -1165,6 +1179,61 @@ async def get_status():
         "active_environment": state.get("active_environment"),
         "cdp_url": state["cdp_url"],
         "log_size": len(operation_log),
+    }
+
+
+@app.get("/stealth/config")
+async def get_stealth_config():
+    """Return the current stealth configuration (enabled level, patches)."""
+    from stealth_injector import LEVEL_PATCHES, StealthInjector
+
+    level = state.get("stealth_level", "medium")
+    injector = StealthInjector()
+    return {
+        "enabled": bool(state.get("stealth_enabled", True)),
+        "level": level,
+        "patches": LEVEL_PATCHES.get(level, []),
+        "available": list(injector.patches.keys()),
+    }
+
+
+@app.post("/stealth/config")
+async def post_stealth_config(body: StealthConfigRequest | None = None):
+    """Enable/disable stealth or change its level.
+
+    Body: ``{"enabled": bool, "level": "low"|"medium"|"high"}`` — ``enabled``
+    is required; ``level`` is optional (keeps the current level). Patches
+    apply to the next page load (they run on every new document).
+    """
+    from stealth_injector import StealthInjector
+
+    if body is not None:
+        state["stealth_enabled"] = body.enabled
+        if body.level is not None:
+            state["stealth_level"] = body.level
+    if client.is_connected and state.get("stealth_enabled", True):
+        try:
+            client._apply_stealth_patches()
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"status": "error", "error": str(exc)}
+    return await get_stealth_config()
+
+
+@app.post("/stealth/test")
+async def post_stealth_test():
+    """Evaluate the stealth patches in the current page.
+
+    Returns ``{patch_name: bool}`` — whether each automation signal is
+    masked (e.g. ``navigator.webdriver`` is no longer ``true``).
+    """
+    from stealth_injector import LEVEL_PATCHES, StealthInjector
+
+    if client.is_connected:
+        injector = StealthInjector()
+        return await injector.verify(client)
+    # Not connected: report the patch set as unverified (False).
+    return {
+        name: False for name in LEVEL_PATCHES.get(state.get("stealth_level", "medium"), [])
     }
 
 

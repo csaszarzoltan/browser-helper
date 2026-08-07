@@ -39,6 +39,40 @@ def _detect_chrome_on_port(port: int) -> bool:
         return False
 
 
+def _find_chrome_with_profile(profile_dir: str) -> int | None:
+    """Find a running Chrome that already holds ``profile_dir``.
+
+    Scans every process's ``--remote-debugging-port`` + ``--user-data-dir``
+    flags. Returns the debug port of the first match, or ``None``. This
+    prevents the "too many browsers" problem: launching again with the
+    same profile hands off to the existing instance (Chrome's
+    SingletonLock), so a second process would be useless — and if the
+    port scan above missed it (e.g. TIME_WAIT), a NEW instance on a new
+    port would be spawned needlessly.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid,args"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except Exception:
+        return None
+    import re as _re
+
+    port_re = _re.compile(r"--remote-debugging-port=(\d+)")
+    for line in out.splitlines():
+        if "chrome" not in line.lower() or "--user-data-dir" not in line:
+            continue
+        if profile_dir not in line:
+            continue
+        m = port_re.search(line)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def _kill_process(pid: int) -> None:
     """Kill a process by PID.  Works cross-platform."""
     try:
@@ -149,6 +183,29 @@ class ChromeManager:
                 "already_running": True,
             }
 
+        # ── Already running with the SAME profile on another port? ──
+        # A second Chrome instance with the same --user-data-dir silently
+        # hands off to the first one and exits — so a fresh launch here
+        # would "start" a browser that immediately dies, or worse, the
+        # auto-increment below spawns a NEW profile-less instance. Find
+        # any Chrome that already holds this profile dir and reuse it.
+        if profile_dir:
+            existing = _find_chrome_with_profile(profile_dir)
+            if existing is not None:
+                self._port = existing
+                self._pid = 0
+                self.settings.set(chrome_launched_port=existing)
+                logger.info(
+                    "Chrome already running with profile %s on port %d — reusing",
+                    profile_dir, existing,
+                )
+                return {
+                    "status": "ok",
+                    "message": "Chrome already running with this profile",
+                    "port": existing,
+                    "already_running": True,
+                }
+
         # ── Port in use but not Chrome → find next free port ──
         actual_port = port
         if _is_port_in_use(port) and not _detect_chrome_on_port(port):
@@ -173,6 +230,11 @@ class ChromeManager:
             "--no-first-run",
             "--no-default-browser-check",
             "--hide-scrollbars",
+            # Anti-bot: without this flag Chrome sets navigator.webdriver=true
+            # and exposes other automation signals that sites (perplexity.ai,
+            # etc.) use to block headless/automated browsers.
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
         ]
 
         # Headless mode: --headless=new (Chrome 112+), fallback --headless for older

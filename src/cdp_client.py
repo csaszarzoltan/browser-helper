@@ -124,6 +124,7 @@ class CDPClient:
 
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
+        self._apply_stealth_patches()
 
         return {
             "status": "ok",
@@ -170,6 +171,7 @@ class CDPClient:
 
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
+        self._apply_stealth_patches()
 
         return {
             "status": "ok",
@@ -179,6 +181,28 @@ class CDPClient:
             "tabs_count": len(pages),
             "cdp_url": ws_url,
         }
+
+    def _apply_stealth_patches(self) -> None:
+        """Inject anti-bot JS patches on every new document.
+
+        Uses the StealthInjector (navigator.webdriver=false, plugins,
+        languages, hardware, window.chrome) so sites like perplexity.ai
+        do not flag the browser as automated. Failures are non-fatal —
+        the browser still works, it just leaks the automation marker.
+        """
+        try:
+            from stealth_injector import StealthInjector
+
+            injector = StealthInjector()
+            result = injector.apply(self, level="medium")
+            if result.get("failed"):
+                logger.warning("Stealth patches failed: %s", result["failed"])
+            else:
+                logger.info(
+                    "Stealth patches applied: %s", ", ".join(result.get("applied", []))
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Stealth patch injection failed: %s", exc)
 
     async def _listener(self):
         """Background listener for CDP WebSocket messages."""
