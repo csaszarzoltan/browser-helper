@@ -1,0 +1,165 @@
+"""ToolDef registry — capability-derived MCP tool surface (pre-dev stub).
+
+SDK-free by design (spec §2.2 / §8.4): this module must never import ``mcp``
+or ``main`` so registry-only unit tests run in SDK-less environments.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable, Iterable, Iterator
+from dataclasses import dataclass
+from typing import Any
+
+from capability_registry import CapabilityRegistry, CapabilityStatus
+
+# Authoritative tool -> capability mapping (spec §4.3). The MCP layer owns
+# parameter schemas (decision D4); the registry stays the source of truth for
+# which capabilities exist and their readiness.
+_TOOL_CAPABILITY = {
+    "navigate": "browser.core",
+    "click": "browser.core",
+    "type": "browser.core",
+    "screenshot": "browser.core",
+    "snapshot": "agent.semantic",
+    "get_tabs": "browser.core",
+    "switch_tab": "browser.core",
+    "close_tab": "browser.core",
+    "session_status": "diagnostics.privacy",
+    "fleet_nodes": "workflow.local",
+    "fleet_status": "workflow.local",
+    "fleet_queue": "workflow.local",
+}
+
+# Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
+# with the exact required params. These are the pre-tester contract and the
+# FastMCP inputSchema gate (non-empty per tool).
+_TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
+    "navigate": {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "URL to navigate to"}},
+        "required": ["url"],
+    },
+    "click": {
+        "type": "object",
+        "properties": {"selector": {"type": "string", "description": "CSS selector"}},
+        "required": ["selector"],
+    },
+    "type": {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector"},
+            "text": {"type": "string", "description": "Text to type"},
+        },
+        "required": ["selector", "text"],
+    },
+    "screenshot": {"type": "object", "properties": {}},
+    "snapshot": {"type": "object", "properties": {}},
+    "get_tabs": {"type": "object", "properties": {}},
+    "switch_tab": {
+        "type": "object",
+        "properties": {"id": {"type": "string", "description": "Tab id"}},
+        "required": ["id"],
+    },
+    "close_tab": {
+        "type": "object",
+        "properties": {"id": {"type": "string", "description": "Tab id"}},
+        "required": ["id"],
+    },
+    "session_status": {"type": "object", "properties": {}},
+    "fleet_nodes": {"type": "object", "properties": {}},
+    "fleet_status": {"type": "object", "properties": {}},
+    "fleet_queue": {"type": "object", "properties": {}},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDef:
+    """A registered MCP tool (spec §4.1)."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    capability_id: str
+    status: CapabilityStatus
+    handler: Callable[..., Awaitable[str]]
+
+
+class ToolDefRegistry:
+    """Sorted, deduplicated registry of ToolDefs (spec §4.2)."""
+
+    def __init__(self, tool_defs: Iterable[ToolDef]) -> None:
+        self._defs: list[ToolDef] = []
+        seen: set[str] = set()
+        for tool in sorted(tool_defs, key=lambda t: t.name):
+            if tool.name in seen:
+                raise ValueError(f"duplicate tool name: {tool.name}")
+            if tool.status is CapabilityStatus.UNAVAILABLE:
+                raise ValueError(
+                    f"tool {tool.name!r} backed by UNAVAILABLE capability "
+                    f"{tool.capability_id!r} — never register UNAVAILABLE tools"
+                )
+            seen.add(tool.name)
+            self._defs.append(tool)
+
+    def by_name(self, name: str) -> ToolDef | None:
+        for tool in self._defs:
+            if tool.name == name:
+                return tool
+        return None
+
+    def capabilities(self) -> list[str]:
+        return sorted({tool.capability_id for tool in self._defs})
+
+    def __iter__(self) -> Iterator[ToolDef]:
+        return iter(self._defs)
+
+    def __len__(self) -> int:
+        return len(self._defs)
+
+
+def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegistry:
+    """Derive the MCP tool surface from the capability registry (spec §4.2).
+
+    Keeps READY + EXPERIMENTAL capabilities only; UNAVAILABLE capabilities
+    never surface as tools.
+
+    Pure registry bookkeeping: resolves each tool's handler *reference* from
+    ``tools.py`` / ``fleet_tools.py`` without calling it, and builds ``ToolDef``
+    records from the authored ``_TOOL_CAPABILITY`` / ``_TOOL_PARAM_SCHEMAS``
+    tables. No engine, no SDK — runs in the RED phase so the 12-tool contract
+    is locked before implementation. The handlers themselves stay stubbed.
+    """
+    capability = registry if registry is not None else CapabilityRegistry.default()
+    ok_ids = {
+        c.id
+        for c in capability.capabilities
+        if c.status is not CapabilityStatus.UNAVAILABLE
+    }
+
+    # Lazy handler resolution avoids engine import at module load (§2.2) and
+    # circularity; handlers are resolved by name but never invoked here.
+    from . import fleet_tools, tools  # lazy import — avoids engine import at module load
+
+    def _handler(name: str):
+        if name in ("fleet_nodes", "fleet_status", "fleet_queue"):
+            return getattr(fleet_tools, name)
+        return getattr(tools, name)
+
+    defs: list[ToolDef] = []
+    for name, capability_id in _TOOL_CAPABILITY.items():
+        if capability_id not in ok_ids:
+            continue  # UNAVAILABLE capability → never surfaces (defense in depth)
+        defs.append(
+            ToolDef(
+                name=name,
+                description=(
+                    f"MCP tool `{name}` — backed by capability `{capability_id}` "
+                    f"(READY). See mcp-server-design.md §4.3."
+                ),
+                parameters=_TOOL_PARAM_SCHEMAS[name],
+                capability_id=capability_id,
+                status=next(c.status for c in capability.capabilities if c.id == capability_id),
+                handler=_handler(name),
+            )
+        )
+    return ToolDefRegistry(defs)
