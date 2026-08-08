@@ -4045,6 +4045,43 @@ async def agent_visual_regression(body: VisualRegressionRequest):
         return api_error("agent_visual_regression", "vr_failed", str(exc), 503)
 
 
+@app.post("/recording/start")
+async def recording_start(quality: int = Query(70, description="JPEG quality 1-100")):
+    """Start CDP screencast recording of the current tab (video capture).
+
+    Frames are collected in memory; call ``/recording/stop`` to get an
+    animated GIF of the flow.
+    """
+    try:
+        result = await run_op("recording_start", client.start_recording, quality)
+        return result
+    except Exception as exc:
+        return api_error("recording_start", "recording_failed", str(exc), 503)
+
+
+@app.post("/recording/stop")
+async def recording_stop():
+    """Stop screencast and return an animated GIF (base64) of the frames."""
+    try:
+        result = await run_op("recording_stop", client.stop_recording)
+        return result
+    except Exception as exc:
+        return api_error("recording_stop", "recording_failed", str(exc), 503)
+
+
+@app.get("/recording/status")
+async def recording_status():
+    """Return whether a screencast recording is active."""
+    target = client
+    sess = _get_current_session()
+    if sess is not None:
+        target = sess.client
+    return api_success("recording_status", {
+        "recording": target._recording_frames is not None,
+        "frames": len(target._recording_frames) if target._recording_frames else 0,
+    })
+
+
 @app.post("/agent/console")
 async def agent_console(body: AgentConsoleRequest | None = None):
     """Return collected console / JS errors / failed network requests.

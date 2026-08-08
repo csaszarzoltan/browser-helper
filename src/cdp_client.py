@@ -55,6 +55,8 @@ class CDPClient:
         self._network_monitoring = False
         self._console_entries: list[dict] = []
         self._console_monitoring = False
+        self._recording_frames: list[str] | None = None
+        self._recording_quality = 70
         self._before_visual_state: dict = {}
         # Event callbacks: method_name -> list of async callbacks
         self._event_callbacks: dict[str, list] = {}
@@ -270,6 +272,21 @@ class CDPClient:
                             cb(msg)
                         except Exception:  # noqa: BLE001
                             logger.warning("Event callback error for %s", ev_method)
+
+                # Screencast frame capture (video recording)
+                if ev_method == "Page.screencastFrame" and self._recording_frames is not None:
+                    params = msg.get("params", {})
+                    data = params.get("data", "")
+                    if data:
+                        self._recording_frames.append(data)
+                        # Acknowledge the frame so Chrome keeps sending
+                        try:
+                            await self._send_command(
+                                "Page.screencastFrameAck",
+                                {"sessionId": params.get("sessionId", 0)},
+                            )
+                        except Exception:
+                            pass
 
         except websockets.exceptions.ConnectionClosed:
             self._connected = False
@@ -2335,6 +2352,56 @@ class CDPClient:
             return {"status": "ok", "tab_id": target_id, "url": url, "title": ""}
         except Exception as exc:
             return {"status": "error", "error": f"CDP createTarget failed: {exc}"}
+
+    async def start_recording(self, quality: int = 70) -> dict:
+        """Start CDP screencast frame capture (video recording).
+
+        Frames are collected in memory as base64 JPEGs; call
+        ``stop_recording`` to get an animated GIF built from them.
+        """
+        self._recording_frames = []
+        self._recording_quality = max(1, min(100, quality))
+        await self._send_command(
+            "Page.startScreencast",
+            {"format": "jpeg", "quality": self._recording_quality, "maxWidth": 1280, "maxHeight": 720},
+        )
+        return {"status": "ok", "recording": True}
+
+    async def stop_recording(self) -> dict:
+        """Stop screencast and return an animated GIF (base64) of the frames.
+
+        Falls back to a single JPEG when no frames were captured.
+        """
+        try:
+            await self._send_command("Page.stopScreencast")
+        except Exception:
+            pass
+        frames = self._recording_frames or []
+        self._recording_frames = None
+        if not frames:
+            return {"status": "ok", "frames": 0, "gif_b64": "", "format": "none"}
+        import base64 as _b64
+        from io import BytesIO
+
+        from PIL import Image
+
+        images = []
+        for f_b64 in frames:
+            try:
+                img = Image.open(BytesIO(_b64.b64decode(f_b64))).convert("RGB")
+                images.append(img)
+            except Exception:
+                continue
+        if not images:
+            return {"status": "ok", "frames": len(frames), "gif_b64": "", "format": "none"}
+        # Minden frame 2.5 fps-re (400ms) — kompakt GIF
+        buf = BytesIO()
+        images[0].save(
+            buf, format="GIF", save_all=True, append_images=images[1:],
+            duration=400, loop=0, optimize=True,
+        )
+        gif_b64 = _b64.b64encode(buf.getvalue()).decode("ascii")
+        return {"status": "ok", "frames": len(images), "gif_b64": gif_b64, "format": "gif"}
 
     async def close_tab(self, tab_id: str) -> dict:
         """Close a browser tab via the CDP HTTP endpoint.
