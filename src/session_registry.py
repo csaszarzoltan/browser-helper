@@ -90,6 +90,38 @@ class SessionRegistry:
         )
         return victim
 
+    async def _reap_orphan_tabs(self, cdp_http_url: str) -> int:
+        """Close browser tabs not owned by any live session.
+
+        Tabs accumulate when a client never echoes its session cookie (each
+        call mints a fresh session+tab) or when an evicted tab's close failed
+        (WS gone).  This reaps those orphans so the tab count stays bounded
+        even for cookie-less clients.
+        """
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as http:
+                resp = await http.get(f"{cdp_http_url.rstrip('/')}/json")
+                resp.raise_for_status()
+                tabs = resp.json()
+        except Exception as exc:
+            logger.debug("orphan-tab scan failed: %s", exc)
+            return 0
+        owned = {s.tab_id for s in self._sessions.values()}
+        orphans = [t.get("id") for t in tabs if t.get("type") == "page" and t.get("id") not in owned]
+        reaped = 0
+        for tid in orphans:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as http:
+                    await http.get(f"{cdp_http_url.rstrip('/')}/json/close/{tid}")
+                reaped += 1
+            except Exception:
+                pass
+        if reaped:
+            logger.info("Reaped %d orphan tab(s) not owned by live sessions", reaped)
+        return reaped
+
     async def create(self, cdp_http_url: str, url: str = "about:blank",
                      profile_dir: str | None = None) -> Session:
         """Create a new session: mint id, open a dedicated tab, attach CDP.
@@ -105,6 +137,12 @@ class SessionRegistry:
         profile (current behaviour).
         """
         async with self._lock:
+            # Reap tabs left behind by cookie-less clients / failed evictions,
+            # so the physical tab count stays bounded even under churn.
+            try:
+                await self._reap_orphan_tabs(cdp_http_url)
+            except Exception:
+                pass
             # Enforce the cap: evict LRU before minting a new one.
             await self._evict_lru()
             sid = uuid.uuid4().hex

@@ -2337,10 +2337,16 @@ class CDPClient:
             return {"status": "error", "error": f"CDP createTarget failed: {exc}"}
 
     async def close_tab(self, tab_id: str) -> dict:
-        """Close a browser tab."""
-        await self._activate_current()
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{self.cdp_http_url}/json/close/{tab_id}")
+        """Close a browser tab via the CDP HTTP endpoint.
+
+        Uses the HTTP ``/json/close/{tab_id}`` endpoint which needs no
+        WebSocket — so it works even when the WS connection is gone.
+        """
+        import httpx
+
+        base = self.cdp_http_url.rstrip("/")
+        async with httpx.AsyncClient(timeout=5.0) as hclient:
+            resp = await hclient.get(f"{base}/json/close/{tab_id}")
             resp.raise_for_status()
         return {"status": "ok", "tab_id": tab_id}
 
