@@ -57,6 +57,8 @@ class CDPClient:
         self._console_monitoring = False
         self._recording_frames: list[str] | None = None
         self._recording_quality = 70
+        self._request_mocks: list[dict] = []
+        self._fetch_enabled = False
         self._before_visual_state: dict = {}
         # Event callbacks: method_name -> list of async callbacks
         self._event_callbacks: dict[str, list] = {}
@@ -287,6 +289,22 @@ class CDPClient:
                             )
                         except Exception:
                             pass
+
+                # Fetch interception (mock API)
+                if ev_method == "Fetch.requestPaused" and self._request_mocks:
+                    params = msg.get("params", {})
+                    req = params.get("request", {})
+                    url = req.get("url", "")
+                    rid = params.get("requestId", "")
+                    # A fő navigációt (Document) mindig átengedjük — a mock
+                    # csak az API/erőforrás-kérésekre vonatkozik.
+                    res_type = params.get("resourceType", "")
+                    # A válaszadás KÜLÖN task-ban fut, hogy a listener ne
+                    # blokkolódjon (a _send_command a listener válaszaira várna
+                    # — holtpont).
+                    asyncio.ensure_future(
+                        self._handle_fetch_paused(rid, url, res_type)
+                    )
 
         except websockets.exceptions.ConnectionClosed:
             self._connected = False
@@ -2123,6 +2141,84 @@ class CDPClient:
         """Clear network log."""
         self._network_entries = []
         return {"status": "ok"}
+
+    # ─── NEW: Request interception (mock API) ─────────────────────
+
+    async def set_request_mocks(self, mocks: list[dict]) -> dict:
+        """Install URL-pattern request mocks via CDP Fetch domain.
+
+        Each mock: ``{"pattern": "regex", "status": 200, "body": "...",
+        "content_type": "application/json"}``.  When a request URL matches
+        the regex, the browser receives the mocked response instead of
+        hitting the network (deterministic UI tests without a backend).
+        """
+        self._request_mocks = list(mocks)
+        if not self._request_mocks:
+            try:
+                await self._send_command("Fetch.disable")
+            except Exception:
+                pass
+            return {"status": "ok", "mocks": 0}
+        if not self._fetch_enabled:
+            try:
+                await self._send_command("Fetch.enable", {
+                    "patterns": [{"urlPattern": "*", "requestStage": "Request"}],
+                    "handleAuthRequests": False,
+                })
+                self._fetch_enabled = True
+                logger.info("Fetch.enable OK (%d mocks)", len(self._request_mocks))
+            except Exception as exc:
+                logger.warning("Fetch.enable failed: %s", exc)
+                raise
+        return {"status": "ok", "mocks": len(self._request_mocks)}
+
+    def _match_mock(self, url: str) -> dict | None:
+        """Return the first mock whose pattern regex matches *url*."""
+        import re
+
+        for m in self._request_mocks or []:
+            try:
+                if re.search(m.get("pattern", ""), url):
+                    return m
+            except re.error:
+                continue
+        return None
+
+    async def _handle_fetch_paused(self, rid: str, url: str, res_type: str) -> None:
+        """Fulfill or continue a paused Fetch request (runs in its own task).
+
+        Runs outside the listener loop so ``_send_command`` can await the
+        response without deadlocking the event dispatch.
+        """
+        import base64 as _b64
+
+        if res_type == "Document":
+            # A fő navigációt mindig átengedjük.
+            try:
+                await self._send_command("Fetch.continueRequest", {"requestId": rid})
+            except Exception:
+                pass
+            return
+        mock = self._match_mock(url)
+        if mock is not None and rid:
+            try:
+                body_b64 = _b64.b64encode(str(mock.get("body", "")).encode()).decode("ascii")
+                await self._send_command("Fetch.fulfillRequest", {
+                    "requestId": rid,
+                    "responseCode": int(mock.get("status", 200)),
+                    "responseHeaders": [
+                        {"name": "Content-Type",
+                         "value": mock.get("content_type", "application/json")},
+                    ],
+                    "body": body_b64,
+                })
+            except Exception:
+                pass
+        elif rid:
+            try:
+                await self._send_command("Fetch.continueRequest", {"requestId": rid})
+            except Exception:
+                pass
 
     # ─── NEW: Batch script execution ──────────────────────────────
 

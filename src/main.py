@@ -785,6 +785,12 @@ class AgentConsoleRequest(BaseModel):
     level: str | None = None  # filter: error | warning | exception | network_error
 
 
+class NetworkMockRequest(BaseModel):
+    """Request interception rules (mock API responses)."""
+
+    mocks: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class AgentFormFillRequest(BaseModel):
     form_ref: str
     data: dict[str, Any]
@@ -4080,6 +4086,21 @@ async def recording_status():
         "recording": target._recording_frames is not None,
         "frames": len(target._recording_frames) if target._recording_frames else 0,
     })
+
+
+@app.post("/network/mock")
+async def network_mock(body: NetworkMockRequest | None = None):
+    """Install URL-pattern request mocks (mock API responses).
+
+    Body: ``{"mocks": [{"pattern": "regex", "status": 200, "body": "...",
+    "content_type": "application/json"}]}``.  Empty list → clear mocks.
+    """
+    try:
+        mocks = body.mocks if body else []
+        result = await run_op("network_mock", client.set_request_mocks, mocks)
+        return result
+    except Exception as exc:
+        return api_error("network_mock", "mock_failed", str(exc), 503)
 
 
 @app.post("/agent/console")
