@@ -116,6 +116,14 @@ async def lifespan(application: FastAPI):
     global start_time
     start_time = time.monotonic()
     logger.info("Browser Helper API starting up ...")
+    # Connect to the LOCAL Chrome on the saved launched/debug port — NOT the
+    # CDPClient default (9555), which may be another machine's SSH tunnel.
+    local_port = (
+        settings_mgr.get("chrome_launched_port")
+        or settings_mgr.get("chrome_debug_port")
+        or 9557
+    )
+    client.cdp_http_url = f"http://127.0.0.1:{local_port}"
     try:
         result = await client.connect()
         state["connected"] = True
@@ -916,6 +924,47 @@ def ensure_connected():
         raise HTTPException(status_code=400, detail="Not connected to CDP. Call POST /connect first.")
 
 
+async def _ensure_browser() -> None:
+    """
+    Ensure a live CDP connection, launching and/or connecting to Chrome if needed.
+
+    Lazy auto-start: if Chrome is not running, launch it with the saved profile
+    on the saved debug port; then (re)connect to the *local* Chrome CDP endpoint.
+    Uses the saved ``chrome_launched_port`` (default 9557) — NOT the CDPClient
+    default (9555), which may be another machine's SSH tunnel.
+
+    Safe to call from any operation endpoint (navigate, eval, click, ...).
+    Does nothing when already connected.
+    """
+    if client.is_connected:
+        return
+    try:
+        launch_result = await chrome_mgr.launch()
+        if launch_result.get("status") != "ok":
+            logger.warning(
+                "Auto-launch failed (continuing with connect attempt): %s",
+                launch_result.get("error", "unknown"),
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Auto-launch exception (continuing): %s", exc)
+
+    # Connect to the local Chrome on the saved launched port (NOT the 9555 default)
+    port = settings_mgr.get("chrome_launched_port") or settings_mgr.get("chrome_debug_port", 9557)
+    cdp_http = f"http://127.0.0.1:{port}"
+    client.cdp_http_url = cdp_http
+    try:
+        result = await client.connect()
+        state["connected"] = True
+        state["cdp_url"] = result.get("cdp_url", cdp_http)
+        logger.info("Auto-connected to local Chrome at %s", state["cdp_url"])
+    except Exception as exc:
+        state["connected"] = False
+        raise HTTPException(
+            status_code=503,
+            detail=f"Chrome unavailable: could not launch/connect to CDP at {cdp_http}: {exc}",
+        )
+
+
 def infer_verification(result: Any) -> str:
     """Infer only explicit outcome verification; never equate transport success with proof."""
     if not isinstance(result, dict):
@@ -939,7 +988,7 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
     Execute a CDP client method, time it, log it, broadcast state,
     and return a standardised response dict.
     """
-    ensure_connected()
+    await _ensure_browser()
     start = time.monotonic()
     try:
         result = await method(*args, **kwargs)
@@ -1534,7 +1583,7 @@ async def page_analyze(condensed: bool = Query(False, description="Enable conden
 
     Replaces 3-4 separate eval() calls.
     """
-    ensure_connected()
+    await _ensure_browser()
     try:
         raw = await (client.analyze_page_condensed() if condensed else client.analyze_page())
         snap = snapshot_store.add(raw)
@@ -1855,7 +1904,7 @@ async def screenshot_baseline(body: BaselineRequest):
 
     Requires an active CDP connection.
     """
-    ensure_connected()
+    await _ensure_browser()
 
     try:
         # Take screenshot via CDP
@@ -1905,7 +1954,7 @@ async def screenshot_compare(body: CompareRequest):
 
     Requires an active CDP connection and an existing baseline.
     """
-    ensure_connected()
+    await _ensure_browser()
 
     # Check baseline exists
     baseline_path = baseline_mgr.get_baseline(
@@ -2350,7 +2399,7 @@ async def confirm_action(confirm: str = Query("analyze", description="Confirmati
     ``?confirm=screenshot`` returns a base64 JPEG screenshot.
     ``?confirm=analyze`` returns visual_state before/after comparison.
     """
-    ensure_connected()
+    await _ensure_browser()
     try:
         if confirm == "screenshot":
             result = await client._confirm_with_screenshot()
@@ -2673,7 +2722,7 @@ async def agent_capabilities():
 @app.post("/agent/observe")
 async def agent_observe(body: AgentObserveRequest):
     """Observe the page as either the legacy semantic snapshot or a real AX tree."""
-    ensure_connected()
+    await _ensure_browser()
     try:
         if body.mode.lower() in {"accessibility", "ax"}:
             if body.snapshot_id:
@@ -2750,7 +2799,7 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
 
 @app.post("/agent/act")
 async def agent_act(body: AgentActionRequest):
-    ensure_connected()
+    await _ensure_browser()
     action = body.action.lower().strip()
     pinned_kind: str | None = None
     pinned_id: str | None = None
@@ -3015,7 +3064,7 @@ async def agent_replay(body: AgentReplayRequest):
 @app.post("/agent/forms/discover")
 async def agent_forms_discover(body: AgentFormDiscoverRequest | None = None):
     """Discover forms; page_with_history first triggers bounded SPA lazy loading."""
-    ensure_connected()
+    await _ensure_browser()
     body = body or AgentFormDiscoverRequest()
     try:
         history = None
@@ -3083,7 +3132,7 @@ async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: 
 @app.post("/agent/forms/fill")
 async def agent_forms_fill(body: AgentFormFillRequest):
     """Fill a discovered form from semantic key/value data and confirm writes."""
-    ensure_connected()
+    await _ensure_browser()
     try:
         snap = await _capture_accessibility_snapshot(include=["forms", "dialogs"])
         result = await _fill_semantic_form(snap, body.form_ref, body.data)
@@ -3100,7 +3149,7 @@ async def agent_forms_fill(body: AgentFormFillRequest):
 @app.post("/agent/extract")
 async def agent_extract(body: AgentExtractRequest):
     """Extract schema-shaped data with source refs and field confidence."""
-    ensure_connected()
+    await _ensure_browser()
     try:
         if body.snapshot_id:
             snap = ax_snapshots.get(body.snapshot_id)
@@ -3123,7 +3172,7 @@ async def agent_extract(body: AgentExtractRequest):
 @app.post("/agent/available-actions")
 async def agent_available_actions():
     """Return actions that are currently possible and their blocking reasons."""
-    ensure_connected()
+    await _ensure_browser()
     try:
         snap = await _capture_accessibility_snapshot()
         result = available_actions(snap)
@@ -3141,7 +3190,7 @@ async def agent_execute_task(body: AgentExecuteTaskRequest):
     filling and a single verified continuation click.  Unsupported or ambiguous
     goals return ``needs_attention`` with current candidate actions.
     """
-    ensure_connected()
+    await _ensure_browser()
     max_steps = min(max(int(body.constraints.get("max_steps", 20)), 1), 50)
     stop_before = {str(item).lower() for item in body.constraints.get("stop_before", [])}
     try:
