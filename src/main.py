@@ -1488,6 +1488,9 @@ async def get_status():
     """Return current connection status."""
     return {
         "connected": client.is_connected,
+        # A default client külön él a session-öktől; ha session-ök vannak,
+        # a böngésző elérhető, még ha a default client nincs is csatlakoztatva.
+        "browser_available": client.is_connected or session_registry.count > 0,
         "tabs_count": client.tabs_count,
         "last_operation": state["last_operation"],
         "last_operation_time": state["last_operation_time"],
