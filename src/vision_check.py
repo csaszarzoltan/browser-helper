@@ -68,6 +68,13 @@ async def assess_screenshot(image_b64: str, prompt: str) -> dict:
                 json=payload,
                 headers=headers,
             )
+            if resp.status_code in (401, 403, 429):
+                # Auth/rate-limit failures are environmental, not flow failures.
+                logger.warning("VLM rejected (%s) — treating as skipped", resp.status_code)
+                return {
+                    "status": "skipped",
+                    "reason": f"vision provider rejected request (HTTP {resp.status_code})",
+                }
             resp.raise_for_status()
             data = resp.json()
         text = (
