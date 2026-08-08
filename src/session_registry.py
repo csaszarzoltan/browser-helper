@@ -36,6 +36,7 @@ class Session:
     tab_id: str
     created: float = field(default_factory=time.monotonic)
     last_seen: float = field(default_factory=time.monotonic)
+    profile_dir: str | None = None
 
     def touch(self) -> None:
         self.last_seen = time.monotonic()
@@ -89,13 +90,19 @@ class SessionRegistry:
         )
         return victim
 
-    async def create(self, cdp_http_url: str, url: str = "about:blank") -> Session:
+    async def create(self, cdp_http_url: str, url: str = "about:blank",
+                     profile_dir: str | None = None) -> Session:
         """Create a new session: mint id, open a dedicated tab, attach CDP.
 
         The Chrome browser must already be running (callers ensure this via
         the auto-launch path).  Raises CDPError if the tab cannot be created.
         When the session cap is reached, the least-recently-used session is
         evicted first (its tab closed) so the tab count never exceeds the cap.
+
+        *profile_dir*: optional Chrome user-data dir for the new tab.  When
+        set, the tab is created with that profile's cookies/storage (cookie
+        isolation between sessions); when omitted the tab shares the default
+        profile (current behaviour).
         """
         async with self._lock:
             # Enforce the cap: evict LRU before minting a new one.
@@ -105,17 +112,88 @@ class SessionRegistry:
             # Point the fresh client at the running Chrome and open its own tab
             # via the HTTP /json/new endpoint (needs no WebSocket yet).
             client.cdp_http_url = cdp_http_url.rstrip("/")
-            tab_id = await self._open_tab_http(client, url)
+            tab_id = await self._open_tab_http(client, url, profile_dir=profile_dir)
             await client.connect_to_target(tab_id)
             sess = Session(session_id=sid, client=client, tab_id=tab_id)
+            sess.profile_dir = profile_dir
             self._sessions[sid] = sess
             logger.info("Session %s created (tab %s, total %d)", sid[:8], tab_id, len(self._sessions))
             return sess
 
-    async def _open_tab_http(self, client: CDPClient, url: str = "about:blank") -> str:
-        """Open a new tab via CDP HTTP endpoint (no WS connection needed)."""
+    async def _open_tab_http(self, client: CDPClient, url: str = "about:blank",
+                             profile_dir: str | None = None) -> str:
+        """Open a new tab via CDP HTTP endpoint (no WS connection needed).
+
+        When *profile_dir* is set, the tab is created in a fresh browser
+        context using that Chrome user-data dir (cookie isolation).  Falls
+        back to the default context when the endpoint doesn't support it.
+        """
         import httpx
 
+        # A fresh user-data dir needs a dedicated Chrome instance; the running
+        # browser cannot switch profiles per-tab.  For real isolation we'd
+        # launch a second Chrome with --user-data-dir.  For now: if a profile
+        # is requested and it differs from the default, launch a dedicated
+        # headless Chrome on a free port and use that CDP endpoint instead.
+        if profile_dir:
+            from headless_manager import _find_free_port
+
+            port = _find_free_port()
+            try:
+                import subprocess
+
+                # If a Chrome already runs with THIS profile dir, reuse it.
+                import re as _re
+
+                existing = None
+                try:
+                    out = subprocess.run(
+                        ["pgrep", "-af", "user-data-dir=" + profile_dir],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    m = _re.search(r"remote-debugging-port=(\d+)", out.stdout)
+                    if m:
+                        existing = int(m.group(1))
+                except Exception:
+                    pass
+
+                if existing is not None:
+                    port = existing
+                    proc = None
+                else:
+                    proc = subprocess.Popen(
+                        [
+                            "/usr/bin/google-chrome",
+                            f"--remote-debugging-port={port}",
+                            "--headless=new",
+                            "--no-first-run",
+                            "--no-default-browser-check",
+                            "--disable-gpu",
+                            "--no-sandbox",
+                            f"--user-data-dir={profile_dir}",
+                            "about:blank",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                # Wait for CDP to come up.
+                import time as _time
+
+                deadline = _time.time() + 15
+                while _time.time() < deadline:
+                    try:
+                        async with httpx.AsyncClient(timeout=3) as h:
+                            r = await h.get(f"http://127.0.0.1:{port}/json/version")
+                            if r.status_code == 200:
+                                break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.3)
+                client.cdp_http_url = f"http://127.0.0.1:{port}"
+                client._profile_proc = proc
+                client._profile_port = port
+            except Exception as exc:
+                logger.warning("Profile launch failed, falling back to default tab: %s", exc)
         async with httpx.AsyncClient(timeout=10.0) as http:
             resp = await http.put(
                 f"{client.cdp_http_url}/json/new",
@@ -137,6 +215,13 @@ class SessionRegistry:
             await sess.client.close_tab(sess.tab_id)
         except Exception:
             logger.debug("close_tab failed for session %s", session_id[:8])
+        # If this session ran on a dedicated profile Chrome, shut it down too.
+        profile_proc = getattr(sess.client, "_profile_proc", None)
+        if profile_proc is not None:
+            try:
+                profile_proc.terminate()
+            except Exception:
+                pass
         try:
             await sess.client.close()
         except Exception:

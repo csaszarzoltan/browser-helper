@@ -1493,15 +1493,30 @@ async def get_status():
 
 
 @app.post("/session/new")
-async def session_new(url: str = Query("about:blank", description="Initial URL for the new session's tab")):
+async def session_new(url: str = Query("about:blank", description="Initial URL for the new session's tab"),
+                      profile: str | None = Query(None, description="Profile name for cookie isolation (optional)")):
     """Mint a new isolated session with its own dedicated browser tab.
 
     The session id is returned in the ``X-Session-ID`` header and as a
     ``bh_session`` cookie; the client simply echoes it back on later calls.
+
+    With *profile* set, the session gets a dedicated Chrome profile (own
+    cookies/storage) — full isolation between clients.
     """
     try:
         await chrome_mgr.launch()
-        sess = await session_registry.create(_local_cdp_http(), url=url)
+        profile_dir = None
+        if profile:
+            from profile_manager import ProfileManager
+
+            pm = ProfileManager()
+            pd = pm.get_data_dir(profile)
+            if not pd:
+                # Create the profile on the fly.
+                pm.create_profile(profile)
+                pd = pm.get_data_dir(profile)
+            profile_dir = pd
+        sess = await session_registry.create(_local_cdp_http(), url=url, profile_dir=profile_dir)
     except Exception as exc:
         logger.exception("Session creation failed")
         return api_error("session_new", "session_creation_failed", str(exc), 503)

@@ -23,7 +23,7 @@ class FakeClient:
     async def connect_to_target(self, tab_id: str) -> dict:
         return {"status": "ok", "target_id": tab_id, "cdp_url": "ws://fake"}
 
-    async def _open_tab_http(self, client, url: str) -> str:
+    async def _open_tab_http(self, client, url: str = "about:blank", profile_dir: str | None = None) -> str:
         FakeClient._counter += 1
         return f"tab-{FakeClient._counter}"
 
@@ -40,7 +40,7 @@ def registry(monkeypatch):
     reg = SessionRegistry(ttl=0.05)
     monkeypatch.setattr("session_registry.CDPClient", FakeClient)
 
-    async def fake_open_tab(client, url="about:blank"):
+    async def fake_open_tab(client, url="about:blank", profile_dir=None):
         FakeClient._counter += 1
         return f"tab-{FakeClient._counter}"
 
@@ -121,7 +121,7 @@ async def test_cap_evicts_lru(monkeypatch):
     reg = SessionRegistry(ttl=3600.0, max_sessions=3)
     monkeypatch.setattr("session_registry.CDPClient", FakeClient)
 
-    async def fake_open_tab(client, url="about:blank"):
+    async def fake_open_tab(client, url="about:blank", profile_dir=None):
         FakeClient._counter += 1
         return f"tab-{FakeClient._counter}"
 
@@ -150,7 +150,7 @@ async def test_cap_never_exceeded(monkeypatch):
     reg = SessionRegistry(ttl=3600.0, max_sessions=2)
     monkeypatch.setattr("session_registry.CDPClient", FakeClient)
 
-    async def fake_open_tab(client, url="about:blank"):
+    async def fake_open_tab(client, url="about:blank", profile_dir=None):
         FakeClient._counter += 1
         return f"tab-{FakeClient._counter}"
 
@@ -168,7 +168,7 @@ async def test_evicted_session_heals_on_next_call(monkeypatch):
     reg = SessionRegistry(ttl=3600.0, max_sessions=1)
     monkeypatch.setattr("session_registry.CDPClient", FakeClient)
 
-    async def fake_open_tab(client, url="about:blank"):
+    async def fake_open_tab(client, url="about:blank", profile_dir=None):
         FakeClient._counter += 1
         return f"tab-{FakeClient._counter}"
 
