@@ -55,7 +55,7 @@ async def assess_screenshot(image_b64: str, prompt: str) -> dict:
                 ],
             }
         ],
-        "max_tokens": 300,
+        "max_tokens": 500,
     }
     headers = {
         "Authorization": f"Bearer {cfg['api_key']}",
@@ -77,11 +77,11 @@ async def assess_screenshot(image_b64: str, prompt: str) -> dict:
                 }
             resp.raise_for_status()
             data = resp.json()
-        text = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
+        msg = data.get("choices", [{}])[0].get("message", {})
+        text = (msg.get("content") or "").strip()
+        # Reasoning-modellek néha a content helyett a reasoning-be írnak.
+        if not text:
+            text = (msg.get("reasoning") or msg.get("reasoning_content") or "").strip()
         return {"status": "ok", "assessment": text}
     except Exception as exc:  # noqa: BLE001 — non-fatal by contract
         logger.warning("VLM assessment failed: %s", exc)
