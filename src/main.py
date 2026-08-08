@@ -1105,7 +1105,7 @@ def _reap_orphan_headless() -> int:
 
     try:
         out = subprocess.run(
-            ["pgrep", "-f", "chrome --headless"],
+            ["pgrep", "-f", "remote-debugging-port=19"],  # 19222+ headless portok
             capture_output=True, text=True, timeout=10,
         )
     except Exception:
