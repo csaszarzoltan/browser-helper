@@ -3927,15 +3927,34 @@ async def agent_diff(body: AgentDiffRequest):
             )
         # Store the diff image as an artifact so the caller can view it.
         artifact_id = None
-        if result.diff_image:
-            try:
+        vlm_assessment = None
+        # Diff-VLM: ha a vision modell konfigurálva van, értékeltesse a
+        # diff-képet ("mi változott?" szövegesen).  Ha a diff-kép nem készült
+        # el, a B screenshotját elemzi (milyen az új oldal).
+        try:
+            from vision_check import assess_screenshot
+
+            if result.diff_image:
                 diff_bytes = base64.b64decode(result.diff_image)
                 rec = artifact_store.put(
                     diff_bytes, mime_type="image/png", suffix="diff"
                 )
                 artifact_id = rec.get("artifact_id") or rec.get("id")
-            except Exception:
-                artifact_id = None
+                vlm_assessment = await assess_screenshot(
+                    base64.b64encode(diff_bytes).decode(),
+                    "Ez két weboldal vizuális diff-képe (piros = változás). "
+                    "Írd le röviden, MI változott, és milyen jellegű (szöveg, layout, szín, elem eltűnt/új). "
+                    "Ha nincs érdemi változás, írd: 'Nincs érdemi vizuális változás'.",
+                )
+            else:
+                vlm_assessment = await assess_screenshot(
+                    base64.b64encode(img_b).decode(),
+                    f"Ez a '{body.url_b or body.url_a}' oldal screenshotja. "
+                    "Írd le röviden, mit ábrázol az oldal (fő tartalom, layout, színek).",
+                )
+        except Exception as exc:
+            logger.debug("diff VLM assessment failed: %s", exc)
+            vlm_assessment = None
         return api_success("agent_diff", {
             "url_a": body.url_a,
             "url_b": body.url_b,
@@ -3943,6 +3962,7 @@ async def agent_diff(body: AgentDiffRequest):
             "pixel_delta": result.pixel_delta,
             "dimensions_match": result.dimensions_match,
             "diff_artifact_id": artifact_id,
+            "vlm": vlm_assessment,
             "error": result.error,
         })
     except Exception as exc:
