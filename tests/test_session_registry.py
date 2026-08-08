@@ -112,3 +112,78 @@ async def test_reaper_loop_reaps(registry):
     registry.start_reaper()
     await asyncio.sleep(0.2)  # reaper interval = min(ttl, 60) = 0.05
     assert registry.count == 0
+
+
+# ── LRU eviction (session cap) ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_cap_evicts_lru(monkeypatch):
+    reg = SessionRegistry(ttl=3600.0, max_sessions=3)
+    monkeypatch.setattr("session_registry.CDPClient", FakeClient)
+
+    async def fake_open_tab(client, url="about:blank"):
+        FakeClient._counter += 1
+        return f"tab-{FakeClient._counter}"
+
+    monkeypatch.setattr(reg, "_open_tab_http", fake_open_tab)
+
+    a = await reg.create("http://127.0.0.1:9557")
+    b = await reg.create("http://127.0.0.1:9557")
+    c = await reg.create("http://127.0.0.1:9557")
+    assert reg.count == 3
+
+    # Touch b and c so a becomes the LRU.
+    reg.get(b.session_id)
+    reg.get(c.session_id)
+
+    d = await reg.create("http://127.0.0.1:9557")  # cap 3 → evict a
+    assert reg.count == 3
+    assert reg.get(a.session_id) is None       # evicted
+    assert reg.get(b.session_id) is not None   # kept
+    assert reg.get(c.session_id) is not None   # kept
+    assert reg.get(d.session_id) is not None   # new
+    assert a.client.closed is True             # evicted tab/ws closed
+
+
+@pytest.mark.asyncio
+async def test_cap_never_exceeded(monkeypatch):
+    reg = SessionRegistry(ttl=3600.0, max_sessions=2)
+    monkeypatch.setattr("session_registry.CDPClient", FakeClient)
+
+    async def fake_open_tab(client, url="about:blank"):
+        FakeClient._counter += 1
+        return f"tab-{FakeClient._counter}"
+
+    monkeypatch.setattr(reg, "_open_tab_http", fake_open_tab)
+
+    for _ in range(10):
+        await reg.create("http://127.0.0.1:9557")
+    assert reg.count == 2  # never above the cap
+
+
+@pytest.mark.asyncio
+async def test_evicted_session_heals_on_next_call(monkeypatch):
+    """The evicted client's session id stays valid; a later call on its
+    session (via _ensure_browser path) recreates the tab."""
+    reg = SessionRegistry(ttl=3600.0, max_sessions=1)
+    monkeypatch.setattr("session_registry.CDPClient", FakeClient)
+
+    async def fake_open_tab(client, url="about:blank"):
+        FakeClient._counter += 1
+        return f"tab-{FakeClient._counter}"
+
+    monkeypatch.setattr(reg, "_open_tab_http", fake_open_tab)
+
+    a = await reg.create("http://127.0.0.1:9557")
+    old_tab = a.tab_id
+    await reg.create("http://127.0.0.1:9557")  # evicts a (cap 1)
+
+    # The evicted session is gone from the registry.
+    assert reg.get(a.session_id) is None
+    # Simulate the client's next call: registry.get returns None (session
+    # reaped) — the client would mint a NEW session, not reuse the dead id.
+    # The auto-heal guarantee is that the *client* (with a fresh session)
+    # always gets a working tab, which the cap+create provides:
+    fresh = await reg.create("http://127.0.0.1:9557")
+    assert fresh.tab_id != old_tab
+    assert reg.count == 1

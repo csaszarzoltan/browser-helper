@@ -240,7 +240,9 @@ settings_mgr = SettingsManager()
 chrome_mgr = ChromeManager(settings_mgr)
 
 # Per-client session registry (each session owns its own tab + CDP client)
-session_registry = SessionRegistry(ttl=1800.0)
+# max_sessions: hard cap — LRU eviction closes the least-recently-used
+# session's tab when the cap is reached (client auto-heals on next call).
+session_registry = SessionRegistry(ttl=1800.0, max_sessions=int(os.environ.get("BH_MAX_SESSIONS", "15")))
 
 # Headless session manager
 headless_mgr = HeadlessManager()
@@ -1419,7 +1421,11 @@ async def sessions_list():
         }
         for sess in session_registry._sessions.values()
     ]
-    return api_success("sessions_list", {"count": len(items), "sessions": items})
+    return api_success("sessions_list", {
+        "count": len(items),
+        "max_sessions": session_registry.max_sessions,
+        "sessions": items,
+    })
 
 
 @app.post("/session/close")

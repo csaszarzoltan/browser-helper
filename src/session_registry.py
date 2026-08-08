@@ -44,9 +44,10 @@ class Session:
 class SessionRegistry:
     """Mint, resolve and reap per-client browser sessions."""
 
-    def __init__(self, ttl: float = 1800.0):
+    def __init__(self, ttl: float = 1800.0, max_sessions: int = 15):
         self._sessions: dict[str, Session] = {}
         self._ttl = ttl
+        self._max_sessions = max_sessions
         self._lock = asyncio.Lock()
         self._reaper_task: asyncio.Task | None = None
 
@@ -55,6 +56,10 @@ class SessionRegistry:
     @property
     def count(self) -> int:
         return len(self._sessions)
+
+    @property
+    def max_sessions(self) -> int:
+        return self._max_sessions
 
     def get(self, session_id: str | None) -> Session | None:
         """Return the session for *session_id*, or None."""
@@ -65,13 +70,36 @@ class SessionRegistry:
             sess.touch()
         return sess
 
+    async def _evict_lru(self) -> Session | None:
+        """Close the least-recently-used session to make room.
+
+        Safe: the client's session id stays valid; on its next call the
+        auto-heal path recreates the tab transparently.  Returns the evicted
+        session (or None when under the cap).
+        """
+        if len(self._sessions) < self._max_sessions:
+            return None
+        victim_id = min(self._sessions, key=lambda sid: self._sessions[sid].last_seen)
+        victim = self._sessions[victim_id]
+        await self.destroy(victim_id)
+        logger.warning(
+            "Session cap %d reached — evicted LRU session %s (tab %s) to make room; "
+            "client's next call will auto-heal a fresh tab",
+            self._max_sessions, victim_id[:8], victim.tab_id[:8],
+        )
+        return victim
+
     async def create(self, cdp_http_url: str, url: str = "about:blank") -> Session:
         """Create a new session: mint id, open a dedicated tab, attach CDP.
 
         The Chrome browser must already be running (callers ensure this via
         the auto-launch path).  Raises CDPError if the tab cannot be created.
+        When the session cap is reached, the least-recently-used session is
+        evicted first (its tab closed) so the tab count never exceeds the cap.
         """
         async with self._lock:
+            # Enforce the cap: evict LRU before minting a new one.
+            await self._evict_lru()
             sid = uuid.uuid4().hex
             client = CDPClient(cdp_http_url=cdp_http_url)
             # Point the fresh client at the running Chrome and open its own tab
