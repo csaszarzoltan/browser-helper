@@ -53,6 +53,18 @@ class CapabilityRegistry:
                     action="Open Agent Tools",
                 ),
                 Capability(
+                    "agent.search", "One-call web search", "Agent Tools",
+                    CapabilityStatus.READY,
+                    "Search an engine (perplexity/google/ddg/bing) and return the answer text in one call.",
+                    action="Run Search",
+                ),
+                Capability(
+                    "agent.flow", "E2E test flows", "Agent Tools",
+                    CapabilityStatus.READY,
+                    "Run ordered multi-step browser test flows with per-step reports.",
+                    action="Run Flow",
+                ),
+                Capability(
                     "anti_detection.compositor", "Anti-detection composition", "Environments",
                     CapabilityStatus.EXPERIMENTAL,
                     "Compose fingerprint, proxy, stealth, and session policies.",

@@ -53,6 +53,8 @@ class CDPClient:
         self._active_tab_id: str | None = None
         self._network_entries: list[dict] = []
         self._network_monitoring = False
+        self._console_entries: list[dict] = []
+        self._console_monitoring = False
         self._before_visual_state: dict = {}
         # Event callbacks: method_name -> list of async callbacks
         self._event_callbacks: dict[str, list] = {}
@@ -242,7 +244,23 @@ class CDPClient:
                         entry["status_text"] = resp.get("statusText", "")
                         entry["mime_type"] = resp.get("mimeType", "")
                         entry["size"] = resp.get("encodedDataLength", 0)
+                    elif method == "Network.loadingFailed":
+                        err = msg.get("params", {}).get("errorText", "")
+                        entry["error"] = err
+                        entry["blocked_reason"] = msg.get("params", {}).get("blockedReason", "")
                     self._network_entries.append(entry)
+
+                # Console / JS error collection (always on, bounded)
+                if method in ("Runtime.consoleAPICalled", "Runtime.exceptionThrown",
+                              "Log.entryAdded", "Network.loadingFailed"):
+                    try:
+                        entry = self._collect_console_event(method, msg.get("params", {}))
+                        if entry is not None:
+                            self._console_entries.append(entry)
+                            if len(self._console_entries) > 500:
+                                self._console_entries = self._console_entries[-500:]
+                    except Exception:
+                        pass  # console collection is best-effort
 
                 # Dispatch registered event callbacks
                 ev_method = msg.get("method", "")
@@ -265,6 +283,71 @@ class CDPClient:
             logger.warning(f"CDP listener error: {e}")
         finally:
             self._connected = False
+
+    def _collect_console_event(self, method: str, params: dict) -> dict | None:
+        """Normalise a CDP console/exception/network-failure event."""
+        entry: dict = {"type": method, "timestamp": time.time()}
+        if method == "Runtime.consoleAPICalled":
+            entry["level"] = params.get("type", "log")
+            args = params.get("args", [])
+            parts = []
+            for a in args[:8]:
+                v = a.get("value")
+                if v is None:
+                    v = a.get("description") or a.get("unserializableValue") or ""
+                parts.append(str(v))
+            entry["text"] = " ".join(parts)[:500]
+            if entry["level"] in ("error", "warning", "assert"):
+                return entry
+            return None  # only keep warnings/errors (keep buffer small)
+        if method == "Runtime.exceptionThrown":
+            details = params.get("exceptionDetails", {})
+            exc = details.get("exception", {})
+            entry["level"] = "exception"
+            entry["text"] = (exc.get("description") or exc.get("value") or
+                             details.get("text", ""))[:500]
+            entry["url"] = details.get("url", "")
+            entry["line"] = details.get("lineNumber", -1)
+            return entry
+        if method == "Log.entryAdded":
+            le = params.get("entry", {})
+            entry["level"] = le.get("level", "log")
+            entry["text"] = le.get("text", "")[:500]
+            entry["url"] = le.get("url", "")
+            if entry["level"] in ("error", "warning"):
+                return entry
+            return None
+        if method == "Network.loadingFailed":
+            entry["level"] = "network_error"
+            entry["text"] = params.get("errorText", "")[:300]
+            entry["url"] = params.get("requestId", "")
+            entry["blocked_reason"] = params.get("blockedReason", "")
+            return entry
+        return None
+
+    # ── Console monitoring API ───────────────────────────────────
+
+    async def start_console_monitoring(self) -> dict:
+        """Enable Runtime/Log domains so console + JS errors are captured."""
+        try:
+            await self._send_command("Runtime.enable")
+            await self._send_command("Log.enable")
+            self._console_monitoring = True
+            self._console_entries = []
+            return {"status": "ok", "console_monitoring": True}
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    def get_console_entries(self, since: float = 0.0, level: str | None = None) -> list[dict]:
+        """Return collected console/error entries (optionally filtered)."""
+        entries = [e for e in self._console_entries if e["timestamp"] >= since]
+        if level:
+            entries = [e for e in entries if e.get("level") == level]
+        return entries
+
+    def clear_console_entries(self) -> None:
+        """Drop all collected console entries."""
+        self._console_entries = []
 
     async def _send_command(self, method: str, params: dict | None = None, **extra) -> dict:
         """Send CDP command and wait for result.

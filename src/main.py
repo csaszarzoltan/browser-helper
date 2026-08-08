@@ -743,6 +743,24 @@ class AgentFlowRequest(BaseModel):
     baseline: bool = False  # capture baseline screenshots on first run
     diff: bool = False  # compare screenshots against stored baseline
     stop_on_error: bool = True
+    auto_wait: bool = True  # wait for page ready after navigate/click
+
+
+class AgentDiffRequest(BaseModel):
+    """Visual comparison of two URLs (or two states of the same URL)."""
+
+    url_a: str
+    url_b: str | None = None  # None → diff current page against url_a
+    wait_timeout: int = 25
+    threshold: float = 0.001
+    full_page: bool = False
+
+
+class AgentConsoleRequest(BaseModel):
+    """Console/JS error inspection."""
+
+    clear_first: bool = False  # clear the buffer before the next action
+    level: str | None = None  # filter: error | warning | exception | network_error
 
 
 class AgentFormFillRequest(BaseModel):
@@ -3615,12 +3633,18 @@ async def agent_run_flow(body: AgentFlowRequest):
             if step.action == "navigate":
                 r = await run_op("flow_navigate", client.navigate, step.url)
                 step_report["result"] = r.get("status")
+                if body.auto_wait and r.get("status") == "ok":
+                    await run_op("flow_navigate_wait", client.wait_for_ready, step.timeout or 20)
             elif step.action == "click_text":
                 r = await run_op("flow_click_text", client.click_by_text, step.text or "", step.timeout)
                 step_report["result"] = r.get("status")
+                if body.auto_wait and r.get("status") == "ok":
+                    await run_op("flow_click_wait", client.wait_for_ready, step.timeout or 20)
             elif step.action == "click":
                 r = await run_op("flow_click", client.click, step.selector or "")
                 step_report["result"] = r.get("status")
+                if body.auto_wait and r.get("status") == "ok":
+                    await run_op("flow_click_wait", client.wait_for_ready, step.timeout or 20)
             elif step.action == "type":
                 r = await run_op("flow_type", client.type_text, step.selector or "", step.value or "")
                 step_report["result"] = r.get("status")
@@ -3675,6 +3699,234 @@ async def agent_run_flow(body: AgentFlowRequest):
         "failed_steps": sum(1 for s in results if not s.get("ok")),
         "total_ms": total_ms,
     })
+
+
+# ---------------------------------------------------------------------------
+# Visual diff & console inspection
+# ---------------------------------------------------------------------------
+
+
+# ── Flow templates ─────────────────────────────────────────────────
+_FLOW_TEMPLATES: dict[str, dict] = {
+    "login": {
+        "description": "Navigate, fill a login form, submit, verify success.",
+        "requires": ["url", "username", "password", "success_text"],
+        "build": lambda p: {
+            "name": "login",
+            "auto_wait": True,
+            "stop_on_error": True,
+            "steps": [
+                {"action": "navigate", "url": p["url"], "timeout": 20},
+                {"action": "wait", "timeout": 8},
+                {"action": "type", "selector": "input[type=text], input[name*=user], input[name*=email], input[type=email]", "value": p["username"]},
+                {"action": "type", "selector": "input[type=password]", "value": p["password"]},
+                {"action": "submit"},
+                {"action": "wait_text", "text": p["success_text"], "timeout": 12},
+            ],
+        },
+    },
+    "signup": {
+        "description": "Navigate, fill a signup form, submit, verify success.",
+        "requires": ["url", "email", "password", "success_text"],
+        "build": lambda p: {
+            "name": "signup",
+            "auto_wait": True,
+            "stop_on_error": True,
+            "steps": [
+                {"action": "navigate", "url": p["url"], "timeout": 20},
+                {"action": "wait", "timeout": 8},
+                {"action": "type", "selector": "input[type=email], input[name*=email]", "value": p["email"]},
+                {"action": "type", "selector": "input[type=password]", "value": p["password"]},
+                {"action": "submit"},
+                {"action": "wait_text", "text": p["success_text"], "timeout": 12},
+            ],
+        },
+    },
+    "search": {
+        "description": "Navigate and run a site search, verify results appear.",
+        "requires": ["url", "query", "result_text"],
+        "build": lambda p: {
+            "name": "search",
+            "auto_wait": True,
+            "stop_on_error": True,
+            "steps": [
+                {"action": "navigate", "url": p["url"], "timeout": 20},
+                {"action": "wait", "timeout": 6},
+                {"action": "type", "selector": "input[type=search], input[name*=q], input[name*=search]", "value": p["query"]},
+                {"action": "submit"},
+                {"action": "wait_text", "text": p["result_text"], "timeout": 12},
+            ],
+        },
+    },
+    "checkout": {
+        "description": "Go through a checkout: item page → cart → checkout page loads.",
+        "requires": ["url", "item_selector", "checkout_text"],
+        "build": lambda p: {
+            "name": "checkout",
+            "auto_wait": True,
+            "stop_on_error": True,
+            "steps": [
+                {"action": "navigate", "url": p["url"], "timeout": 20},
+                {"action": "wait", "timeout": 8},
+                {"action": "click", "selector": p["item_selector"], "timeout": 10},
+                {"action": "click_text", "text": "Add to cart", "timeout": 8},
+                {"action": "wait_text", "text": p["checkout_text"], "timeout": 12},
+            ],
+        },
+    },
+}
+
+
+@app.get("/agent/flow-templates")
+async def agent_flow_templates():
+    """List available E2E flow templates and their required parameters."""
+    return api_success("agent_flow_templates", {
+        "templates": [
+            {"name": name, "description": t["description"], "requires": t["requires"]}
+            for name, t in _FLOW_TEMPLATES.items()
+        ]
+    })
+
+
+@app.post("/agent/flow-templates/{name}")
+async def agent_flow_template_run(name: str, body: dict[str, Any]):
+    """Build and run a flow from a template.
+
+    Example: ``POST /agent/flow-templates/login`` with
+    ``{"url": "...", "username": "...", "password": "...", "success_text": "Welcome"}``.
+    """
+    tpl = _FLOW_TEMPLATES.get(name.lower())
+    if not tpl:
+        return api_error("agent_flow_template", "template_not_found",
+                         f"Unknown template '{name}'. Available: {', '.join(_FLOW_TEMPLATES)}", 404)
+    missing = [k for k in tpl["requires"] if k not in body]
+    if missing:
+        return api_error("agent_flow_template", "missing_params",
+                         f"Missing parameters: {', '.join(missing)}", 422)
+    flow_dict = tpl["build"](body)
+    flow_req = AgentFlowRequest(**flow_dict)
+    return await agent_run_flow(flow_req)
+
+
+@app.post("/agent/diff")
+async def agent_diff(body: AgentDiffRequest):
+    """Visually compare two URLs (or the current page against url_a).
+
+    Loads both pages (in the session's tab), screenshots each, and runs the
+    pixel-diff engine.  Returns pass/fail, pixel delta, and a diff-image
+    artifact id the caller can fetch.
+    """
+    import tempfile
+
+    try:
+        # First navigation mints the session; resolve the session client after.
+        await run_op("diff_navigate_a", client.navigate, body.url_a)
+        sess = _get_current_session()
+        target = sess.client if sess is not None else client
+        await target.wait_for_ready(body.wait_timeout)
+        shot_a = await target.screenshot()
+        img_a = base64.b64decode(shot_a.get("data", ""))
+        # Load page B (or keep A's screenshot as baseline against current)
+        if body.url_b:
+            await run_op("diff_navigate_b", target.navigate, body.url_b)
+            await target.wait_for_ready(body.wait_timeout)
+        shot_b = await target.screenshot()
+        img_b = base64.b64decode(shot_b.get("data", ""))
+
+        with tempfile.TemporaryDirectory() as td:
+            p_a = os.path.join(td, "a.jpg")
+            p_b = os.path.join(td, "b.jpg")
+            p_out = os.path.join(td, "diff.png")
+            with open(p_a, "wb") as f:
+                f.write(img_a)
+            with open(p_b, "wb") as f:
+                f.write(img_b)
+            from screenshot_diff import ScreenshotDiffEngine
+
+            result = ScreenshotDiffEngine.diff(
+                p_a, p_b, p_out, threshold=body.threshold
+            )
+        # Store the diff image as an artifact so the caller can view it.
+        artifact_id = None
+        if result.diff_image:
+            try:
+                diff_bytes = base64.b64decode(result.diff_image)
+                rec = artifact_store.put(
+                    diff_bytes, mime_type="image/png", suffix="diff"
+                )
+                artifact_id = rec.get("artifact_id") or rec.get("id")
+            except Exception:
+                artifact_id = None
+        return api_success("agent_diff", {
+            "url_a": body.url_a,
+            "url_b": body.url_b,
+            "passed": result.passed,
+            "pixel_delta": result.pixel_delta,
+            "dimensions_match": result.dimensions_match,
+            "diff_artifact_id": artifact_id,
+            "error": result.error,
+        })
+    except Exception as exc:
+        logger.exception("agent_diff failed")
+        return api_error("agent_diff", "diff_failed", str(exc), 503)
+
+
+@app.post("/agent/console")
+async def agent_console(body: AgentConsoleRequest | None = None):
+    """Return collected console / JS errors / failed network requests.
+
+    The browser-helper always captures ``Runtime.consoleAPICalled`` (errors +
+    warnings), ``Runtime.exceptionThrown``, ``Log.entryAdded`` and
+    ``Network.loadingFailed`` while connected.  Use ``clear_first`` to reset
+    the buffer before the next action, then read afterwards.
+    """
+    body = body or AgentConsoleRequest()
+    sess = _get_current_session()
+    target = sess.client if sess is not None else client
+    try:
+        await target.start_console_monitoring()
+    except Exception:
+        pass
+    if body.clear_first:
+        target.clear_console_entries()
+        return api_success("agent_console", {"cleared": True, "entries": []})
+    entries = target.get_console_entries(level=body.level)
+    errors = [e for e in entries if e.get("level") in ("error", "exception")]
+    return api_success("agent_console", {
+        "count": len(entries),
+        "errors": len(errors),
+        "entries": entries[-100:],
+    })
+
+
+@app.post("/agent/flow-vlm")
+async def agent_flow_vlm(body: AgentFlowRequest, llm_prompt: str = Query(
+    "Describe what this page shows. Is it a login page? Reply concisely.",
+    description="Prompt for the vision model")):
+    """Run a flow and evaluate the final screenshot with a vision model.
+
+    Executes the same steps as ``/agent/run-flow``, then captures a
+    screenshot of the final state and asks a vision LLM (via the configured
+    gateway) to describe/verify it.  Returns the flow report + the model's
+    assessment — the tester agent gets visual confirmation without viewing
+    the image itself.
+    """
+    flow_result = await agent_run_flow(body)
+    if flow_result.get("status") != "ok":
+        return flow_result
+    try:
+        sess = _get_current_session()
+        target = sess.client if sess is not None else client
+        shot = await target.screenshot()
+        image_b64 = shot.get("data", "")
+        from vision_check import assess_screenshot
+
+        assessment = await assess_screenshot(image_b64, llm_prompt)
+        flow_result["data"]["vlm"] = assessment
+        return flow_result
+    except Exception as exc:
+        flow_result["data"]["vlm"] = {"status": "error", "error": str(exc)}
+        return flow_result
 
 
 @app.get("/artifacts/{artifact_id}")

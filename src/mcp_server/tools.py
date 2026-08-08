@@ -164,3 +164,64 @@ async def session_status(ctx: Context | None = None) -> str:
         )
     except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
         return tool_error("session_status", "operation_failed", str(exc))
+
+
+# ── High-level tools (capability agent.search / agent.flow) ────────
+
+
+async def search(query: str, engine: str = "perplexity", timeout: int = 45,
+                 ctx: Context | None = None) -> str:
+    """One-call web search (capability ``agent.search``, READY).
+
+    Navigates to the engine, runs *query*, waits for the answer, and returns
+    the result text — no manual sleeps or extra reads.
+    """
+    from main import agent_search, AgentSearchRequest  # lazy import
+
+    if ctx is not None:
+        ctx.info(f"search {engine}: {query[:60]}")
+    resp = await agent_search(AgentSearchRequest(query=query, engine=engine, timeout=timeout))
+    return json_dumps(resp)
+
+
+async def get_content(url: str | None = None, wait_ready: bool = True,
+                      ctx: Context | None = None) -> str:
+    """Load a URL (or use the current page) and return its main content
+    (capability ``agent.search``, READY).
+
+    Filters nav/sidebar/footer noise — cleaner context for LLMs.
+    """
+    from main import client, run_op  # lazy import
+
+    if ctx is not None:
+        ctx.info(f"get_content url={url}")
+    sess, run_op_fn = await _mcp_session()
+    target = sess.client if sess is not None else client
+    if url:
+        await run_op_fn("get_content_navigate", target.navigate, url)
+        if wait_ready:
+            await run_op_fn("get_content_wait", target.wait_for_ready, 20)
+    content = await target.get_main_content()
+    return json_dumps({"status": "ok", "operation": "get_content",
+                       "data": content, "error": None, "meta": {}})
+
+
+async def run_flow(name: str = "flow", steps: list[dict] | None = None,
+                   stop_on_error: bool = True, ctx: Context | None = None) -> str:
+    """Run an ordered E2E test flow (capability ``agent.flow``, READY).
+
+    Each step: navigate / click_text / click / type / submit / wait_text /
+    wait / eval.  Returns a per-step report.
+    """
+    from main import AgentFlowRequest, AgentFlowStep, agent_run_flow  # lazy import
+
+    if ctx is not None:
+        ctx.info(f"run_flow {name} ({len(steps or [])} steps)")
+    steps = steps or []
+    req = AgentFlowRequest(
+        name=name,
+        steps=[AgentFlowStep(**s) for s in steps],
+        stop_on_error=stop_on_error,
+    )
+    resp = await agent_run_flow(req)
+    return json_dumps(resp)

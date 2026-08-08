@@ -25,6 +25,9 @@ _TOOL_CAPABILITY = {
     "switch_tab": "browser.core",
     "close_tab": "browser.core",
     "session_status": "diagnostics.privacy",
+    "search": "agent.search",
+    "get_content": "agent.search",
+    "run_flow": "agent.flow",
     "fleet_nodes": "workflow.local",
     "fleet_status": "workflow.local",
     "fleet_queue": "workflow.local",
@@ -66,6 +69,31 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["id"],
     },
     "session_status": {"type": "object", "properties": {}},
+    "search": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+            "engine": {"type": "string", "description": "perplexity|google|ddg|bing (default perplexity)"},
+            "timeout": {"type": "integer", "description": "Max seconds to wait for the answer"},
+        },
+        "required": ["query"],
+    },
+    "get_content": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL to load (optional — uses current page if omitted)"},
+            "wait_ready": {"type": "boolean", "description": "Wait for page ready before extracting"},
+        },
+    },
+    "run_flow": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Flow name"},
+            "steps": {"type": "array", "description": "List of {action, url?, text?, selector?, value?, timeout?, expect?}"},
+            "stop_on_error": {"type": "boolean"},
+        },
+        "required": ["steps"],
+    },
     "fleet_nodes": {"type": "object", "properties": {}},
     "fleet_status": {"type": "object", "properties": {}},
     "fleet_queue": {"type": "object", "properties": {}},
