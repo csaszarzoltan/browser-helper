@@ -4,7 +4,45 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
-### [1.21.0] — 2026-08-07
+## [1.21.0] — 2026-08-08
+
+#### Added
+
+**Auto-launch & reliability**
+- `_ensure_browser()`: any operation (navigate/eval/click/...) auto-launches Chrome (saved profile, port 9557) and connects to the LOCAL CDP when not running — no separate `/browser/launch` + `/connect` needed.
+- Startup connects to the saved local port (not the CDPClient default 9555, which may be another machine's SSH tunnel).
+- `_reap_orphan_headless()`: on startup, kills `--headless` Chrome processes not owned by live headless sessions (prevents GBs of RAM leaking after restarts — observed 483 orphans / ~22GB).
+
+**Per-client sessions (tab isolation)**
+- `SessionRegistry`: every HTTP client gets its own session (cookie `bh_session` / `X-Session-ID`), each owning a dedicated Chrome tab + its own CDP client. No client-side id generation — the server mints it.
+- Hard cap (default 15, env `BH_MAX_SESSIONS`) with LRU eviction: the least-recently-used session's tab closes when the cap is reached; the client auto-heals a fresh tab on its next call.
+- TTL reaper (30 min) closes idle sessions; auto-heal recreates dead tabs via HTTP `/json/new`.
+- Optional per-profile cookie isolation: `POST /session/new?profile=<name>` launches a dedicated headless Chrome with that profile's user-data-dir.
+- Endpoints: `POST /session/new`, `GET /sessions`, `POST /session/close`.
+
+**One-call high-level agent endpoints**
+- `POST /agent/search`: one call = navigate + wait for answer + extract text (perplexity/google/ddg/bing; handles streaming answers).
+- `POST /agent/run-flow`: ordered E2E steps with per-step report (navigate/click_text/click/type/submit/wait_text/wait/eval/screenshot; `auto_wait` waits for page ready after navigate/click; `stop_on_error`).
+- `POST /agent/diff`: visual comparison of two URLs (pixel-diff + diff artifact).
+- `POST /agent/visual-regression`: multi-URL baseline record / compare with per-URL pass/fail + delta.
+- `POST /agent/console`: console errors / JS exceptions / failed network requests (always-on bounded buffer).
+- `POST /agent/flow-vlm`: run a flow then assess the final screenshot with a vision model (VLM_* env; graceful skip when unavailable).
+- `GET /agent/flow-templates` + `POST /agent/flow-templates/{login|signup|search|checkout}`: parameterised E2E templates.
+- Context-efficient extractors: `POST /page/content` (main content, nav/sidebar filtered), `/page/headline`, `/page/links`, `/page/forms`, `/page/table`, `/page/text?wait_ready=true`.
+
+**MCP**
+- New tools: `search`, `get_content`, `run_flow` (capabilities `agent.search`, `agent.flow`) — 15 tools total.
+- MCP process-scoped session so MCP calls stay on one dedicated tab.
+
+#### Fixed
+- `run-flow` now includes the failing step in its report (was dropped on `stop_on_error`).
+- `wait_for_ready` / search handle streaming answers (poll for substantive content, not DOM stability).
+- Session routing: operations rebind onto the session's own client (REST endpoints pass the global client's bound method).
+
+#### Security / ops
+- `bh-watchdog.sh` cron script (30 min): alerts when chrome processes/RAM/headless exceed thresholds; optional auto-reap.
+- VLM config in systemd unit; 401/403/429 treated as graceful skip.
+### [1.20.1] — 2026-08-07
 
 #### Added
 

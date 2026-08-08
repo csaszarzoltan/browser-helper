@@ -138,9 +138,25 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 See [LLM Agent API](docs/agent-api.md).
 
-### v1.21 — MCP Server (Latest)
+### v1.21 — Agent toolkit + reliability (Latest, 2026-08-08)
 
-Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server exposing the browser and fleet engine as 12 MCP tools — for Claude Code, Codex CLI, Cursor, Windsurf, or any MCP client. Tools call the same engine the REST API uses, in-process (no HTTP self-calls, no LLM).
+**One-call high-level operations** — an agent does in 1 call what used to take 6-7:
+- `POST /agent/search` — search (perplexity/google/ddg/bing) and get the answer text back
+- `POST /agent/run-flow` — ordered E2E test steps with a per-step report
+- `POST /agent/diff` — visual comparison of two URLs (pixel-diff + artifact)
+- `POST /agent/visual-regression` — multi-URL baseline record / compare
+- `POST /agent/console` — console errors / JS exceptions / failed network
+- `POST /agent/flow-vlm` — run a flow, then assess the final screenshot with a vision model
+- `GET/POST /agent/flow-templates` — login/signup/search/checkout E2E templates
+- `POST /page/content`, `/page/headline`, `/page/links`, `/page/forms`, `/page/table`, `/page/text?wait_ready=true`
+
+**Per-client sessions** — every client gets its own tab via a session cookie (`bh_session`); hard cap (15) with LRU eviction; TTL reaper; optional per-profile cookie isolation (`/session/new?profile=`).
+
+**Reliability** — auto-launch on any operation; startup orphan-headless reaper (was leaking ~22GB after restarts); watchdog cron script.
+
+### v1.21 — MCP Server (Previous)
+
+Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server exposing the browser and fleet engine as 15 MCP tools — for Claude Code, Codex CLI, Cursor, Windsurf, or any MCP client. Tools call the same engine the REST API uses, in-process (no HTTP self-calls, no LLM).
 
 #### Quick start
 
