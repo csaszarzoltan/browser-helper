@@ -767,6 +767,17 @@ class AgentDiffRequest(BaseModel):
     full_page: bool = False
 
 
+class VisualRegressionRequest(BaseModel):
+    """Multi-URL visual regression run: baseline or compare per URL."""
+
+    urls: list[str]
+    profile: str | None = None
+    viewport: dict | None = None
+    threshold: float = 0.001
+    wait_timeout: int = 25
+    record: bool = False  # True → capture baselines; False → compare
+
+
 class AgentConsoleRequest(BaseModel):
     """Console/JS error inspection."""
 
@@ -3934,6 +3945,81 @@ async def agent_diff(body: AgentDiffRequest):
     except Exception as exc:
         logger.exception("agent_diff failed")
         return api_error("agent_diff", "diff_failed", str(exc), 503)
+
+
+@app.post("/agent/visual-regression")
+async def agent_visual_regression(body: VisualRegressionRequest):
+    """Multi-URL visual regression: record baselines or compare.
+
+    ``record=true`` captures a baseline screenshot for each URL (first run).
+    ``record=false`` (default) compares each URL's current screenshot against
+    its stored baseline and reports pass/fail + pixel delta per URL.
+    """
+    import tempfile
+
+    results = []
+    ok_all = True
+    try:
+        await run_op("vr_navigate", client.navigate, body.urls[0])  # mint session
+        sess = _get_current_session()
+        target = sess.client if sess is not None else client
+        for url in body.urls:
+            item: dict[str, Any] = {"url": url}
+            try:
+                await run_op("vr_nav", target.navigate, url)
+                await target.wait_for_ready(body.wait_timeout)
+                shot = await target.screenshot()
+                img = base64.b64decode(shot.get("data", ""))
+
+                if body.record:
+                    path = baseline_mgr.save_baseline(
+                        url=url, image_data=img,
+                        profile=body.profile, viewport=body.viewport,
+                    )
+                    item["recorded"] = True
+                    item["baseline_path"] = path
+                else:
+                    baseline_path = baseline_mgr.get_baseline(
+                        url, profile=body.profile, viewport=body.viewport
+                    )
+                    if not baseline_path:
+                        item["status"] = "no_baseline"
+                        item["ok"] = False
+                        ok_all = False
+                    else:
+                        with tempfile.TemporaryDirectory() as td:
+                            cur_path = os.path.join(td, "current.jpg")
+                            out_path = os.path.join(td, "diff.png")
+                            with open(cur_path, "wb") as f:
+                                f.write(img)
+                            from screenshot_diff import ScreenshotDiffEngine
+
+                            diff = ScreenshotDiffEngine.diff(
+                                baseline_path, cur_path, out_path,
+                                threshold=body.threshold,
+                            )
+                        item["status"] = "pass" if diff.passed else "fail"
+                        item["ok"] = diff.passed
+                        item["pixel_delta"] = round(diff.pixel_delta, 6)
+                        if not diff.passed:
+                            ok_all = False
+                item["elapsed_ms"] = 0
+                results.append(item)
+            except Exception as exc:
+                item["ok"] = False
+                item["error"] = str(exc)
+                ok_all = False
+                results.append(item)
+        return api_success("agent_visual_regression", {
+            "mode": "record" if body.record else "compare",
+            "status": "ok" if ok_all else "failed",
+            "urls": results,
+            "url_count": len(results),
+            "failed": sum(1 for r in results if not r.get("ok")),
+        })
+    except Exception as exc:
+        logger.exception("visual_regression failed")
+        return api_error("agent_visual_regression", "vr_failed", str(exc), 503)
 
 
 @app.post("/agent/console")
