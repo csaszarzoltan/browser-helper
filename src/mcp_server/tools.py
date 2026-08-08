@@ -9,6 +9,11 @@ The engine singletons (``main.client``, ``main.run_op``, ``main._session_mgr``)
 are imported lazily inside each handler body so importing this module never
 pulls the heavy FastAPI engine stack, and so tests can patch ``main.run_op``
 by attribute.
+
+Per-client sessions: the MCP server has no HTTP cookie jar, so the first
+browser-touching call mints one session (own tab) and reuses it for the life
+of the process.  Keeps MCP tool calls on one dedicated tab instead of
+spamming a new tab per call.
 """
 
 from __future__ import annotations
@@ -17,104 +22,127 @@ from mcp.server.fastmcp import Context  # typing only — never called here
 
 from .serialization import json_dumps, tool_error, tool_result
 
+# Process-scoped session holder for MCP calls (no cookies over stdio).
+_MCP_SESSION = {"session": None}
+
+
+async def _mcp_session():
+    """Return (sess, run_op) for an MCP tool call, minting the session once.
+
+    Falls back to (None, run_op) — the shared default client — when the
+    browser is unavailable (legacy behaviour).
+    """
+    from main import _set_current_session, chrome_mgr, _local_cdp_http, run_op, session_registry
+
+    sess = _MCP_SESSION["session"]
+    if sess is not None and sess.session_id in session_registry._sessions:
+        _set_current_session(sess)
+        return sess, run_op
+    # No session yet, or it was reaped — mint a fresh one.
+    try:
+        await chrome_mgr.launch()
+        sess = await session_registry.create(_local_cdp_http())
+        _MCP_SESSION["session"] = sess
+    except Exception:
+        sess = None  # fall back to default client (legacy)
+    _set_current_session(sess)
+    return sess, run_op
+
+
+async def _target():
+    """Return (client_obj, run_op) for a handler — session client or default."""
+    from main import client
+
+    sess, run_op = await _mcp_session()
+    return (sess.client if sess is not None else client), run_op
+
 
 async def navigate(url: str, ctx: Context | None = None) -> str:
     """Navigate the active browser tab to *url* (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /navigate``: ``run_op("navigate", client.navigate, url)``.
+    Backed by the same engine as ``POST /navigate``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info(f"navigate -> {url}")
-    return json_dumps(await run_op("navigate", client.navigate, url))
+    target, run_op = await _target()
+    return json_dumps(await run_op("navigate", target.navigate, url))
 
 
 async def click(selector: str, ctx: Context | None = None) -> str:
     """Click a CSS selector in the active tab (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /click``: ``run_op("click", client.click, selector)``.
+    Backed by the same engine as ``POST /click``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info(f"click -> {selector}")
-    return json_dumps(await run_op("click", client.click, selector))
+    target, run_op = await _target()
+    return json_dumps(await run_op("click", target.click, selector))
 
 
 async def type(selector: str, text: str, ctx: Context | None = None) -> str:
     """Type *text* into the element matched by *selector* (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /type``: ``run_op("type", client.type_text, selector, text)``.
+    Backed by the same engine as ``POST /type``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info(f"type {len(text)} chars into {selector}")
-    return json_dumps(await run_op("type", client.type_text, selector, text))
+    target, run_op = await _target()
+    return json_dumps(await run_op("type", target.type_text, selector, text))
 
 
 async def screenshot(ctx: Context | None = None) -> str:
     """Capture a JPEG screenshot of the active tab (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /screenshot``: ``run_op("screenshot", client.screenshot)``.
+    Backed by the same engine as ``POST /screenshot``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info("capturing screenshot")
-    return json_dumps(await run_op("screenshot", client.screenshot))
+    target, run_op = await _target()
+    return json_dumps(await run_op("screenshot", target.screenshot))
 
 
 async def snapshot(ctx: Context | None = None) -> str:
     """Return a comprehensive page analysis (capability ``agent.semantic``, READY).
 
-    Backed by the same engine as ``POST /page/analyze``:
-    ``run_op("page_analyze", client.analyze_page)``.
+    Backed by the same engine as ``POST /page/analyze``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info("analyzing page")
-    return json_dumps(await run_op("page_analyze", client.analyze_page))
+    target, run_op = await _target()
+    return json_dumps(await run_op("page_analyze", target.analyze_page))
 
 
 async def get_tabs(ctx: Context | None = None) -> str:
     """List all open tabs ``{id, title, url, active}`` (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``GET /tabs``: ``run_op("get_tabs", client.get_tabs)``.
+    Backed by the same engine as ``GET /tabs``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info("listing tabs")
-    return json_dumps(await run_op("get_tabs", client.get_tabs))
+    target, run_op = await _target()
+    return json_dumps(await run_op("get_tabs", target.get_tabs))
 
 
 async def switch_tab(id: str, ctx: Context | None = None) -> str:
     """Switch the active tab to *id* (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /switch_tab/{tab_id}``:
-    ``run_op("switch_tab", client.switch_tab, id)``.
+    Backed by the same engine as ``POST /switch_tab/{tab_id}``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info(f"switch_tab -> {id}")
-    return json_dumps(await run_op("switch_tab", client.switch_tab, id))
+    target, run_op = await _target()
+    return json_dumps(await run_op("switch_tab", target.switch_tab, id))
 
 
 async def close_tab(id: str, ctx: Context | None = None) -> str:
     """Close the tab *id* (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /tab/close/{tab_id}``:
-    ``run_op("close_tab", client.close_tab, id)``.
+    Backed by the same engine as ``POST /tab/close/{tab_id}``.
     """
-    from main import client, run_op  # lazy import — engine singletons
-
     if ctx is not None:
         ctx.info(f"close_tab -> {id}")
-    return json_dumps(await run_op("close_tab", client.close_tab, id))
+    target, run_op = await _target()
+    return json_dumps(await run_op("close_tab", target.close_tab, id))
 
 
 async def session_status(ctx: Context | None = None) -> str:

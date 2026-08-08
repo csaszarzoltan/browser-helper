@@ -16,6 +16,7 @@ import time
 import zipfile
 import uuid
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -56,6 +57,7 @@ from daily_launchpad import build_daily_launchpad
 from workflow_catalog import WorkflowCatalog
 from cdp_client import CDPClient
 from chrome_manager import ChromeManager
+from session_registry import Session, SessionRegistry
 from headless_manager import HeadlessManager
 from profile_manager import Profile, ProfileManager
 from screenshot_diff import ScreenshotDiffEngine
@@ -175,6 +177,12 @@ async def lifespan(application: FastAPI):
         logger.info("Fleet health poller started")
     except Exception as exc:  # noqa: BLE001 — startup must never abort the server
         logger.warning("Fleet coordinator startup failed: %s", exc)
+    # ── Session reaper: periodically close idle per-client sessions ──
+    try:
+        session_registry.start_reaper()
+        logger.info("Session reaper started (TTL %ss)", session_registry._ttl)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Session reaper startup failed: %s", exc)
     yield
     # Shutdown
     # Stop the fleet health poller / release its HTTP client
@@ -184,6 +192,11 @@ async def lifespan(application: FastAPI):
         await get_fleet_coordinator().stop()
     except Exception as exc:  # noqa: BLE001 — shutdown must never abort teardown
         logger.warning("Fleet coordinator shutdown failed: %s", exc)
+    # Close all per-client sessions (tabs + WebSockets)
+    try:
+        await session_registry.close_all()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Session registry shutdown failed: %s", exc)
     if client.is_connected:
         try:
             await client.disconnect()
@@ -225,6 +238,9 @@ client = CDPClient()
 # Settings and Chrome process manager
 settings_mgr = SettingsManager()
 chrome_mgr = ChromeManager(settings_mgr)
+
+# Per-client session registry (each session owns its own tab + CDP client)
+session_registry = SessionRegistry(ttl=1800.0)
 
 # Headless session manager
 headless_mgr = HeadlessManager()
@@ -823,6 +839,71 @@ async def auth_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
+# Session middleware — per-client tab isolation
+# ---------------------------------------------------------------------------
+
+# Mutable holder so run_op (running in the endpoint's task, which receives a
+# copy of the context) can publish a freshly minted session back to the
+# middleware.  ``set()`` on the contextvar is task-local, but the list object
+# is shared — run_op appends, the middleware reads after call_next.
+_current_session: ContextVar[list[Session | None]] = ContextVar(
+    "current_session", default=[]
+)
+
+# Paths that operate on the shared default client / are session-agnostic.
+_SESSION_EXEMPT = {
+    "/health", "/ready", "/status", "/connect", "/disconnect",
+    "/browser/launch", "/browser/stop", "/browser/status",
+    "/session/new", "/sessions", "/session/close", "/ws", "/",
+    "/api/v1/launchpad",
+}
+
+
+def _set_current_session(sess: Session | None) -> None:
+    """Publish *sess* into the request-scoped holder (idempotent)."""
+    holder = _current_session.get()
+    if not holder:
+        _current_session.set([sess])
+    else:
+        holder[0] = sess
+
+
+def _get_current_session() -> Session | None:
+    holder = _current_session.get()
+    return holder[0] if holder else None
+
+
+@app.middleware("http")
+async def session_middleware(request: Request, call_next):
+    """Attach the caller's session (cookie ``bh_session`` / header ``X-Session-ID``).
+
+    Resolves an existing session (from cookie/header) and exposes it to the
+    request via the ``_current_session`` holder.  New sessions are minted
+    lazily by :func:`run_op` on the first real browser operation — run_op
+    publishes the minted session into the shared holder, which is read here
+    after the handler ran so the response can advertise it via
+    ``Set-Cookie`` + ``X-Session-ID`` for the client to echo back.
+    """
+    sid = request.cookies.get("bh_session") or request.headers.get("X-Session-ID")
+    sess = session_registry.get(sid) if sid else None
+    _set_current_session(sess)
+    try:
+        response = await call_next(request)
+        # run_op may have replaced the session with a freshly minted one.
+        active = _get_current_session()
+    finally:
+        _current_session.set([])
+    if active is not None:
+        response.headers["X-Session-ID"] = active.session_id
+        if active is not sess:
+            response.set_cookie(
+                "bh_session", active.session_id, max_age=86400 * 7,
+                httponly=True, samesite="lax",
+            )
+    return response
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -924,7 +1005,23 @@ def ensure_connected():
         raise HTTPException(status_code=400, detail="Not connected to CDP. Call POST /connect first.")
 
 
-async def _ensure_browser() -> None:
+def _local_cdp_http() -> str:
+    """Return the local Chrome CDP HTTP base URL (saved launched port)."""
+    port = settings_mgr.get("chrome_launched_port") or settings_mgr.get("chrome_debug_port", 9557)
+    return f"http://127.0.0.1:{port}"
+
+
+def _resolve_session(request: Request) -> Session | None:
+    """Resolve the caller's session from cookie or X-Session-ID header.
+
+    Returns None when the caller has no session — the caller then falls back
+    to the shared default client (legacy behaviour).
+    """
+    sid = request.cookies.get("bh_session") or request.headers.get("X-Session-ID")
+    return session_registry.get(sid)
+
+
+async def _ensure_browser(sess: Session | None = None) -> None:
     """
     Ensure a live CDP connection, launching and/or connecting to Chrome if needed.
 
@@ -933,11 +1030,14 @@ async def _ensure_browser() -> None:
     Uses the saved ``chrome_launched_port`` (default 9557) — NOT the CDPClient
     default (9555), which may be another machine's SSH tunnel.
 
-    Safe to call from any operation endpoint (navigate, eval, click, ...).
-    Does nothing when already connected.
+    When *sess* is given, ensures that session's own client is connected to its
+    dedicated tab (creating the session lazily is handled by the caller).
+    Otherwise ensures the shared default client.
     """
-    if client.is_connected:
+    target = sess.client if sess is not None else client
+    if target.is_connected:
         return
+    cdp_http = _local_cdp_http()
     try:
         launch_result = await chrome_mgr.launch()
         if launch_result.get("status") != "ok":
@@ -949,13 +1049,26 @@ async def _ensure_browser() -> None:
         logger.warning("Auto-launch exception (continuing): %s", exc)
 
     # Connect to the local Chrome on the saved launched port (NOT the 9555 default)
-    port = settings_mgr.get("chrome_launched_port") or settings_mgr.get("chrome_debug_port", 9557)
-    cdp_http = f"http://127.0.0.1:{port}"
-    client.cdp_http_url = cdp_http
+    target.cdp_http_url = cdp_http
     try:
-        result = await client.connect()
-        state["connected"] = True
-        state["cdp_url"] = result.get("cdp_url", cdp_http)
+        if sess is not None:
+            # Re-attach to the session's dedicated tab (heals a closed tab by
+            # recreating it).
+            try:
+                await target.connect_to_target(sess.tab_id)
+            except Exception:
+                # Tab gone — recreate it and update the session.
+                result = await target.open_new_tab()
+                if result.get("status") != "ok":
+                    raise RuntimeError(f"Session tab recreation failed: {result.get('error')}")
+                sess.tab_id = result["tab_id"]
+                await target.connect_to_target(sess.tab_id)
+            state["connected"] = True
+            state["cdp_url"] = target.cdp_http_url
+        else:
+            result = await target.connect()
+            state["connected"] = True
+            state["cdp_url"] = result.get("cdp_url", cdp_http)
         logger.info("Auto-connected to local Chrome at %s", state["cdp_url"])
     except Exception as exc:
         state["connected"] = False
@@ -987,29 +1100,64 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
     """
     Execute a CDP client method, time it, log it, broadcast state,
     and return a standardised response dict.
+
+    Runs on the caller's session tab when the session middleware attached a
+    session to this request (``_current_session`` contextvar); otherwise on
+    the shared default client (legacy behaviour).
     """
-    await _ensure_browser()
-    start = time.monotonic()
+    sess = _get_current_session()
+    if sess is None:
+        # No session yet — mint one lazily so this and all later calls from
+        # this client run on their own dedicated tab.  If the browser is not
+        # available (e.g. tests without a running Chrome), fall back to the
+        # shared default client so behaviour matches the legacy path.
+        try:
+            await chrome_mgr.launch()  # idempotent — reuses running Chrome
+            sess = await session_registry.create(_local_cdp_http())
+            # Advertise the fresh session to the middleware (Set-Cookie).
+            _set_current_session(sess)
+        except Exception as exc:
+            logger.warning("Session creation failed, falling back to default client: %s", exc)
+            sess = None
+    if sess is not None:
+        # Route the operation onto the session's own client: the REST
+        # endpoints pass a bound method of the *global* client; rebind the
+        # same method name onto the session client so the op runs on the
+        # session's dedicated tab.
+        method_name = getattr(method, "__name__", None)
+        if method_name and hasattr(sess.client, method_name):
+            method = getattr(sess.client, method_name)
+        target = sess.client
+    else:
+        target = client
     try:
-        result = await method(*args, **kwargs)
-        elapsed = (time.monotonic() - start) * 1000
-        verification = infer_verification(result)
-        entry = log_operation(
-            operation, "success", elapsed, str(result)[:200], verification=verification
-        )
-        await broadcast_state()
-        return api_success(
-            operation,
-            result,
-            meta={"run_id": entry["run_id"], "verification": entry["verification"]},
-        )
+        await _ensure_browser(sess)
+        start = time.monotonic()
+        try:
+            result = await method(*args, **kwargs)
+            elapsed = (time.monotonic() - start) * 1000
+            verification = infer_verification(result)
+            entry = log_operation(
+                operation, "success", elapsed, str(result)[:200], verification=verification
+            )
+            await broadcast_state()
+            return api_success(
+                operation,
+                result,
+                meta={"run_id": entry["run_id"], "verification": entry["verification"]},
+            )
+        except Exception as exc:
+            elapsed = (time.monotonic() - start) * 1000
+            logger.exception("Operation '%s' failed", operation)
+            entry = log_operation(operation, "error", elapsed, str(exc))
+            await broadcast_state()
+            status = 504 if isinstance(exc, TimeoutError) else 503 if "connect" in str(exc).lower() else 400
+            return api_error(operation, "operation_failed", str(exc), status)
+    except HTTPException:
+        raise
     except Exception as exc:
-        elapsed = (time.monotonic() - start) * 1000
-        logger.exception("Operation '%s' failed", operation)
-        entry = log_operation(operation, "error", elapsed, str(exc))
-        await broadcast_state()
-        status = 504 if isinstance(exc, TimeoutError) else 503 if "connect" in str(exc).lower() else 400
-        return api_error(operation, "operation_failed", str(exc), status)
+        logger.exception("Browser setup failed for '%s'", operation)
+        raise HTTPException(status_code=503, detail=f"Browser setup failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -1228,7 +1376,61 @@ async def get_status():
         "active_environment": state.get("active_environment"),
         "cdp_url": state["cdp_url"],
         "log_size": len(operation_log),
+        "sessions": session_registry.count,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-client sessions
+# ---------------------------------------------------------------------------
+
+
+@app.post("/session/new")
+async def session_new(url: str = Query("about:blank", description="Initial URL for the new session's tab")):
+    """Mint a new isolated session with its own dedicated browser tab.
+
+    The session id is returned in the ``X-Session-ID`` header and as a
+    ``bh_session`` cookie; the client simply echoes it back on later calls.
+    """
+    try:
+        await chrome_mgr.launch()
+        sess = await session_registry.create(_local_cdp_http(), url=url)
+    except Exception as exc:
+        logger.exception("Session creation failed")
+        return api_error("session_new", "session_creation_failed", str(exc), 503)
+    body = api_success("session_new", {"session_id": sess.session_id, "tab_id": sess.tab_id, "url": url})
+    return JSONResponse(
+        content=body,
+        headers={
+            "X-Session-ID": sess.session_id,
+            "Set-Cookie": f"bh_session={sess.session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800",
+        },
+    )
+
+
+@app.get("/sessions")
+async def sessions_list():
+    """List all active per-client sessions (id prefix, tab, age)."""
+    now = time.monotonic()
+    items = [
+        {
+            "session_id": sess.session_id,
+            "tab_id": sess.tab_id,
+            "age_s": round(now - sess.created, 1),
+            "idle_s": round(now - sess.last_seen, 1),
+        }
+        for sess in session_registry._sessions.values()
+    ]
+    return api_success("sessions_list", {"count": len(items), "sessions": items})
+
+
+@app.post("/session/close")
+async def session_close(session_id: str = Query(..., description="Session id to close")):
+    """Close a specific session (its tab + WebSocket)."""
+    ok = await session_registry.destroy(session_id)
+    if not ok:
+        return api_error("session_close", "session_not_found", f"Session {session_id} not found", 404)
+    return api_success("session_close", {"session_id": session_id, "closed": True})
 
 
 @app.get("/stealth/config")

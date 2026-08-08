@@ -2079,7 +2079,27 @@ class CDPClient:
             target = next((t for t in tabs if t["id"] == tab_id), None)
         if not target:
             raise CDPError(f"Tab not found: {tab_id}")
-        await self.close()
+        await self.connect_to_target(tab_id)
+        await self._activate_current()
+        return {"status": "ok", "tab_id": tab_id, "title": target.get("title", "")}
+
+    async def connect_to_target(self, tab_id: str) -> dict:
+        """Open a fresh WebSocket to an existing page target (tab).
+
+        Unlike :meth:`switch_tab` this does not activate the tab in the
+        foreground; it only attaches a CDP session.  Used by the session
+        registry so every client can hold its own connection to its own tab
+        without stealing focus from other agents.
+        """
+        tabs = await self.discover_tabs()
+        target = next((t for t in tabs if t["id"] == tab_id), None)
+        if not target:
+            raise CDPError(f"Tab not found: {tab_id}")
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
         ws_url = target["webSocketDebuggerUrl"]
         self._ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
         self._target_id = tab_id
@@ -2090,8 +2110,8 @@ class CDPClient:
         asyncio.create_task(self._listener())
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
-        await self._activate_current()
-        return {"status": "ok", "tab_id": tab_id, "title": target.get("title", "")}
+        self._apply_stealth_patches()
+        return {"status": "ok", "target_id": tab_id, "cdp_url": ws_url}
 
     # ─── Multi-tab scan (no tab switch needed) ─────────────────────
 
