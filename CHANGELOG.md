@@ -4,6 +4,19 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.22.0] — 2026-08-08
+
+#### Fixed
+- **Tab-szivárgás cookie nélküli klienseknél** (`f149a19`): a `close_tab` mostantól a CDP HTTP `/json/close`-t használ (WS nélkül is működik), és a `SessionRegistry.create()` minden mintelés előtt **bezárja a gazdátlan tabokat** — a fizikai tab-szám sosem haladja meg a capet, még cookie-jar nélküli klienseknél sem (élesen: 25 cookie nélküli hívás → 15 tab, korábban korlátlan).
+- **MCP kontrakt-tesztek 15 tool-ra** (`dc97659`): `EXPECTED_TOOLS`/`EXPECTED_CAPABILITY`/`EXPECTED_REQUIRED_PARAMS` frissítve a `search`/`get_content`/`run_flow` tool-okkal; a `run_flow` `steps` paramétere kötelező.
+- **`/status` félrevezető `connected: false`** (`966b706`): új `browser_available` mező — a default client és a session-ök külön élnek; ha bármelyik elérhető, a böngésző használható.
+
+#### Changed
+- **VLM a llm-gw `hermes-vision` modelljére állítva** (`09365be`): `VLM_BASE_URL=http://localhost:8000/v1`, `VLM_MODEL=hermes-vision`, `VLM_TIMEOUT=90` — nincs külső provider-függőség. A `vision_check` a reasoning-modell `content`-jét és `reasoning`-jét is olvassa; `max_tokens` 500.
+
+#### Added
+- **Diff-VLM** (`6c1fadd`): a `/agent/diff` a diff-képet a vision modelllel értékelteti ("mi változott?" szövegesen); ha a diff-kép nem készül, a B screenshotját elemzi. A válasz `vlm` mezője tartalmazza.
+
 ## [1.21.0] — 2026-08-08
 
 #### Added

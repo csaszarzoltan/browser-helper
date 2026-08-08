@@ -138,7 +138,15 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 See [LLM Agent API](docs/agent-api.md).
 
-### v1.21 — Agent toolkit + reliability (Latest, 2026-08-08)
+### v1.22 — Stability + VLM (Latest, 2026-08-08)
+
+- **Tab-szivárgás fix:** cookie nélküli klienseknél is max 15 tab (orphan-tab reaper + WS-független `close_tab`).
+- **VLM a llm-gw `hermes-vision`-nal:** a `flow-vlm` és `diff-vlm` a gateway vision modelljét használja — nincs külső provider.
+- **Diff-VLM:** a `/agent/diff` szövegesen megmondja, MI változott a két oldal között.
+- **`/status`:** új `browser_available` mező (connected OR aktív session-ök).
+- **MCP:** 15 tool, `run_flow` `steps` kötelező.
+
+### v1.21 — Agent toolkit + reliability (2026-08-08)
 
 **One-call high-level operations** — an agent does in 1 call what used to take 6-7:
 - `POST /agent/search` — search (perplexity/google/ddg/bing) and get the answer text back
