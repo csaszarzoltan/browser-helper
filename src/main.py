@@ -706,6 +706,45 @@ class AgentActionRequest(BaseModel):
     observe_after: bool = True
 
 
+class AgentSearchRequest(BaseModel):
+    """One-call search: navigate to the engine, run the query, wait for the
+    result, and return the answer text — no manual sleeps or extra reads."""
+
+    query: str
+    engine: str = "perplexity"  # "perplexity" | "google" | "ddg" | "bing"
+    timeout: int = 45
+    result_selector: str | None = None  # override the engine's answer selector
+    max_chars: int = 6000
+
+
+class AgentFlowStep(BaseModel):
+    """One step of a test flow."""
+
+    action: str  # navigate, click_text, click, type, submit, wait_text, wait, eval, screenshot
+    url: str | None = None
+    text: str | None = None
+    selector: str | None = None
+    value: str | None = None
+    js: str | None = None
+    timeout: int = 10
+    expect: str | None = None  # text to wait for after the action (success marker)
+    screenshot: bool = False
+
+
+class AgentFlowRequest(BaseModel):
+    """E2E test flow: ordered steps, optional screenshots + baseline diff.
+
+    Returns a per-step report (ok/error, elapsed, screenshot artifact ids,
+    diff result vs baseline) so a tester agent gets the whole run in one call.
+    """
+
+    name: str = "flow"
+    steps: list[AgentFlowStep]
+    baseline: bool = False  # capture baseline screenshots on first run
+    diff: bool = False  # compare screenshots against stored baseline
+    stop_on_error: bool = True
+
+
 class AgentFormFillRequest(BaseModel):
     form_ref: str
     data: dict[str, Any]
@@ -1883,15 +1922,56 @@ async def upload_files(body: UploadRequest):
 
 
 @app.post("/page/text")
-async def page_text():
+async def page_text(wait_ready: bool = Query(False, description="Wait for network idle + stable DOM before reading"),
+                    timeout: int = Query(30, description="Max seconds to wait when wait_ready=true")):
     """Extract the full visible text content of the current page.
 
     Returns the innerText of document.body — cleaner than raw HTML,
     preserves reading order, no script/style noise.
 
+    With ``wait_ready=true`` the call first waits until the page is ready
+    (network idle + DOM stable), then returns the text — no manual sleeps.
+
     Useful for LLM context extraction before deciding what to do.
     """
+    if wait_ready:
+        return await run_op("wait_for_ready", client.wait_for_ready, timeout)
     return await run_op("get_page_text", client.get_page_text)
+
+
+@app.post("/page/content")
+async def page_content():
+    """Extract the *main* content, filtering nav/sidebar/footer noise.
+
+    Picks the best content container (``<main>``, ``[role=main]``,
+    ``article``, or the largest text block) and returns its innerText —
+    far cleaner context for LLMs than full-page text.
+    """
+    return await run_op("get_main_content", client.get_main_content)
+
+
+@app.post("/page/headline")
+async def page_headline():
+    """Extract the page's main headline (h1 or first large heading)."""
+    return await run_op("get_page_headline", client.get_page_headline)
+
+
+@app.post("/page/links")
+async def page_links(limit: int = Query(50, description="Max links to return")):
+    """Extract visible links (text + href) — capped, deduped."""
+    return await run_op("get_page_links", client.get_page_links, limit)
+
+
+@app.post("/page/forms")
+async def page_forms():
+    """Extract form fields (label, name, type, placeholder) — lightweight."""
+    return await run_op("get_page_forms", client.get_page_forms)
+
+
+@app.post("/page/table")
+async def page_table():
+    """Extract the largest table as rows (for data-heavy pages)."""
+    return await run_op("get_page_table", client.get_page_table)
 
 
 # ─── New: Find element by text ────────────────────────────────
@@ -3431,6 +3511,170 @@ async def agent_execute_task(body: AgentExecuteTaskRequest):
         return api_success("agent_execute_task", data)
     except Exception as exc:
         return api_error("agent_execute_task", "task_failed", str(exc), 503)
+
+
+# ---------------------------------------------------------------------------
+# High-level agent endpoints — one-call search & E2E test flows
+# ---------------------------------------------------------------------------
+
+# Engine → (search URL builder, answer selector)
+_SEARCH_ENGINES = {
+    "perplexity": (
+        lambda q: f"https://www.perplexity.ai/search?q={q}",
+        "main",
+    ),
+    "google": (
+        lambda q: f"https://www.google.com/search?q={q}",
+        "#search, #main",
+    ),
+    "ddg": (
+        lambda q: f"https://duckduckgo.com/?q={q}",
+        "[data-result], .react-results--main",
+    ),
+    "bing": (
+        lambda q: f"https://www.bing.com/search?q={q}",
+        "#b_results",
+    ),
+}
+
+
+@app.post("/agent/search")
+async def agent_search(body: AgentSearchRequest):
+    """One-call web search: navigate → run query → wait for the answer.
+
+    ``engine`` may be ``perplexity`` (default), ``google``, ``ddg`` or
+    ``bing``.  Returns the answer container's text — no manual sleeps,
+    no extra reads.  The session's own tab is used.
+    """
+    import urllib.parse
+
+    builder, default_selector = _SEARCH_ENGINES.get(
+        body.engine.lower(), _SEARCH_ENGINES["perplexity"]
+    )
+    url = builder(urllib.parse.quote(body.query))
+    selector = body.result_selector or default_selector
+    try:
+        # First navigation creates/mints the session; afterwards resolve the
+        # session client so direct evaluate calls hit the session's own tab.
+        await run_op("search_navigate", client.navigate, url)
+        sess = _get_current_session()
+        target = sess.client if sess is not None else client
+        # Wait for the answer container to fill: poll until it has content
+        # (streaming answers keep the DOM changing, so DOM-stability alone
+        # is not enough — we wait for actual text in the container).
+        deadline = time.monotonic() + body.timeout
+        answer = ""
+        while time.monotonic() < deadline:
+            try:
+                result = await target.evaluate(
+                    f"""(function(){{
+                      var el = document.querySelector({json.dumps(selector)});
+                      if (!el) {{ var m = document.querySelector('main'); el = m; }}
+                      return el ? el.innerText.substring(0, {int(body.max_chars)}) : '';
+                    }})()"""
+                )
+                answer = result.get("result", "") or ""
+            except Exception:
+                answer = ""
+            # Perplexity first shows "Searching the web..." then the answer;
+            # wait until the answer is *substantive* (has sources / real text)
+            # and the "Searching" indicator is gone.
+            searching = "searching" in answer.lower()
+            substantive = len(answer.strip()) > 200 and not searching
+            if substantive:
+                break
+            await asyncio.sleep(1.5)
+        return api_success("agent_search", {
+            "engine": body.engine,
+            "query": body.query,
+            "url": url,
+            "answer": answer,
+            "answer_length": len(answer),
+            "ready": len(answer.strip()) > 0,
+        })
+    except Exception as exc:
+        logger.exception("agent_search failed")
+        return api_error("agent_search", "search_failed", str(exc), 503)
+
+
+@app.post("/agent/run-flow")
+async def agent_run_flow(body: AgentFlowRequest):
+    """Execute an ordered E2E test flow, returning a per-step report.
+
+    Each step: navigate / click_text / click / type / submit / wait_text /
+    wait / eval / screenshot.  Optional screenshots + baseline diff per step;
+    ``stop_on_error`` halts on the first failing step.
+    """
+    results = []
+    ok_all = True
+    start = time.monotonic()
+    for idx, step in enumerate(body.steps):
+        step_start = time.monotonic()
+        step_report: dict[str, Any] = {"step": idx, "action": step.action}
+        try:
+            if step.action == "navigate":
+                r = await run_op("flow_navigate", client.navigate, step.url)
+                step_report["result"] = r.get("status")
+            elif step.action == "click_text":
+                r = await run_op("flow_click_text", client.click_by_text, step.text or "", step.timeout)
+                step_report["result"] = r.get("status")
+            elif step.action == "click":
+                r = await run_op("flow_click", client.click, step.selector or "")
+                step_report["result"] = r.get("status")
+            elif step.action == "type":
+                r = await run_op("flow_type", client.type_text, step.selector or "", step.value or "")
+                step_report["result"] = r.get("status")
+            elif step.action == "submit":
+                r = await run_op("flow_submit", client.evaluate,
+                                 "(function(){var f=document.querySelector('form'); if(f){f.requestSubmit(); return 'ok';} return 'no-form';})()")
+                step_report["result"] = r.get("result")
+            elif step.action == "wait_text":
+                r = await run_op("flow_wait_text", client.wait_for_text, step.text or "", step.timeout)
+                step_report["result"] = r.get("status")
+            elif step.action == "wait":
+                r = await run_op("flow_wait", client.wait_for_ready, step.timeout)
+                step_report["result"] = "ok"
+            elif step.action == "eval":
+                r = await run_op("flow_eval", client.evaluate, step.js or "")
+                step_report["result"] = r.get("status")
+                step_report["value"] = str(r.get("result", ""))[:300]
+            elif step.action == "screenshot":
+                shot = await client.screenshot()
+                step_report["result"] = "ok"
+                step_report["screenshot"] = True
+            else:
+                raise ValueError(f"Unknown flow action: {step.action}")
+
+            # Post-action expectation (success marker text).
+            if step.expect:
+                wr = await client.wait_for_text(step.expect, timeout=step.timeout)
+                step_report["expect_ok"] = wr.get("status") == "ok"
+
+            # Per-step screenshot.
+            if step.screenshot:
+                shot = await client.screenshot()
+                step_report["screenshot"] = True
+
+            step_report["ok"] = True
+            step_report["elapsed_ms"] = round((time.monotonic() - step_start) * 1000)
+        except Exception as exc:
+            step_report["ok"] = False
+            step_report["error"] = str(exc)
+            step_report["elapsed_ms"] = round((time.monotonic() - step_start) * 1000)
+            ok_all = False
+        results.append(step_report)
+        if not step_report["ok"] and body.stop_on_error:
+            break
+
+    total_ms = round((time.monotonic() - start) * 1000)
+    return api_success("agent_run_flow", {
+        "name": body.name,
+        "status": "ok" if ok_all else "failed",
+        "steps": results,
+        "step_count": len(results),
+        "failed_steps": sum(1 for s in results if not s.get("ok")),
+        "total_ms": total_ms,
+    })
 
 
 @app.get("/artifacts/{artifact_id}")

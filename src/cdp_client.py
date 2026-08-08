@@ -1212,6 +1212,217 @@ class CDPClient:
         text = result.get("result", "") or ""
         return {"status": "ok", "text": text, "length": len(text)}
 
+    async def wait_for_ready(self, timeout: int = 30, quiet_ms: int = 800) -> dict:
+        """Wait until the page is *ready*: network idle + stable DOM.
+
+        Polls network idle (no requests for *quiet_ms*) and DOM stability
+        (body text stops changing).  Returns the final page text so callers
+        never need a separate read.  This replaces the manual ``sleep`` dance
+        agents currently do after navigate/submit.
+        """
+        await self._activate_current()
+        deadline = time.monotonic() + timeout
+        last_text = ""
+        stable_for = 0.0
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    await self.wait_for_network_idle(timeout=3, quiet_ms=quiet_ms)
+                except Exception:
+                    pass  # network idle is best-effort
+                res = await self.evaluate(
+                    "document.body ? document.body.innerText.substring(0, 2000) : ''"
+                )
+                text = res.get("result", "") or ""
+                if text and text == last_text:
+                    stable_for += 0.5
+                    if stable_for >= 1.5:
+                        break
+                else:
+                    stable_for = 0.0
+                    last_text = text
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
+        # Final read
+        res = await self.evaluate(
+            "document.body ? document.body.innerText.substring(0, 10000) : ''"
+        )
+        text = res.get("result", "") or ""
+        return {"status": "ok", "ready": True, "text": text, "length": len(text)}
+
+    async def get_main_content(self) -> dict:
+        """Extract the *main* content, filtering nav/sidebar/footer noise.
+
+        Picks the best content container (``<main>``, ``[role=main]``,
+        ``article``, or the largest text block) and returns its innerText —
+        far cleaner context for LLMs than full-page text.
+        """
+        await self._activate_current()
+        js = r"""
+(function() {
+  function score(el) {
+    if (!el || el.offsetParent === null) return -1;
+    var txt = (el.innerText || "").trim();
+    if (txt.length < 200) return -1;
+    var nav = el.closest("nav, header, footer, aside, [role=navigation]");
+    if (nav) return -1;
+    var kids = el.querySelectorAll("main, [role=main], article");
+    if (kids.length) return -1;  // a wrapper — prefer its children
+    return txt.length;
+  }
+  var best = null, bestScore = -1;
+  var candidates = document.querySelectorAll("main, [role=main], article, [class*=content], [class*=article], [id*=content]");
+  candidates.forEach(function(el) {
+    var s = score(el);
+    if (s > bestScore) { bestScore = s; best = el; }
+  });
+  if (!best) {
+    // Fallback: largest text block in body
+    var all = document.querySelectorAll("div, section, p");
+    all.forEach(function(el) {
+      var s = score(el);
+      if (s > bestScore) { bestScore = s; best = el; }
+    });
+  }
+  if (!best) return {found: false, text: document.body ? document.body.innerText.substring(0, 5000) : ""};
+  return {found: true, selector: (best.tagName || "").toLowerCase(), text: best.innerText.substring(0, 10000)};
+})()
+"""
+        result = await self.evaluate(js)
+        data = result.get("result", {})
+        if isinstance(data, str):
+            import json as _json
+
+            try:
+                data = _json.loads(data)
+            except Exception:
+                data = {"found": False, "text": data}
+        text = data.get("text", "") if isinstance(data, dict) else ""
+        return {
+            "status": "ok",
+            "found": data.get("found", False) if isinstance(data, dict) else False,
+            "selector": data.get("selector", "") if isinstance(data, dict) else "",
+            "text": text,
+            "length": len(text),
+        }
+
+    # ─── Context-efficient extractors ─────────────────────────────
+
+    async def get_page_headline(self) -> dict:
+        """Extract the page's main headline (h1, or first large heading)."""
+        await self._activate_current()
+        result = await self.evaluate(
+            """(function(){
+              var h1 = document.querySelector('h1');
+              if (h1 && h1.innerText.trim()) return h1.innerText.trim().substring(0, 300);
+              var hs = document.querySelectorAll('h1, h2');
+              for (var i=0;i<hs.length;i++){ var t=(hs[i].innerText||'').trim(); if(t) return t.substring(0,300); }
+              return '';
+            })()"""
+        )
+        text = result.get("result", "") or ""
+        return {"status": "ok", "headline": text}
+
+    async def get_page_links(self, limit: int = 50) -> dict:
+        """Extract visible links (text + href) — capped, deduped."""
+        await self._activate_current()
+        js = f"""(function(){{
+          var out = []; var seen = {{}};
+          var as = document.querySelectorAll('a[href]');
+          for (var i=0;i<as.length && out.length<{int(limit)};i++){{
+            var a = as[i];
+            if (a.offsetParent === null) continue;
+            var t = (a.innerText||'').trim().substring(0,120);
+            var h = a.href;
+            if (!t || !h || seen[h]) continue;
+            seen[h] = 1;
+            out.push({{text: t, href: h}});
+          }}
+          return out;
+        }})()"""
+        result = await self.evaluate(js)
+        links = result.get("result", []) or []
+        if isinstance(links, str):
+            import json as _json
+
+            try:
+                links = _json.loads(links)
+            except Exception:
+                links = []
+        return {"status": "ok", "count": len(links), "links": links}
+
+    async def get_page_forms(self) -> dict:
+        """Extract form fields (label, name, type, placeholder) without the
+        heavy full-page analysis."""
+        await self._activate_current()
+        js = r"""(function(){
+          var out = [];
+          var fs = document.querySelectorAll('input, textarea, select');
+          for (var i=0;i<fs.length;i++){
+            var f = fs[i];
+            if (f.offsetParent === null) continue;
+            var label = '';
+            if (f.labels && f.labels[0]) label = f.labels[0].innerText.trim();
+            if (!label && f.id) { var l = document.querySelector('label[for="'+f.id+'"]'); if (l) label = l.innerText.trim(); }
+            out.push({
+              name: f.name || '',
+              type: f.type || f.tagName.toLowerCase(),
+              placeholder: f.placeholder || '',
+              label: label.substring(0, 100),
+              required: f.required === true
+            });
+          }
+          return out;
+        })()"""
+        result = await self.evaluate(js)
+        fields = result.get("result", []) or []
+        if isinstance(fields, str):
+            import json as _json
+
+            try:
+                fields = _json.loads(fields)
+            except Exception:
+                fields = []
+        return {"status": "ok", "count": len(fields), "fields": fields}
+
+    async def get_page_table(self) -> dict:
+        """Extract the first/largest table as rows (for data-heavy pages)."""
+        await self._activate_current()
+        js = r"""(function(){
+          var tables = document.querySelectorAll('table');
+          if (!tables.length) return {found: false, rows: []};
+          var best = tables[0], bestLen = 0;
+          for (var i=0;i<tables.length;i++){
+            var len = tables[i].innerText.length;
+            if (len > bestLen) { bestLen = len; best = tables[i]; }
+          }
+          var rows = [];
+          var trs = best.querySelectorAll('tr');
+          for (var r=0;r<trs.length && rows.length<200;r++){
+            var cells = [];
+            var tds = trs[r].querySelectorAll('th, td');
+            for (var c=0;c<tds.length;c++){ cells.push((tds[c].innerText||'').trim().substring(0,200)); }
+            if (cells.length) rows.push(cells);
+          }
+          return {found: true, rows: rows};
+        })()"""
+        result = await self.evaluate(js)
+        data = result.get("result", {})
+        if isinstance(data, str):
+            import json as _json
+
+            try:
+                data = _json.loads(data)
+            except Exception:
+                data = {"found": False, "rows": []}
+        return {
+            "status": "ok",
+            "found": data.get("found", False) if isinstance(data, dict) else False,
+            "rows": data.get("rows", []) if isinstance(data, dict) else [],
+            "row_count": len(data.get("rows", [])) if isinstance(data, dict) else 0,
+        }
+
     # ─── NEW: Full page screenshot ───────────────────────────────
 
     async def full_page_screenshot(self, quality: int = 0) -> dict:
