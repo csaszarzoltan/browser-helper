@@ -84,7 +84,7 @@ class SessionRegistry:
             logger.info("Session %s created (tab %s, total %d)", sid[:8], tab_id, len(self._sessions))
             return sess
 
-    async def _open_tab_http(self, client: CDPClient, url: str) -> str:
+    async def _open_tab_http(self, client: CDPClient, url: str = "about:blank") -> str:
         """Open a new tab via CDP HTTP endpoint (no WS connection needed)."""
         import httpx
 

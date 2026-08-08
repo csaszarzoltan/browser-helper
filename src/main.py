@@ -1053,15 +1053,13 @@ async def _ensure_browser(sess: Session | None = None) -> None:
     try:
         if sess is not None:
             # Re-attach to the session's dedicated tab (heals a closed tab by
-            # recreating it).
+            # recreating it via the HTTP endpoint — no WS needed yet).
             try:
                 await target.connect_to_target(sess.tab_id)
             except Exception:
                 # Tab gone — recreate it and update the session.
-                result = await target.open_new_tab()
-                if result.get("status") != "ok":
-                    raise RuntimeError(f"Session tab recreation failed: {result.get('error')}")
-                sess.tab_id = result["tab_id"]
+                new_tab = await session_registry._open_tab_http(target)
+                sess.tab_id = new_tab
                 await target.connect_to_target(sess.tab_id)
             state["connected"] = True
             state["cdp_url"] = target.cdp_http_url
