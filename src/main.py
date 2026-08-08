@@ -118,6 +118,17 @@ async def lifespan(application: FastAPI):
     global start_time
     start_time = time.monotonic()
     logger.info("Browser Helper API starting up ...")
+    # ── Reap orphaned headless Chrome processes ──────────────────
+    # Headless sessions whose registry was lost (server restart/crash) leave
+    # zombie Chrome processes (--headless --remote-debugging-port=N or 0)
+    # that no reaper can reach — they eat RAM until killed manually.
+    # Kill any headless Chrome NOT owned by this process's live sessions.
+    try:
+        reaped = _reap_orphan_headless()
+        if reaped:
+            logger.warning("Reaped %d orphaned headless Chrome process(es) at startup", reaped)
+    except Exception as exc:  # noqa: BLE001 — startup must never abort
+        logger.warning("Orphan headless reap failed: %s", exc)
     # Connect to the LOCAL Chrome on the saved launched/debug port — NOT the
     # CDPClient default (9555), which may be another machine's SSH tunnel.
     local_port = (
@@ -1068,6 +1079,45 @@ def _local_cdp_http() -> str:
     """Return the local Chrome CDP HTTP base URL (saved launched port)."""
     port = settings_mgr.get("chrome_launched_port") or settings_mgr.get("chrome_debug_port", 9557)
     return f"http://127.0.0.1:{port}"
+
+
+def _reap_orphan_headless() -> int:
+    """Kill headless Chrome processes not owned by live headless sessions.
+
+    The HeadlessManager tracks its sessions in memory; after a restart or
+    crash those handles are gone and the spawned Chrome processes become
+    orphans (ppid=1) that the timeout guard can never close.  This scans
+    for ``chrome --headless`` processes and kills those whose PID is not in
+    the current session pool.  Returns the number killed.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", "chrome --headless"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return 0
+    pids = [p for p in out.stdout.split() if p.isdigit()]
+    if not pids:
+        return 0
+    try:
+        live = {str(h.chrome_pid) for h in headless_mgr.pool.all_sessions()}
+    except Exception:
+        live = set()
+    killed = 0
+    for pid in pids:
+        if pid in live:
+            continue  # owned by a live session — leave it
+        try:
+            subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
+            killed += 1
+        except Exception:
+            pass
+    if killed:
+        logger.warning("Reaped %d orphaned headless Chrome PID(s)", killed)
+    return killed
 
 
 def _resolve_session(request: Request) -> Session | None:
