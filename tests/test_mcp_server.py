@@ -52,6 +52,9 @@ EXPECTED_TOOLS = [
     "switch_tab",
     "close_tab",
     "session_status",
+    "search",
+    "get_content",
+    "run_flow",
     "fleet_nodes",
     "fleet_status",
     "fleet_queue",
@@ -68,6 +71,9 @@ EXPECTED_REQUIRED_PARAMS = {
     "switch_tab": ["id"],
     "close_tab": ["id"],
     "session_status": [],
+    "search": ["query"],
+    "get_content": [],
+    "run_flow": ["steps"],
     "fleet_nodes": [],
     "fleet_status": [],
     "fleet_queue": [],
@@ -84,6 +90,9 @@ EXPECTED_CAPABILITY = {
     "switch_tab": ("browser.core", "ready"),
     "close_tab": ("browser.core", "ready"),
     "session_status": ("diagnostics.privacy", "ready"),
+    "search": ("agent.search", "ready"),
+    "get_content": ("agent.search", "ready"),
+    "run_flow": ("agent.flow", "ready"),
     "fleet_nodes": ("workflow.local", "ready"),
     "fleet_status": ("workflow.local", "ready"),
     "fleet_queue": ("workflow.local", "ready"),
@@ -99,6 +108,9 @@ TOOL_MODULES = {
     "switch_tab": "tools",
     "close_tab": "tools",
     "session_status": "tools",
+    "search": "tools",
+    "get_content": "tools",
+    "run_flow": "tools",
     "fleet_nodes": "fleet_tools",
     "fleet_status": "fleet_tools",
     "fleet_queue": "fleet_tools",
@@ -686,7 +698,7 @@ class TestBehavioralFastMCP:
         mcp = server.mcp  # memoized builder; registers tools
         assert mcp is not None
         tools = asyncio.run(mcp.list_tools())
-        assert len(tools) == 12
+        assert len(tools) == 15
         names = {t.name for t in tools}
         assert names == set(EXPECTED_TOOLS)
 

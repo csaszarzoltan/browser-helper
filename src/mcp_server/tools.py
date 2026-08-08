@@ -206,8 +206,8 @@ async def get_content(url: str | None = None, wait_ready: bool = True,
                        "data": content, "error": None, "meta": {}})
 
 
-async def run_flow(name: str = "flow", steps: list[dict] | None = None,
-                   stop_on_error: bool = True, ctx: Context | None = None) -> str:
+async def run_flow(steps: list[dict], name: str = "flow", stop_on_error: bool = True,
+                   ctx: Context | None = None) -> str:
     """Run an ordered E2E test flow (capability ``agent.flow``, READY).
 
     Each step: navigate / click_text / click / type / submit / wait_text /
@@ -218,6 +218,8 @@ async def run_flow(name: str = "flow", steps: list[dict] | None = None,
     if ctx is not None:
         ctx.info(f"run_flow {name} ({len(steps or [])} steps)")
     steps = steps or []
+    if not steps:
+        return tool_error("run_flow", "invalid_params", "steps is required")
     req = AgentFlowRequest(
         name=name,
         steps=[AgentFlowStep(**s) for s in steps],

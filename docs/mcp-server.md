@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **12 tools** derived from the capability registry.
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **15 tools** derived from the capability registry.
 
 ---
 
@@ -131,9 +131,9 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ---
 
-## 3. Tool reference (12 tools)
+## 3. Tool reference (15 tools)
 
-All 12 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
+All 15 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 
 ### Browser tools — `src/mcp_server/tools.py`
 
@@ -274,7 +274,7 @@ All three tools are pure reads: they never register, unregister, allocate, relea
 
 Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`) require a live CDP connection. Without one, `run_op` raises `HTTPException` 400 *before* the engine call — the agent sees a tool-call error with that message rather than an envelope. Start Browser Helper (or launch Chrome with `--remote-debugging-port=9555` and connect) before calling them. `session_status` and the fleet tools work without a browser connection.
 
-### The agent sees only 12 tools
+### The agent sees only 15 tools
 
 12 is the correct count for v1.21.0. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
 
