@@ -4,6 +4,18 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.23.4] — 2026-08-09
+
+#### Added
+- **Chrome health watchdog** (`chrome-health-watchdog`): 5 percenként futó háttérfeladat — (1) megöli az elárvult Chrome folyamatokat (minden `--headless` + nem-main `remote-debugging-port`), (2) ha a fő Chrome meghalt, auto-restart + reconnect. Megelőzi a RAM-felhalmozódást és az "Chrome started but CDP not responding" állapotot.
+
+#### Fixed
+- **Orphan reaper kiterjesztve** (`reap-orphans-v2`): a régi `_reap_orphan_headless()` csak a `remote-debugging-port=19`-et kereste, és nem védte a main Chrome-ot (9557). Most minden Chrome-ot felmér, kihagyja a live session-ök és a main Chrome PID-jeit, a többit megöli.
+
+#### Verified
+- Szimulált orphan Chrome (12 process) → restart után "Reaped 8 orphaned Chrome PID(s)", 0 orphan maradt, a main Chrome (9557) érintetlen.
+- Service log: "Chrome health watchdog started (every 300s)".
+
 ## [1.23.3] — 2026-08-09
 
 #### Fixed

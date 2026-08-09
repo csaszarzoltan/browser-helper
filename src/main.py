@@ -194,6 +194,12 @@ async def lifespan(application: FastAPI):
         logger.info("Session reaper started (TTL %ss)", session_registry._ttl)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Session reaper startup failed: %s", exc)
+    # ── Chrome health watchdog: reap orphans + auto-restart ──────
+    try:
+        asyncio.create_task(_chrome_health_watchdog())
+        logger.info("Chrome health watchdog started (every 300s)")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Chrome health watchdog startup failed: %s", exc)
     yield
     # Shutdown
     # Stop the fleet health poller / release its HTTP client
@@ -223,7 +229,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.23.3",
+    version="1.23.4",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -1104,37 +1110,117 @@ def _reap_orphan_headless() -> int:
     The HeadlessManager tracks its sessions in memory; after a restart or
     crash those handles are gone and the spawned Chrome processes become
     orphans (ppid=1) that the timeout guard can never close.  This scans
-    for ``chrome --headless`` processes and kills those whose PID is not in
-    the current session pool.  Returns the number killed.
+    for all ``chrome`` processes with ``--headless`` or
+    ``--remote-debugging-port`` and kills those whose PID is not in the
+    current session pool.  Returns the number killed.
     """
     import subprocess
 
     try:
+        # Match all headless Chrome AND any Chrome on non-standard ports
+        # (port=0, port=19xxx) that could be orphans from previous runs.
         out = subprocess.run(
-            ["pgrep", "-f", "remote-debugging-port=19"],  # 19222+ headless portok
+            ["pgrep", "-af", "chrome.*--headless|chrome.*remote-debugging-port="],
             capture_output=True, text=True, timeout=10,
         )
     except Exception:
         return 0
-    pids = [p for p in out.stdout.split() if p.isdigit()]
+    lines = out.stdout.strip().split("\n")
+    pids = [l.split()[0] for l in lines if l and l.split()[0].isdigit()]
     if not pids:
         return 0
+
+    # Identify the main browser-helper Chrome (the one on port 9557)
+    main_port = (
+        settings_mgr.get("chrome_launched_port")
+        or settings_mgr.get("chrome_debug_port")
+        or 9557
+    )
+    try:
+        out2 = subprocess.run(
+            ["pgrep", "-af", f"remote-debugging-port={main_port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        main_pids = {l.split()[0] for l in out2.stdout.strip().split("\n")
+                     if l and l.split()[0].isdigit()}
+    except Exception:
+        main_pids = set()
+
     try:
         live = {str(h.chrome_pid) for h in headless_mgr.pool.all_sessions()}
     except Exception:
         live = set()
+
     killed = 0
     for pid in pids:
-        if pid in live:
-            continue  # owned by a live session — leave it
+        if pid in live or pid in main_pids:
+            continue  # owned by a live session or the main browser — leave it
         try:
             subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
             killed += 1
         except Exception:
             pass
     if killed:
-        logger.warning("Reaped %d orphaned headless Chrome PID(s)", killed)
+        logger.warning("Reaped %d orphaned Chrome PID(s)", killed)
     return killed
+
+
+async def _chrome_health_watchdog() -> None:
+    """Periodic background task: reap orphan Chrome + auto-restart if dead.
+
+    Runs every 5 minutes.  If the main browser-helper Chrome has crashed,
+    it auto-restarts.  Orphan Chrome processes are killed to prevent RAM
+    accumulation.
+    """
+    WATCHDOG_INTERVAL = 300  # 5 minutes
+    while True:
+        await asyncio.sleep(WATCHDOG_INTERVAL)
+        try:
+            # 1. Reap orphan headless Chrome
+            reaped = _reap_orphan_headless()
+            if reaped:
+                logger.info("Watchdog: reaped %d orphan Chrome process(es)", reaped)
+
+            # 2. Check if the main Chrome is alive
+            main_port = (
+                settings_mgr.get("chrome_launched_port")
+                or settings_mgr.get("chrome_debug_port")
+                or 9557
+            )
+            if client.is_connected:
+                continue  # all good
+
+            # Chrome is dead — try to auto-restart
+            logger.warning("Watchdog: Chrome not connected (port %d), attempting auto-restart", main_port)
+            try:
+                import subprocess
+                import httpx as _httpx
+
+                # Check if Chrome is actually running on the port
+                async with _httpx.AsyncClient(timeout=3.0) as http:
+                    resp = await http.get(f"http://127.0.0.1:{main_port}/json/version")
+                    if resp.status_code != 200:
+                        raise ConnectionError("Chrome not responding")
+                # Port is open but client is disconnected — reconnect
+                client.cdp_http_url = f"http://127.0.0.1:{main_port}"
+                result = await client.connect()
+                state["connected"] = True
+                state["cdp_url"] = result.get("cdp_url", f"ws://127.0.0.1:{main_port}")
+                logger.info("Watchdog: auto-reconnected to Chrome at %s", state["cdp_url"])
+            except Exception as exc:
+                # Chrome not running at all — launch a new one
+                logger.warning("Watchdog: Chrome not running, launching fresh instance: %s", exc)
+                try:
+                    await chrome_mgr.launch()
+                    client.cdp_http_url = f"http://127.0.0.1:{main_port}"
+                    result = await client.connect()
+                    state["connected"] = True
+                    state["cdp_url"] = result.get("cdp_url", f"ws://127.0.0.1:{main_port}")
+                    logger.info("Watchdog: launched and connected to Chrome at %s", state["cdp_url"])
+                except Exception as exc2:
+                    logger.warning("Watchdog: auto-launch failed: %s", exc2)
+        except Exception as exc:
+            logger.debug("Chrome health watchdog iteration failed: %s", exc)
 
 
 def _resolve_session(request: Request) -> Session | None:
