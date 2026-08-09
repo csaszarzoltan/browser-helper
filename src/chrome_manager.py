@@ -333,7 +333,7 @@ class ChromeManager:
         # browser window appears to finish their background script initialisation,
         # load proxy lists and authenticate.  Without this delay the first
         # navigation may route through the default (non-proxy) connection.
-        extension_warmup = self.settings.get("extension_warmup_sec", 3)
+        extension_warmup = self.settings.get("extension_warmup_sec", 10)
         if extension_warmup:
             logger.info(
                 "Extension warm-up: waiting %.1fs for proxy extension init",
