@@ -223,7 +223,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.23.0",
+    version="1.23.1",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -4123,10 +4123,7 @@ async def recording_stop():
 @app.get("/recording/status")
 async def recording_status():
     """Return whether a screencast recording is active."""
-    target = client
-    sess = _get_current_session()
-    if sess is not None:
-        target = sess.client
+    target, _sess = await _resolve_session_client()
     return api_success("recording_status", {
         "recording": target._recording_frames is not None,
         "frames": len(target._recording_frames) if target._recording_frames else 0,
@@ -4158,8 +4155,10 @@ async def agent_console(body: AgentConsoleRequest | None = None):
     the buffer before the next action, then read afterwards.
     """
     body = body or AgentConsoleRequest()
-    sess = _get_current_session()
-    target = sess.client if sess is not None else client
+    # Mint/resolve the caller's session so even a console-only client gets a
+    # dedicated tab + cookie (otherwise every later call from this client
+    # mints a NEW session → tab spam).
+    target, _sess = await _resolve_session_client()
     try:
         await target.start_console_monitoring()
     except Exception:

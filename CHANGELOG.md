@@ -4,6 +4,14 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.23.1] — 2026-08-09
+
+#### Fixed
+- **Tab-spam a `/agent/console`-nál** (`console-session-fix`): a `/agent/console` és `/recording/status` endpointok nem mintteltek session-t, ha a kliensnek még nem volt — hogyha egy kliens ezekkel kezdett (pl. az `e2e_dashboard.py` első hívásként `/agent/console`-t hív `clear_first`-rel), akkor cookie nélkül maradt, és MINDEN következő hívása új session + új tabot hozott létre. Mostantól mindkét endpoint `_resolve_session_client()`-et használ, így az első hívás is mintel session-t + küld cookie-t → 1 kliens / 1 tab.
+
+#### Verified
+- e2e_dashboard.py teljes futtatása: **1 session / 1 tab** a végén (korábban 7 session + 6 üres tab nagyjából ugyanazért a futtatásért).
+
 ## [1.23.0] — 2026-08-09
 
 #### Fixed
