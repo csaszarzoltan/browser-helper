@@ -4,6 +4,20 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.23.0] — 2026-08-09
+
+#### Fixed
+- **Per-client session izoláció az agent/page endpointokon** (`d0d9e64`): a `/agent/observe`, `/agent/act`, `/page/analyze`, `/screenshot/baseline`, `/screenshot/compare`, `/confirm-action`, `/agent/forms/discover`, `/agent/forms/fill`, `/agent/extract`, `/agent/available-actions`, `/agent/execute-task` és `/agent/run-flow` endpointok a globális default client helyett a hívó session-jének dedikált tabján futnak. Új `_resolve_session_client()` helper: session hiányában lazily mintel (cookie + `X-Session-ID`), majd a session clientre irányít. Korábban ezek az endpointok a közös tabon futottak — több kliens esetén kereszthatások és tab-spam alakult ki.
+- **`/navigate` után session tab-id frissítés** (`d0d9e64`): cross-origin navigációkor a Chrome új targetet hozhat létre; a session `tab_id` mostantól a client `_active_tab_id`-jére frissül navigálás után, így a későbbi observe/analyze a helyes tabot látja.
+- **CDP target-életciklus követés** (`d0d9e64`): a `_listener()` figyeli a `Target.targetCreated`/`targetDestroyed` eseményeket (page típusú targetokra), frissíti az `_active_tab_id`-t és érvényteleníti a tab cache-t.
+
+#### Changed
+- `_capture_accessibility_snapshot()` és `_capture_agent_snapshot()` `target` paramétert kapnak — a hívó session clientjére irányíthatók.
+
+#### Verified
+- 2-kliens izolációs teszt (cookie-jar A: example.com, B: example.org): observe / eval / page/analyze / agent/act mindegyike a saját tabját látja, tab-szám = 2.
+- 35 agent API teszt passzol (test_agent_api / test_agent_advanced / test_agent_navigation).
+
 ## [1.22.0] — 2026-08-08
 
 #### Fixed

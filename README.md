@@ -138,7 +138,14 @@ Every interactive operation **activates the tab first** (`Target.activateTarget`
 
 See [LLM Agent API](docs/agent-api.md).
 
-### v1.22 — Stability + VLM (Latest, 2026-08-08)
+### v1.23 — Per-client session izoláció (Latest, 2026-08-09)
+
+- **Session-izoláció minden endpointon:** az `/agent/observe`, `/agent/act`, `/page/analyze` és 8 további endpoint mostantól a hívó saját session tabján fut (nem a közös default tabon) — nincs kereszthatás, nincs tab-spam több kliens esetén.
+- **`/navigate` tab-id szinkron:** cross-origin navigáció után a session a helyes targetre mutat.
+- **CDP target-életciklus követés:** `targetCreated`/`targetDestroyed` eventek automatikusan frissítik az aktív tab-ot.
+- **Teszt:** 2 kliens (example.com vs example.org) izoláltan dolgozik, tab-szám = 2.
+
+### v1.22 — Stability + VLM (2026-08-08)
 
 - **Tab-szivárgás fix:** cookie nélküli klienseknél is max 15 tab (orphan-tab reaper + WS-független `close_tab`).
 - **VLM a llm-gw `hermes-vision`-nal:** a `flow-vlm` és `diff-vlm` a gateway vision modelljét használja — nincs külső provider.
