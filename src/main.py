@@ -55,7 +55,7 @@ from capability_registry import CapabilityRegistry
 from environment_store import EnvironmentStore
 from daily_launchpad import build_daily_launchpad
 from workflow_catalog import WorkflowCatalog
-from cdp_client import CDPClient
+from cdp_client import CDPClient, RateLimitConfig
 from chrome_manager import ChromeManager
 from session_registry import Session, SessionRegistry
 from headless_manager import HeadlessManager
@@ -331,6 +331,21 @@ class ConnectRemoteRequest(BaseModel):
     """POST /connect/remote body — requires a WebSocket endpoint."""
 
     ws_endpoint: str = Field(..., min_length=1, description="CDP WebSocket URL (ws:// or wss://)")
+
+
+class RateConfigRequest(BaseModel):
+    """POST /rate/config body — partial updates allowed.
+
+    Unknown fields are rejected (model_config extra='forbid'), string
+    values for numeric fields fail pydantic validation → 422.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool | None = None
+    min_delay_ms: float | None = Field(default=None, ge=0)
+    max_delay_ms: float | None = Field(default=None, ge=0)
+    distribution: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1804,6 +1819,27 @@ async def connect_remote(body: ConnectRemoteRequest):
         logger.warning("connect_remote failed: %s", exc)
         log_operation("connect_remote", "error", elapsed, str(exc)[:200])
         return api_error("connect_remote", "CONNECT_FAILED", str(exc), 400)
+
+
+# ─── Rate limiting config (P0-3) ──────────────────────────────────────
+
+
+@app.get("/rate/config")
+async def get_rate_config() -> dict:
+    """Return the current rate limiter configuration."""
+    return client.get_rate_config()
+
+
+@app.post("/rate/config")
+async def post_rate_config(body: RateConfigRequest) -> dict:
+    """Update the rate limiter configuration (partial updates merge)."""
+    payload = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Validate the merged config (min<=max, valid distribution) via pydantic.
+    try:
+        RateLimitConfig(**{**client.get_rate_config(), **payload})
+    except Exception as exc:  # pydantic ValidationError, ValueError, AssertionError
+        raise HTTPException(status_code=422, detail=str(exc))
+    return client.set_rate_config(payload)
 
 
 @app.post("/connect")

@@ -74,6 +74,10 @@ class ProxyEntry:
     success_count: int = 0
     fail_count: int = 0
     created_at: float = field(default_factory=time.time)
+    # P1-6 enhanced fields
+    geo: dict | None = None
+    consecutive_failures: int = 0
+    cooling_until: float = 0.0
 
     def __post_init__(self):
         """Validate URL on construction."""
@@ -101,6 +105,8 @@ class ProxyPool:
 
     # Number of consecutive failures before marking a proxy unhealthy/disabled
     FAILURE_THRESHOLD = 3
+    # Cooling-down period (seconds) after hitting the failure threshold
+    COOLDOWN_SECONDS = 30
 
     def __init__(self, storage_path: str | None = None, max_size: int = 100):
         self.storage_path = storage_path or _default_storage_path()
@@ -164,6 +170,7 @@ class ProxyPool:
         group: str | None = None,
         session_id: str | None = None,
         proxy_id: str | None = None,
+        type: str | None = None,
     ) -> dict[str, Any] | None:
         """
         Get a proxy entry as a dict (or by direct ID lookup).
@@ -173,6 +180,7 @@ class ProxyPool:
             group:  Tag filter for by-tag strategy.
             session_id: Session identifier for sticky strategy.
             proxy_id: Direct ID lookup (takes precedence when provided).
+            type:   Filter by proxy type (e.g. 'SOCKS5', 'HTTP').
 
         Returns:
             A dict of proxy fields, or None if not found / no healthy proxies.
@@ -183,7 +191,7 @@ class ProxyPool:
             return self._entry_to_dict(entry) if entry else None
 
         # Strategy-based selection
-        available = self._get_healthy_enabled(group=group)
+        available = self._get_healthy_enabled(group=group, type=type)
 
         if not available:
             return None
@@ -235,15 +243,49 @@ class ProxyPool:
 
         return self._entry_to_dict(entry)
 
-    def get_pool(self) -> list[dict[str, Any]]:
-        """Return all proxy entries as a list of dicts."""
-        return [self._entry_to_dict(e) for e in self._proxies.values()]
+    def get_pool(self, type: str | None = None) -> list[dict[str, Any]]:
+        """Return all proxy entries as a list of dicts (optionally type-filtered)."""
+        entries = self._proxies.values()
+        if type:
+            entries = [e for e in entries if e.type == type]
+        return [self._entry_to_dict(e) for e in entries]
 
     def clear(self) -> None:
         """Remove all proxies and reset internal state."""
         self._proxies.clear()
         self._sticky_map.clear()
         self._round_robin_index = 0
+
+    # ── Geo tagging (P1-6) ─────────────────────────────────────
+
+    def set_geo(
+        self,
+        proxy_id: str,
+        country: str | None = None,
+        city: str | None = None,
+        isp: str | None = None,
+    ) -> None:
+        """Store geo info (country/city/isp) on a proxy entry.
+
+        All fields None → clears geo. Raises KeyError for unknown proxy.
+        """
+        entry = self._proxies.get(proxy_id)
+        if entry is None:
+            raise KeyError(f"Proxy {proxy_id!r} not found")
+        if country is None and city is None and isp is None:
+            entry.geo = None
+        else:
+            entry.geo = {
+                "country": country,
+                "city": city,
+                "isp": isp,
+            }
+        self.save()
+
+    def get_geo(self, proxy_id: str) -> dict | None:
+        """Return the geo dict for a proxy (None if unset or unknown)."""
+        entry = self._proxies.get(proxy_id)
+        return entry.geo if entry else None
 
     # ── Health checks ─────────────────────────────────────────
 
@@ -323,13 +365,19 @@ class ProxyPool:
         return result
 
     def health_check_all(self) -> list[dict[str, Any]]:
-        """Run health check on all proxies.  Returns list of result dicts."""
-        results = []
-        for pid in list(self._proxies.keys()):
-            result = self.health_check(pid)
-            if result:
-                results.append(result)
-        return results
+        """Run health check on all proxies concurrently.  Returns result dicts.
+
+        Uses a ThreadPoolExecutor so slow checks overlap instead of running
+        sequentially (P1-6 requirement).
+        """
+        import concurrent.futures
+
+        pids = list(self._proxies.keys())
+        if not pids:
+            return []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(pids)) as ex:
+            results = list(ex.map(self.health_check, pids))
+        return [r for r in results if r is not None]
 
     # ── Non-blocking health checks for async callers (review R3) ──────
 
@@ -407,6 +455,9 @@ class ProxyPool:
         if not entry:
             return
         entry.success_count += 1
+        # P1-6: reset consecutive failures + exit cooling state
+        entry.consecutive_failures = 0
+        entry.cooling_until = 0.0
         # Restore health if it was unhealthy
         if not entry.healthy:
             entry.healthy = True
@@ -419,8 +470,10 @@ class ProxyPool:
         if not entry:
             return
         entry.fail_count += 1
-        # Mark unhealthy after threshold
-        if entry.fail_count >= self.FAILURE_THRESHOLD:
+        entry.consecutive_failures += 1
+        # P1-6 circuit breaker: after N consecutive failures → cooling-down
+        if entry.consecutive_failures >= self.FAILURE_THRESHOLD:
+            entry.cooling_until = time.time() + self.COOLDOWN_SECONDS
             entry.healthy = False
             entry.enabled = False
 
@@ -435,6 +488,8 @@ class ProxyPool:
         total_requests = sum(p.success_count + p.fail_count for p in proxies)
         total_success = sum(p.success_count for p in proxies)
         total_failures = sum(p.fail_count for p in proxies)
+        now = time.time()
+        cooling_down = sum(1 for p in proxies if p.cooling_until > now)
 
         # Breakdown by tag
         by_tag: dict[str, int] = {}
@@ -446,6 +501,7 @@ class ProxyPool:
             "total": total,
             "healthy": healthy,
             "unhealthy": unhealthy,
+            "cooling_down": cooling_down,
             "total_requests": total_requests,
             "total_success": total_success,
             "total_failures": total_failures,
@@ -484,6 +540,10 @@ class ProxyPool:
                     success_count=item.get("success_count", 0),
                     fail_count=item.get("fail_count", 0),
                     created_at=item.get("created_at", time.time()),
+                    # P1-6 enhanced fields — absent in legacy format → defaults
+                    geo=item.get("geo"),
+                    consecutive_failures=item.get("consecutive_failures", 0),
+                    cooling_until=item.get("cooling_until", 0.0),
                 )
                 self._proxies[entry.id] = entry
             except (KeyError, ProxyParseError, TypeError) as exc:
@@ -505,17 +565,27 @@ class ProxyPool:
             "success_count": entry.success_count,
             "fail_count": entry.fail_count,
             "created_at": entry.created_at,
+            "geo": entry.geo,
+            "consecutive_failures": entry.consecutive_failures,
+            "cooling_until": entry.cooling_until,
         }
 
     def _get_healthy_enabled(
-        self, group: str | None = None
+        self, group: str | None = None, type: str | None = None
     ) -> list[ProxyEntry]:
-        """Return list of healthy + enabled proxies, optionally filtered by tag."""
+        """Return list of healthy + enabled proxies, optionally filtered by tag/type.
+
+        Excludes proxies currently in the cooling-down period (circuit breaker).
+        """
+        now = time.time()
         candidates = [
-            e for e in self._proxies.values() if e.healthy and e.enabled
+            e for e in self._proxies.values()
+            if e.healthy and e.enabled and e.cooling_until <= now
         ]
         if group:
             candidates = [e for e in candidates if group in e.tags]
+        if type:
+            candidates = [e for e in candidates if e.type == type]
         return candidates
 
     def _save_atomically(self) -> None:

@@ -15,11 +15,14 @@ Usage:
 import asyncio
 import json
 import logging
+import math
+import random
 import time
 from typing import Any
 
 import httpx
 import websockets
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger("browser-helper.cdp")
 
@@ -30,6 +33,82 @@ class CDPError(Exception):
 
 class CDPDisconnectedError(CDPError):
     """Raised when a CDP operation fails because the connection disconnected."""
+
+
+# ─── Rate limiting (P0-3) ────────────────────────────────────────────────
+
+
+class RateLimitConfig(BaseModel):
+    """Pydantic model for the CDP rate limiter configuration.
+
+    When ``enabled`` is True, the CDPClient sleeps a random delay drawn from
+    the configured distribution before each command — emulating human pacing
+    between automation steps (bot-detection mitigation).
+    """
+
+    enabled: bool = False
+    min_delay_ms: float = Field(default=500.0, ge=0)
+    max_delay_ms: float = Field(default=3000.0, ge=0)
+    distribution: str = Field(default="log-normal")
+
+    @field_validator("distribution")
+    @classmethod
+    def _validate_distribution(cls, v: str) -> str:
+        if v not in ("uniform", "log-normal"):
+            raise ValueError(f"distribution must be 'uniform' or 'log-normal', got {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_min_max(self) -> "RateLimitConfig":
+        if self.min_delay_ms > self.max_delay_ms:
+            raise ValueError("min_delay_ms must be <= max_delay_ms")
+        return self
+
+
+class RateLimiter:
+    """Draw random delays between [min_delay_ms, max_delay_ms].
+
+    - ``uniform``:   uniform random in the interval.
+    - ``log-normal``: log-normal shaped samples clipped to the interval
+      (human response times cluster near the lower bound with a long tail).
+    """
+
+    def __init__(self, config: RateLimitConfig | None = None):
+        self._config = config or RateLimitConfig()
+        self._rng = random.Random()
+
+    @property
+    def config(self) -> RateLimitConfig:
+        return self._config
+
+    @config.setter
+    def config(self, value: RateLimitConfig) -> None:
+        self._config = value
+
+    def _uniform_delay(self) -> float:
+        lo, hi = self._config.min_delay_ms, self._config.max_delay_ms
+        if hi <= lo:
+            return float(lo)
+        return self._rng.uniform(lo, hi)
+
+    def _log_normal_delay(self) -> float:
+        lo, hi = self._config.min_delay_ms, self._config.max_delay_ms
+        if hi <= lo:
+            return float(lo)
+        # Log-normal centered around the lower bound with a tail toward max.
+        # mu/log-sigma chosen so samples spread across the interval.
+        mu = (math.log(lo) + math.log(hi)) / 2
+        sigma = (math.log(hi) - math.log(lo)) / 4
+        sample = math.exp(self._rng.gauss(mu, sigma))
+        return max(lo, min(hi, sample))
+
+    def get_delay(self) -> float:
+        """Return the next delay in milliseconds (0.0 when disabled)."""
+        if not self._config.enabled:
+            return 0.0
+        if self._config.distribution == "uniform":
+            return self._uniform_delay()
+        return self._log_normal_delay()
 
 
 class CDPClient:
@@ -49,6 +128,8 @@ class CDPClient:
         self._message_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._connected = False
+        # Rate limiting (P0-3): sleeps before each command when enabled.
+        self.rate_limiter = RateLimiter()
         self._tabs: list[dict] = []
         self._active_tab_id: str | None = None
         self._network_entries: list[dict] = []
@@ -442,6 +523,11 @@ class CDPClient:
         """
         if extra:
             params = {**(params or {}), **extra}
+        # Human pacing: sleep the configured random delay before sending
+        # (no-op when rate limiting is disabled).
+        delay_ms = self.rate_limiter.get_delay()
+        if delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000.0)
         if not self._ws or not self._connected:
             raise CDPError("Not connected to Chrome CDP")
         self._message_id += 1
@@ -456,6 +542,25 @@ class CDPClient:
         except TimeoutError:
             self._pending.pop(msg_id, None)
             raise CDPError(f"CDP command timeout: {method}")
+
+    # ─── Rate limiting API (P0-3) ──────────────────────────────────
+
+    def get_rate_config(self) -> dict:
+        """Return the current rate limiter config as a dict."""
+        c = self.rate_limiter.config
+        return {
+            "enabled": c.enabled,
+            "min_delay_ms": c.min_delay_ms,
+            "max_delay_ms": c.max_delay_ms,
+            "distribution": c.distribution,
+        }
+
+    def set_rate_config(self, config: dict) -> dict:
+        """Replace the rate limiter config (partial updates merge)."""
+        current = self.get_rate_config()
+        merged = {**current, **config}
+        self.rate_limiter.config = RateLimitConfig(**merged)
+        return self.get_rate_config()
 
     # ─── Event callback API ────────────────────────────────────────
 
@@ -2582,7 +2687,9 @@ class CDPClient:
 
         Uses the HTTP ``/json/close/{tab_id}`` endpoint which needs no
         WebSocket — so it works even when the WS connection is gone.
+        Activates the current tab first (consistent tab-lifecycle order).
         """
+        await self._activate_current()
         import httpx
 
         base = self.cdp_http_url.rstrip("/")

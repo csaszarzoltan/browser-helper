@@ -83,10 +83,15 @@ curl -s -H "Authorization: Bearer your-secret-token" http://localhost:8000/healt
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/connect` | Establish CDP connection to Chrome |
+| `POST` | `/connect/remote` | Connect to a remote/cloud CDP WebSocket endpoint (`ws_endpoint` body) |
 | `POST` | `/disconnect` | Close CDP connection and clean up |
 | `GET` | `/status` | Current connection status |
 | `GET` | `/health` | Health check (no auth required) |
 | `GET` | `/ready` | Readiness check (no auth required) |
+| `GET` | `/rate/config` | Get the rate limiter configuration (enabled/min/max/distribution) |
+| `POST` | `/rate/config` | Update the rate limiter config (partial merge; 422 on invalid) |
+| `GET` | `/scroll/config` | Get the behavioral scroll configuration |
+| `POST` | `/scroll/config` | Update the behavioral scroll configuration |
 
 #### POST /connect
 
