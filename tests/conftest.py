@@ -108,3 +108,24 @@ def _no_real_chrome(monkeypatch, request):
     if not is_mcp:
         monkeypatch.setattr(main.client, "_connected", True, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_memory_db(tmp_path, monkeypatch, request):
+    """Point the MCP memory tools at a per-test temp DB (hermetic).
+
+    The memory tool handlers resolve their store path via
+    ``load_memory_settings`` (``BROWSER_HELPER_MEMORY_DB`` env override,
+    default ``~/.browser-helper/memory.db``). Without a redirect the
+    behavioral MCP tests in ``test_memory.py`` would write to — and pollute
+    — the real user store. Redirecting to ``<tmp_path>/memory.db`` keeps the
+    suite hermetic: the test's own ``db_path`` fixture resolves to the same
+    file, which is what ``test_memory_tools_persist_across_server_restart``
+    relies on (the tool layer and a fresh ``MemoryStore`` on ``db_path``
+    must share one SQLite file). Gated to the memory test module so no
+    other test's environment changes.
+    """
+    fspath = getattr(request.node, "fspath", None)
+    if fspath is None or Path(fspath).name != "test_memory.py":
+        return
+    monkeypatch.setenv("BROWSER_HELPER_MEMORY_DB", str(tmp_path / "memory.db"))
