@@ -223,7 +223,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.23.1",
+    version="1.23.2",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -1800,21 +1800,26 @@ async def click_by_text(body: ClickTextRequest, confirm: str | None = Query(None
     Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
     post-click screenshot / state comparison to the response.
     """
+    # Resolve the caller's session client so the before/after confirmation
+    # runs on the SAME tab as the click (not the global default client).
+    target, _sess = await _resolve_session_client()
     # Capture before-state for confirmation
     if confirm:
         try:
-            before = await client.analyze_page()
-            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+            before = await target.analyze_page()
+            target._before_visual_state = before.get("page", {}).get("visual_state", {})
         except Exception:
-            client._before_visual_state = {}
+            target._before_visual_state = {}
     result = await run_op("click_text", client.click_by_text,
                           body.text, body.timeout, body.container_selector, body.nth)
+    sess = _get_current_session()
+    rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":
         try:
             if confirm == "screenshot":
-                conf = await client._confirm_with_screenshot()
+                conf = await rtarget._confirm_with_screenshot()
             elif confirm == "analyze":
-                conf = await client._confirm_with_analyze()
+                conf = await rtarget._confirm_with_analyze()
             else:
                 conf = None
             if conf:
@@ -1836,20 +1841,23 @@ async def click_label(body: ClickLabelRequest, confirm: str | None = Query(None,
     Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
     post-click screenshot / state comparison to the response.
     """
+    target, _sess = await _resolve_session_client()
     if confirm:
         try:
-            before = await client.analyze_page()
-            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+            before = await target.analyze_page()
+            target._before_visual_state = before.get("page", {}).get("visual_state", {})
         except Exception:
-            client._before_visual_state = {}
+            target._before_visual_state = {}
     result = await run_op("click_label", client.click_label,
                           body.text, body.timeout)
+    sess = _get_current_session()
+    rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":
         try:
             if confirm == "screenshot":
-                conf = await client._confirm_with_screenshot()
+                conf = await rtarget._confirm_with_screenshot()
             elif confirm == "analyze":
-                conf = await client._confirm_with_analyze()
+                conf = await rtarget._confirm_with_analyze()
             else:
                 conf = None
             if conf:
@@ -1881,12 +1889,13 @@ async def checkbox_select(body: CheckboxRequest | CheckboxBatchRequest, confirm:
     Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
     post-operation screenshot / state comparison to the response.
     """
+    target, _sess = await _resolve_session_client()
     if confirm:
         try:
-            before = await client.analyze_page()
-            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+            before = await target.analyze_page()
+            target._before_visual_state = before.get("page", {}).get("visual_state", {})
         except Exception:
-            client._before_visual_state = {}
+            target._before_visual_state = {}
     if isinstance(body, CheckboxBatchRequest):
         result = await run_op("checkbox_select_batch",
                               client.checkbox_set_state_batch,
@@ -1895,12 +1904,14 @@ async def checkbox_select(body: CheckboxRequest | CheckboxBatchRequest, confirm:
         result = await run_op("checkbox_select",
                               client.checkbox_set_state,
                               body.text, True, body.timeout)
+    sess = _get_current_session()
+    rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":
         try:
             if confirm == "screenshot":
-                conf = await client._confirm_with_screenshot()
+                conf = await rtarget._confirm_with_screenshot()
             elif confirm == "analyze":
-                conf = await client._confirm_with_analyze()
+                conf = await rtarget._confirm_with_analyze()
             else:
                 conf = None
             if conf:
@@ -1920,12 +1931,13 @@ async def checkbox_deselect(body: CheckboxRequest | CheckboxBatchRequest, confir
     Optional ``?confirm=screenshot`` or ``?confirm=analyze`` appends
     post-operation screenshot / state comparison to the response.
     """
+    target, _sess = await _resolve_session_client()
     if confirm:
         try:
-            before = await client.analyze_page()
-            client._before_visual_state = before.get("page", {}).get("visual_state", {})
+            before = await target.analyze_page()
+            target._before_visual_state = before.get("page", {}).get("visual_state", {})
         except Exception:
-            client._before_visual_state = {}
+            target._before_visual_state = {}
     if isinstance(body, CheckboxBatchRequest):
         result = await run_op("checkbox_deselect_batch",
                               client.checkbox_set_state_batch,
@@ -1934,12 +1946,14 @@ async def checkbox_deselect(body: CheckboxRequest | CheckboxBatchRequest, confir
         result = await run_op("checkbox_deselect",
                               client.checkbox_set_state,
                               body.text, False, body.timeout)
+    sess = _get_current_session()
+    rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":
         try:
             if confirm == "screenshot":
-                conf = await client._confirm_with_screenshot()
+                conf = await rtarget._confirm_with_screenshot()
             elif confirm == "analyze":
-                conf = await client._confirm_with_analyze()
+                conf = await rtarget._confirm_with_analyze()
             else:
                 conf = None
             if conf:

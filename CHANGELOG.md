@@ -4,6 +4,14 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.23.2] — 2026-08-09
+
+#### Fixed
+- **`confirm` ág session-konzisztens** (`click-confirm-session`): a `/click/text`, `/click/label`, `/checkbox/select` és `/checkbox/deselect` endpointok `?confirm=screenshot|analyze` ága korábban a globális default clienten futott (a before/after `_confirm_with_*` hívások), nem a hívó session tabján. Mostantól mind a before-állapot, mind a confirm a `_resolve_session_client()` feloldott session clientén megy — a kattintás és a screenshot ugyanazon a tabon.
+
+#### Verified
+- `/click/text?confirm=screenshot` élőben: 1 cookie-jar kliens = 1 session, confirmation mező megjön, eval ugyanazon a tabon.
+
 ## [1.23.1] — 2026-08-09
 
 #### Fixed

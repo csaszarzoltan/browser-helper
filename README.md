@@ -143,6 +143,7 @@ See [LLM Agent API](docs/agent-api.md).
 - **Session-izoláció minden endpointon:** az `/agent/observe`, `/agent/act`, `/page/analyze` és 8 további endpoint mostantól a hívó saját session tabján fut (nem a közös default tabon) — nincs kereszthatás, nincs tab-spam több kliens esetén.
 - **`/navigate` tab-id szinkron:** cross-origin navigáció után a session a helyes targetre mutat.
 - **CDP target-életciklus követés:** `targetCreated`/`targetDestroyed` eventek automatikusan frissítik az aktív tab-ot.
+- **`/click/*` és `/checkbox/*` `confirm` ág session-konzisztens:** a before/after screenshot/analyze ugyanazon a session tabon fut, mint a kattintás.
 - **Teszt:** 2 kliens (example.com vs example.org) izoláltan dolgozik, tab-szám = 2.
 
 ### v1.22 — Stability + VLM (2026-08-08)
