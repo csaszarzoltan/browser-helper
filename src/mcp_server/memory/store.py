@@ -19,8 +19,10 @@ class MemoryStore:
     """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self.db_path = str(Path(db_path).expanduser()) if db_path is not None else str(
-            Path.home() / ".browser-helper" / "memory.db"
+        self.db_path = (
+            str(Path(db_path).expanduser())
+            if db_path is not None
+            else str(Path.home() / ".browser-helper" / "memory.db")
         )
 
     async def open(self) -> None:

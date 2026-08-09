@@ -212,8 +212,7 @@ class TestInterface:
             required = [
                 p
                 for p in sig.parameters
-                if p != "ctx"
-                and sig.parameters[p].default is inspect.Parameter.empty
+                if p != "ctx" and sig.parameters[p].default is inspect.Parameter.empty
             ]
             assert required == EXPECTED_TOOL_REQUIRED_PARAMS[name], (
                 f"{name}: required params {required} != {EXPECTED_TOOL_REQUIRED_PARAMS[name]}"
@@ -396,9 +395,9 @@ class TestBehavioralStore:
             result = await store.remember(**_entry(store))
             assert result["key"] == "login.page.selector"
             assert result["content"] == "The login submit button is #login-submit on /login."
-            assert "id" in result and result["id"]
-            assert "created_at" in result and result["created_at"]
-            assert "updated_at" in result and result["updated_at"]
+            assert result.get("id")
+            assert result.get("created_at")
+            assert result.get("updated_at")
             assert result["source_session"] == "test-session"
             assert result["metadata"]["project"] == "browser-helper"
         except NotImplementedError:
@@ -441,9 +440,7 @@ class TestBehavioralStore:
             results = await store.recall("same")
             assert len(results) >= 2
             # "new" should be first (newer = higher rank)
-            assert results[0]["key"] == "new", (
-                f"Expected 'new' first, got '{results[0]['key']}'"
-            )
+            assert results[0]["key"] == "new", f"Expected 'new' first, got '{results[0]['key']}'"
         except NotImplementedError:
             pytest.skip("Not implemented yet — RED phase")
 
@@ -539,8 +536,12 @@ class TestBehavioralStore:
     async def test_fts_keyword_search_works(self, db_path):
         store = await self._store(db_path)
         try:
-            await store.remember(key="a", content="The login form uses id='login-btn'", source_session="s1")
-            await store.remember(key="b", content="Dashboard sidebar navigation", source_session="s1")
+            await store.remember(
+                key="a", content="The login form uses id='login-btn'", source_session="s1"
+            )
+            await store.remember(
+                key="b", content="Dashboard sidebar navigation", source_session="s1"
+            )
             results = await store.recall("login")
             assert any(r["key"] == "a" for r in results), "FTS5 should find 'login' in content"
         except NotImplementedError:
@@ -565,6 +566,7 @@ class TestBehavioralStore:
         except NotImplementedError:
             pytest.skip("Not implemented yet — RED phase")
         try:
+
             async def writer(n):
                 for i in range(10):
                     await store.remember(
@@ -584,8 +586,7 @@ class TestBehavioralStore:
         try:
             await store.remember(key="sqlite-check", content="test", source_session="s1")
             await store.close()
-            with open(db_path, "rb") as f:
-                header = f.read(16)
+            header = Path(db_path).read_bytes()[:16]
             assert header.startswith(b"SQLite format 3"), f"DB header: {header!r}"
         except NotImplementedError:
             pytest.skip("Not implemented yet — RED phase")
@@ -654,9 +655,7 @@ class TestBehavioralMCP:
         from mcp_server.memory.tools import memory_remember
 
         try:
-            result = await memory_remember(
-                key="mcp-test", content="MCP tool test data", ctx=None
-            )
+            result = await memory_remember(key="mcp-test", content="MCP tool test data", ctx=None)
             assert isinstance(result, str)
             data = json.loads(result)
             for field in ENVELOPE_KEYS:
@@ -666,7 +665,7 @@ class TestBehavioralMCP:
             pytest.skip("Not implemented yet — RED phase")
 
     async def test_memory_recall_returns_ranked_results(self, db_path):
-        from mcp_server.memory.tools import memory_forget, memory_remember, memory_recall
+        from mcp_server.memory.tools import memory_forget, memory_recall, memory_remember
 
         try:
             await memory_remember(key="rank-a", content="alpha keyword beta", ctx=None)
@@ -717,7 +716,7 @@ class TestBehavioralMCP:
 
     async def test_memory_tools_persist_across_server_restart(self, db_path):
         """Two separate store.open/close cycles share the same SQLite file."""
-        from mcp_server.memory.tools import memory_recall, memory_remember
+        from mcp_server.memory.tools import memory_remember
 
         try:
             await memory_remember(key="restart-test", content="persists", ctx=None)
