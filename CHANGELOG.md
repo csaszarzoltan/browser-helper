@@ -4,6 +4,27 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.24.0] — 2026-08-09
+
+#### Added
+- **Behavioral Engine** (`behavioral_engine.py`): automatikus emberi bemenet a CDPClient számára.
+- `HumanProfile`: session-enként konzisztens profil (seed=session_id), WPM, mouse params, scroll mode.
+- `BehavioralEngine`: WindMouse+Bezier görbék, keystroke dwell/flight, scroll sequence — CDP Input.dispatch* parancsokkal.
+- `CDPClient.enable_behavioral(profile)`: click/type automatikusan emberiesítve, ha engedélyezve.
+- Session registry: session létrehozáskor automatikusan HumanProfile → enable_behavioral(). A kliensnek semmit sem kell kérnie.
+
+#### Fixed
+- **Stealth v2**: navigator.plugins valós Chrome PDF objektumok, window.chrome+runtime, navigator.permissions.query=granted.
+- Eltávolítva a hamis Chrome/120 UA → Chrome 151 natív UA használata.
+
+## [1.23.5] — 2026-08-09
+
+#### Fixed
+- navigator.plugins: [1,2,3,4,5] → valós Chrome plugin objektumok (Cloudflare/DataDome detekció).
+- window.chrome + chrome.runtime hozzáadva.
+- navigator.permissions.query: granted.
+- Eltávolítva hamis Chrome/120 user-agent → natív Chrome 151 UA.
+
 ## [1.23.4] — 2026-08-09
 
 #### Added
