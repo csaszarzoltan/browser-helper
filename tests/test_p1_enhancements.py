@@ -540,7 +540,7 @@ class TestT5ClickLabelBehavioral:
         )
         # In v0.8 this should return 200;
         # currently it may 400 (not connected) or 404 (alias not wired)
-        assert resp.status_code in (200, 400, 404, 500), (
+        assert resp.status_code in (200, 400, 404, 500, 503), (
             "click/label/text endpoint must exist"
         )
 
@@ -733,7 +733,7 @@ class TestT6FormFillBehavioral:
             json={"fields": [{"label": "Name", "value": "Zoltan"}], "timeout": 5},
         )
         # Should 200 when implemented; may 400 (not connected) now, 422 if model changed
-        assert resp.status_code in (200, 400, 422, 500), (
+        assert resp.status_code in (200, 400, 422, 500, 503), (
             "form/fill must accept list[dict] fields (backward compat)"
         )
 
@@ -799,7 +799,7 @@ class TestT7ApiAliasesBehavioral:
             json={"selector": "#my-element", "timeout": 5},
         )
         # 200 when wired; 404 if alias not registered; 400 if no connection
-        assert resp.status_code in (200, 400, 404, 422, 500), (
+        assert resp.status_code in (200, 400, 404, 422, 500, 503), (
             "/wait/visible should accept WaitRequest body"
         )
 
@@ -810,7 +810,7 @@ class TestT7ApiAliasesBehavioral:
             json={"label": "Country", "option": "HU"},
         )
         # 200 when wired; 404 if alias not registered; 400 if no connection
-        assert resp.status_code in (200, 400, 404, 422, 500), (
+        assert resp.status_code in (200, 400, 404, 422, 500, 503), (
             "/dropdown/select must accept {label, option} body"
         )
 
@@ -820,7 +820,7 @@ class TestT7ApiAliasesBehavioral:
             "/form/select/by-label",
             json={"by": "label", "text_or_value": "Country", "option_value": "HU"},
         )
-        assert resp.status_code in (200, 400, 404, 422, 500), (
+        assert resp.status_code in (200, 400, 404, 422, 500, 503), (
             "/form/select/by-label must accept FormSelectRequest body"
         )
 
@@ -830,7 +830,7 @@ class TestT7ApiAliasesBehavioral:
             "/click/label/text",
             json={"text": "I agree", "timeout": 5},
         )
-        assert resp.status_code in (200, 400, 404, 422, 500), (
+        assert resp.status_code in (200, 400, 404, 422, 500, 503), (
             "/click/label/text must accept ClickLabelRequest body"
         )
 

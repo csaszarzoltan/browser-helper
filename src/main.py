@@ -1812,6 +1812,10 @@ async def click_by_text(body: ClickTextRequest, confirm: str | None = Query(None
             target._before_visual_state = {}
     result = await run_op("click_text", client.click_by_text,
                           body.text, body.timeout, body.container_selector, body.nth)
+    # run_op returns api_error(...) → JSONResponse when the CDP call fails;
+    # only run the confirmation on a successful dict result.
+    if not isinstance(result, dict):
+        return result
     sess = _get_current_session()
     rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":
@@ -1850,6 +1854,8 @@ async def click_label(body: ClickLabelRequest, confirm: str | None = Query(None,
             target._before_visual_state = {}
     result = await run_op("click_label", client.click_label,
                           body.text, body.timeout)
+    if not isinstance(result, dict):
+        return result
     sess = _get_current_session()
     rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":
@@ -1904,6 +1910,8 @@ async def checkbox_select(body: CheckboxRequest | CheckboxBatchRequest, confirm:
         result = await run_op("checkbox_select",
                               client.checkbox_set_state,
                               body.text, True, body.timeout)
+    if not isinstance(result, dict):
+        return result
     sess = _get_current_session()
     rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":
@@ -1946,6 +1954,8 @@ async def checkbox_deselect(body: CheckboxRequest | CheckboxBatchRequest, confir
         result = await run_op("checkbox_deselect",
                               client.checkbox_set_state,
                               body.text, False, body.timeout)
+    if not isinstance(result, dict):
+        return result
     sess = _get_current_session()
     rtarget = sess.client if sess is not None else target
     if confirm and result.get("status") == "ok":

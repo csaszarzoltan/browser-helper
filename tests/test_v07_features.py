@@ -675,14 +675,14 @@ class TestP2BatchCheckbox:
         """POST /checkbox/select route exists (may 400 due to no connection)."""
         resp = await async_client.post("/checkbox/select", json={"text": "Email notifications"})
         # Should 200 in v0.7, currently 400 (not connected) or 422 (body model) or 500
-        assert resp.status_code in (200, 400, 422, 500), (
+        assert resp.status_code in (200, 400, 422, 500, 503), (
             "checkbox/select route exists but not fully implemented yet"
         )
 
     async def test_checkbox_deselect_endpoint_exists(self, async_client):
         """POST /checkbox/deselect route exists."""
         resp = await async_client.post("/checkbox/deselect", json={"text": "SMS notifications"})
-        assert resp.status_code in (200, 400, 422, 500)
+        assert resp.status_code in (200, 400, 422, 500, 503)
 
     async def test_checkbox_select_returns_200_when_implemented(self, async_client):
         """POST /checkbox/select should return 200 in v0.7."""
