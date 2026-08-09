@@ -275,6 +275,25 @@ class CDPClient:
                         except Exception:  # noqa: BLE001
                             logger.warning("Event callback error for %s", ev_method)
 
+                # Track target lifecycle: when Chrome creates a new target (e.g. cross-origin navigation),
+                # update _active_tab_id so session stays on the correct tab.
+                if ev_method == "Target.targetCreated":
+                    target_info = msg.get("params", {}).get("targetInfo", {})
+                    if target_info.get("type") == "page":
+                        # New page target created — this is likely a navigation to a new origin
+                        new_id = target_info.get("targetId")
+                        if new_id:
+                            logger.debug("CDP targetCreated: %s (%s)", new_id, target_info.get("url", ""))
+                            self._active_tab_id = new_id
+                            self._tabs_cache = []  # Invalidate cache
+
+                elif ev_method == "Target.targetDestroyed":
+                    target_id = msg.get("params", {}).get("targetId")
+                    if target_id and target_id == self._active_tab_id:
+                        logger.debug("CDP targetDestroyed: %s", target_id)
+                        self._active_tab_id = None
+                        self._tabs_cache = []  # Invalidate cache
+
                 # Screencast frame capture (video recording)
                 if ev_method == "Page.screencastFrame" and self._recording_frames is not None:
                     params = msg.get("params", {})

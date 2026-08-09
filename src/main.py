@@ -1202,6 +1202,33 @@ async def _ensure_browser(sess: Session | None = None) -> None:
         )
 
 
+async def _resolve_session_client() -> tuple[CDPClient, Session | None]:
+    """Resolve the caller's session client, minting a session lazily if needed.
+
+    Endpoints that use ``client.xxx`` directly (instead of ``run_op``) must call
+    this first to route onto the caller's own session tab — otherwise they hit
+    the shared default tab and break per-client isolation.
+
+    Returns ``(target_client, session)``.  When session creation fails (e.g.
+    tests without Chrome), falls back to ``(client, None)``.
+    """
+    sess = _get_current_session()
+    if sess is None:
+        try:
+            await chrome_mgr.launch()  # idempotent — reuses running Chrome
+            sess = await session_registry.create(_local_cdp_http())
+            _set_current_session(sess)
+        except Exception as exc:
+            logger.warning("Session creation failed, falling back to default client: %s", exc)
+            sess = None
+    if sess is not None:
+        await _ensure_browser(sess)
+        return sess.client, sess
+    else:
+        await _ensure_browser()
+        return client, None
+
+
 def infer_verification(result: Any) -> str:
     """Infer only explicit outcome verification; never equate transport success with proof."""
     if not isinstance(result, dict):
@@ -1680,7 +1707,17 @@ async def navigate(url: str = Query(..., description="Target URL to navigate to"
     # Invalidate tab cache — navigation changes the page URL
     client._tabs_cache = []
     client._tabs_cache_ts = 0
-    return await run_op("navigate", client.navigate, url)
+    result = await run_op("navigate", client.navigate, url)
+    # After navigation, update the session's tab_id to the client's current active tab
+    # (Chrome may create a new target on navigation, e.g. cross-origin)
+    sess = _get_current_session()
+    if sess is not None and getattr(sess.client, "_active_tab_id", None):
+        sess.tab_id = sess.client._active_tab_id
+    # Also refresh the client's tab cache so next discover_tabs picks up the new target
+    if sess is not None:
+        sess.client._tabs_cache = []
+        sess.client._tabs_cache_ts = 0
+    return result
 
 
 @app.post("/eval")
@@ -1931,9 +1968,9 @@ async def page_analyze(condensed: bool = Query(False, description="Enable conden
 
     Replaces 3-4 separate eval() calls.
     """
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
     try:
-        raw = await (client.analyze_page_condensed() if condensed else client.analyze_page())
+        raw = await (target.analyze_page_condensed() if condensed else target.analyze_page())
         snap = snapshot_store.add(raw)
         if isinstance(raw, dict):
             page = raw.get("page", raw)
@@ -2293,11 +2330,11 @@ async def screenshot_baseline(body: BaselineRequest):
 
     Requires an active CDP connection.
     """
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
 
     try:
         # Take screenshot via CDP
-        screenshot_result = await client.screenshot()
+        screenshot_result = await target.screenshot()
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -2343,7 +2380,7 @@ async def screenshot_compare(body: CompareRequest):
 
     Requires an active CDP connection and an existing baseline.
     """
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
 
     # Check baseline exists
     baseline_path = baseline_mgr.get_baseline(
@@ -2358,7 +2395,7 @@ async def screenshot_compare(body: CompareRequest):
 
     # Take current screenshot
     try:
-        screenshot_result = await client.screenshot()
+        screenshot_result = await target.screenshot()
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -2788,12 +2825,12 @@ async def confirm_action(confirm: str = Query("analyze", description="Confirmati
     ``?confirm=screenshot`` returns a base64 JPEG screenshot.
     ``?confirm=analyze`` returns visual_state before/after comparison.
     """
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
     try:
         if confirm == "screenshot":
-            result = await client._confirm_with_screenshot()
+            result = await target._confirm_with_screenshot()
         else:
-            result = await client._confirm_with_analyze()
+            result = await target._confirm_with_analyze()
         return {"status": "ok", "operation": "confirm_action", "result": result}
     except Exception as exc:
         return {"status": "error", "operation": "confirm_action", "error": str(exc)}
@@ -3054,16 +3091,19 @@ AGENT_CAPABILITIES = {
 }
 
 
-async def _capture_agent_snapshot(condensed: bool = True):
-    raw = await (client.analyze_page_condensed() if condensed else client.analyze_page())
+async def _capture_agent_snapshot(condensed: bool = True, target: CDPClient | None = None):
+    tc = target or client
+    raw = await (tc.analyze_page_condensed() if condensed else tc.analyze_page())
     return snapshot_store.add(raw)
 
 
 async def _capture_accessibility_snapshot(
     *, scope: str = "page", include: list[str] | None = None,
     interactive_only: bool = False, include_hidden: bool = False,
+    target: CDPClient | None = None,
 ) -> AccessibilitySnapshot:
-    raw = await client.get_accessibility_tree()
+    tc = target or client
+    raw = await tc.get_accessibility_tree()
     snap = ax_builder.build(
         raw["tree"], page=raw.get("page", {}), scope=scope,
         include=include, interactive_only=interactive_only, include_hidden=include_hidden,
@@ -3111,7 +3151,7 @@ async def agent_capabilities():
 @app.post("/agent/observe")
 async def agent_observe(body: AgentObserveRequest):
     """Observe the page as either the legacy semantic snapshot or a real AX tree."""
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
     try:
         if body.mode.lower() in {"accessibility", "ax"}:
             if body.snapshot_id:
@@ -3123,6 +3163,7 @@ async def agent_observe(body: AgentObserveRequest):
                     scope=("dialog" if body.auto_modal and body.scope == "page" else body.scope),
                     include=body.include, interactive_only=body.interactive_only,
                     include_hidden=body.include_hidden,
+                    target=target,
                 )
             data = snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
             if body.since_snapshot_id:
@@ -3146,11 +3187,11 @@ async def agent_observe(body: AgentObserveRequest):
         if body.snapshot_id:
             snap = snapshot_store.get(body.snapshot_id)
         else:
-            snap = await _capture_agent_snapshot(body.condensed)
+            snap = await _capture_agent_snapshot(body.condensed, target=target)
         if body.search_text and not _snapshot_contains_text(snap, body.search_text) and (body.fallback or "").lower() in {"accessibility", "ax"}:
-            ax_snap = await _capture_accessibility_snapshot(scope="dialog" if body.auto_modal else body.scope, include=body.include, interactive_only=body.interactive_only, include_hidden=body.include_hidden)
+            ax_snap = await _capture_accessibility_snapshot(scope="dialog" if body.auto_modal else body.scope, include=body.include, interactive_only=body.interactive_only, include_hidden=body.include_hidden, target=target)
             if not _snapshot_contains_text(ax_snap, body.search_text):
-                ax_snap = await _capture_accessibility_snapshot(scope="page", include=body.include, interactive_only=body.interactive_only, include_hidden=body.include_hidden)
+                ax_snap = await _capture_accessibility_snapshot(scope="page", include=body.include, interactive_only=body.interactive_only, include_hidden=body.include_hidden, target=target)
             data = ax_snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
             data["fallback_from"] = "semantic"
             data["fallback_reason"] = f"search_text_not_found:{body.search_text}"
@@ -3188,7 +3229,7 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
 
 @app.post("/agent/act")
 async def agent_act(body: AgentActionRequest):
-    await _ensure_browser()
+    tc, _sess = await _resolve_session_client()
     action = body.action.lower().strip()
     pinned_kind: str | None = None
     pinned_id: str | None = None
@@ -3214,33 +3255,33 @@ async def agent_act(body: AgentActionRequest):
             lookup = body.target.name or body.target.text or body.target.label
             if not lookup:
                 raise
-            recovered = await _capture_accessibility_snapshot(scope="dialog")
+            recovered = await _capture_accessibility_snapshot(scope="dialog", target=tc)
             matches = [item for item in recovered.nodes if lookup.casefold() in item.name.casefold()]
             if len(matches) != 1:
-                recovered = await _capture_accessibility_snapshot(scope="page")
+                recovered = await _capture_accessibility_snapshot(scope="page", target=tc)
                 matches = [item for item in recovered.nodes if lookup.casefold() in item.name.casefold()]
             if len(matches) != 1:
                 raise StaleSnapshotError(f"Could not uniquely recover target {lookup!r}; found {len(matches)} candidates")
             target = matches[0].as_dict()
-        before_ax = await _capture_accessibility_snapshot() if body.expect else None
+        before_ax = await _capture_accessibility_snapshot(target=tc) if body.expect else None
         if action == "navigate":
             if not body.url:
                 raise ValueError("url is required")
-            result = await client.navigate(body.url)
+            result = await tc.navigate(body.url)
         elif action == "click":
             if target.get("backend_node_id"):
-                result = await client.click_backend_node(target["backend_node_id"])
+                result = await tc.click_backend_node(target["backend_node_id"])
             elif target.get("selector"):
-                result = await client.click(target["selector"])
+                result = await tc.click(target["selector"])
             else:
                 text = target.get("text") or target.get("name") or target.get("label")
                 if not text:
                     raise ValueError("click requires an element reference, selector or text")
-                result = await client.click_by_text(text, body.timeout)
+                result = await tc.click_by_text(text, body.timeout)
         elif action == "fill":
             fields = body.fields
             if fields is None and target.get("backend_node_id") and body.value is not None:
-                result = await client.fill_backend_node(target["backend_node_id"], body.value)
+                result = await tc.fill_backend_node(target["backend_node_id"], body.value)
                 fields = []
             if fields is None:
                 label = target.get("label") or target.get("name") or target.get("text")
@@ -3248,42 +3289,42 @@ async def agent_act(body: AgentActionRequest):
                     raise ValueError("fill requires fields or target plus value")
                 fields = [{"label": label, "value": body.value}]
             if fields:
-                result = await client.smart_form_fill(fields, body.timeout)
+                result = await tc.smart_form_fill(fields, body.timeout)
         elif action == "select":
             label = target.get("label") or target.get("name") or target.get("text")
             if not label or body.option is None:
                 raise ValueError("select requires target and option")
-            result = await client.form_select("label", label, body.option)
+            result = await tc.form_select("label", label, body.option)
         elif action == "wait":
             if target.get("selector"):
-                result = await client.wait_for_element(target["selector"], body.timeout, True)
+                result = await tc.wait_for_element(target["selector"], body.timeout, True)
             else:
                 text = target.get("text") or target.get("name")
                 if not text:
                     raise ValueError("wait requires selector or text")
-                result = await client.wait_for_text(text, body.timeout, True)
+                result = await tc.wait_for_text(text, body.timeout, True)
         elif action == "select_tab":
             text = target.get("text") or target.get("name") or target.get("label")
             if not text:
                 raise ValueError("select_tab requires target.text")
-            result = await client.select_tab_by_text(text, body.timeout_ms or body.timeout * 1000)
+            result = await tc.select_tab_by_text(text, body.timeout_ms or body.timeout * 1000)
         elif action == "wait_for_element":
             text = target.get("text") or target.get("name") or target.get("label")
             if target.get("selector"):
                 started = time.monotonic()
-                waited = await client.wait_for_element(target["selector"], max(1, (body.timeout_ms or body.timeout * 1000) // 1000), True)
+                waited = await tc.wait_for_element(target["selector"], max(1, (body.timeout_ms or body.timeout * 1000) // 1000), True)
                 inner = waited.get("result", {})
                 result = {"found": inner.get("status") == "ok", "elapsed_ms": round((time.monotonic()-started)*1000), "actual_text": inner.get("text", "")}
             elif text:
-                result = await client.wait_for_text_detailed(text, body.timeout_ms or body.timeout * 1000)
+                result = await tc.wait_for_text_detailed(text, body.timeout_ms or body.timeout * 1000)
             else:
                 raise ValueError("wait_for_element requires selector or text")
         elif action == "evaluate":
             if not body.expression:
                 raise ValueError("expression is required")
-            result = await client.evaluate(body.expression)
+            result = await tc.evaluate(body.expression)
         elif action == "capture":
-            captured = await client.screenshot(quality=body.quality)
+            captured = await tc.screenshot(quality=body.quality)
             encoded = captured.get("data") or captured.get("screenshot")
             if not encoded:
                 raise RuntimeError("Screenshot response did not contain image data")
@@ -3292,14 +3333,14 @@ async def agent_act(body: AgentActionRequest):
         elif action == "workflow":
             if not body.steps:
                 raise ValueError("steps are required")
-            result = await client.execute_script(body.steps)
+            result = await tc.execute_script(body.steps)
         elif action in {"open_menu", "expand_section"}:
             name = target.get("name") or target.get("text") or body.parameters.get("name")
             if not name:
                 raise ValueError(f"{action} requires a target name")
-            result = await client.click_by_text(str(name), body.timeout)
+            result = await tc.click_by_text(str(name), body.timeout)
         elif action == "dismiss_overlay":
-            result = await client.evaluate("""(() => {
+            result = await tc.evaluate("""(() => {
                 const words=/accept|agree|close|dismiss|not now|no thanks/i;
                 const roots=[...document.querySelectorAll('[role=dialog],dialog,[class*=cookie],[class*=modal],[class*=overlay]')]
                   .filter(el => el.offsetParent !== null);
@@ -3312,7 +3353,7 @@ async def agent_act(body: AgentActionRequest):
             })()""")
         elif action == "load_all_items":
             limit = min(max(int(body.parameters.get("limit", 100)), 1), 1000)
-            result = await client.evaluate(f"""(async () => {{
+            result = await tc.evaluate(f"""(async () => {{
                 let clicks=0, previous=-1;
                 while (clicks < 20 && document.querySelectorAll('*').length < {limit}) {{
                   const candidates=[...document.querySelectorAll('button,a,[role=button]')].filter(el => /load more|show more|more results/i.test(el.innerText||'') && el.offsetParent !== null);
@@ -3323,7 +3364,7 @@ async def agent_act(body: AgentActionRequest):
                 return {{clicks,element_count:document.querySelectorAll('*').length}};
             }})()""")
         elif action == "extract_table":
-            result = await client.evaluate("""(() => [...document.querySelectorAll('table,[role=grid]')].map((table,index)=>({
+            result = await tc.evaluate("""(() => [...document.querySelectorAll('table,[role=grid]')].map((table,index)=>({
                 index, name:table.getAttribute('aria-label')||table.querySelector('caption')?.innerText||'',
                 rows:[...table.querySelectorAll('tr,[role=row]')].map(row=>[...row.querySelectorAll('th,td,[role=cell],[role=columnheader],[role=rowheader]')].map(cell=>(cell.innerText||'').trim()))
             })))()""")
@@ -3331,30 +3372,30 @@ async def agent_act(body: AgentActionRequest):
             tab_id = body.parameters.get("tab_id") or body.parameters.get("target")
             if not tab_id:
                 raise ValueError("switch_context requires parameters.tab_id")
-            result = await client.switch_tab(str(tab_id))
+            result = await tc.switch_tab(str(tab_id))
         else:
             return api_error("agent_act", "unknown_action", f"Unknown action: {action}", 422)
         data = {"action": action, "result": result}
         if before_ax is not None:
-            after_ax = await _capture_accessibility_snapshot()
+            after_ax = await _capture_accessibility_snapshot(target=tc)
             verification = validate_expectations(before_ax, after_ax, body.expect)
             data["verification"] = verification
             if not verification["satisfied"] and int((body.recovery or {}).get("retry", 0)) > 0:
                 if action == "click" and target.get("backend_node_id"):
-                    data["retry_result"] = await client.click_backend_node(target["backend_node_id"])
-                    after_ax = await _capture_accessibility_snapshot()
+                    data["retry_result"] = await tc.click_backend_node(target["backend_node_id"])
+                    after_ax = await _capture_accessibility_snapshot(target=tc)
                     data["verification"] = validate_expectations(before_ax, after_ax, body.expect)
                 data["replanned"] = True
             if not data["verification"]["satisfied"]:
                 data["status"] = "needs_attention"
                 strategies = body.strategy or []
                 if "element_screenshot" in strategies and target.get("selector"):
-                    captured = await client.element_screenshot(target["selector"], body.quality)
+                    captured = await tc.element_screenshot(target["selector"], body.quality)
                     encoded = captured.get("data") or captured.get("screenshot")
                     if encoded:
                         data["visual_fallback"] = {"strategy": "element_screenshot", "artifact": artifact_store.put(base64.b64decode(encoded), "image/jpeg", ".jpg")}
                 elif "viewport_screenshot" in strategies:
-                    captured = await client.screenshot(quality=body.quality)
+                    captured = await tc.screenshot(quality=body.quality)
                     encoded = captured.get("data") or captured.get("screenshot")
                     if encoded:
                         data["visual_fallback"] = {"strategy": "viewport_screenshot", "artifact": artifact_store.put(base64.b64decode(encoded), "image/jpeg", ".jpg")}
@@ -3362,13 +3403,13 @@ async def agent_act(body: AgentActionRequest):
             verification_type = body.verify_after.get("type")
             timeout_ms = int(body.verify_after.get("timeout_ms", 5000))
             if verification_type == "text_visible":
-                verification = await client.wait_for_text_detailed(str(body.verify_after.get("text", "")), timeout_ms)
+                verification = await tc.wait_for_text_detailed(str(body.verify_after.get("text", "")), timeout_ms)
             elif verification_type == "element_visible":
                 selector = body.verify_after.get("selector")
                 if not selector:
                     raise ValueError("element_visible verification requires selector")
                 started = time.monotonic()
-                waited = await client.wait_for_element(selector, max(1, timeout_ms // 1000), True)
+                waited = await tc.wait_for_element(selector, max(1, timeout_ms // 1000), True)
                 inner = waited.get("result", {})
                 verification = {"found": inner.get("status") == "ok", "elapsed_ms": round((time.monotonic()-started)*1000), "actual_text": inner.get("text", "")}
             else:
@@ -3377,7 +3418,7 @@ async def agent_act(body: AgentActionRequest):
             data["actual_text"] = verification.get("actual_text", "")
             data["verification_after"] = verification
         if body.observe_after and action not in {"evaluate", "capture"}:
-            snap = await _capture_agent_snapshot(True)
+            snap = await _capture_agent_snapshot(True, target=tc)
             data["observation"] = paginate_snapshot(snap, 4000, 60)
         _record_agent_step("act", body.model_dump(mode="json", exclude_none=True, by_alias=True))
         return api_success("agent_act", data)
@@ -3453,18 +3494,18 @@ async def agent_replay(body: AgentReplayRequest):
 @app.post("/agent/forms/discover")
 async def agent_forms_discover(body: AgentFormDiscoverRequest | None = None):
     """Discover forms; page_with_history first triggers bounded SPA lazy loading."""
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
     body = body or AgentFormDiscoverRequest()
     try:
         history = None
         if body.scope == "page_with_history":
-            history = await client.trigger_lazy_history()
+            history = await target.trigger_lazy_history()
         if body.snapshot_id:
             snap = ax_snapshots.get(body.snapshot_id)
             if not snap:
                 raise StaleSnapshotError(f"Accessibility snapshot {body.snapshot_id!r} is missing")
         else:
-            snap = await _capture_accessibility_snapshot(scope="page", include=["forms", "headings", "dialogs"])
+            snap = await _capture_accessibility_snapshot(scope="page", include=["forms", "headings", "dialogs"], target=target)
         return api_success("agent_forms_discover", {
             "snapshot_id": snap.snapshot_id,
             "forms": discover_forms(snap),
@@ -3474,7 +3515,8 @@ async def agent_forms_discover(body: AgentFormDiscoverRequest | None = None):
         return api_error("agent_forms_discover", "discovery_failed", str(exc), 503)
 
 
-async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: dict[str, Any]) -> dict:
+async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: dict[str, Any], tc: CDPClient | None = None) -> dict:
+    cli = tc or client
     forms = discover_forms(snap)
     form = next((item for item in forms if item["form_ref"] == form_ref), None)
     if not form:
@@ -3499,13 +3541,13 @@ async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: 
             uncertain.append({"field": field["label"], "reason": "no_backend_node"})
             continue
         if resolver == "autocomplete":
-            result = await client.fill_autocomplete(node.name or key, str(value))
+            result = await cli.fill_autocomplete(node.name or key, str(value))
             ok = result.get("result", {}).get("status") == "ok"
         elif node.role == "combobox":
-            result = await client.form_select("label", node.name, str(value))
+            result = await cli.form_select("label", node.name, str(value))
             ok = result.get("status") == "ok"
         else:
-            result = await client.fill_backend_node(node.backend_node_id, str(value))
+            result = await cli.fill_backend_node(node.backend_node_id, str(value))
             ok = bool(result.get("confirmed"))
         filled.append({"field": field["label"], "ref": field["ref"], "result": result})
         if ok:
@@ -3521,12 +3563,12 @@ async def _fill_semantic_form(snap: AccessibilitySnapshot, form_ref: str, data: 
 @app.post("/agent/forms/fill")
 async def agent_forms_fill(body: AgentFormFillRequest):
     """Fill a discovered form from semantic key/value data and confirm writes."""
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
     try:
-        snap = await _capture_accessibility_snapshot(include=["forms", "dialogs"])
-        result = await _fill_semantic_form(snap, body.form_ref, body.data)
+        snap = await _capture_accessibility_snapshot(include=["forms", "dialogs"], target=target)
+        result = await _fill_semantic_form(snap, body.form_ref, body.data, tc=target)
         if body.validate_result:
-            after = await _capture_accessibility_snapshot(include=["forms", "alerts", "dialogs"])
+            after = await _capture_accessibility_snapshot(include=["forms", "alerts", "dialogs"], target=target)
             result["validation"] = discover_forms(after)
         return api_success("agent_forms_fill", result)
     except ValueError as exc:
@@ -3538,7 +3580,7 @@ async def agent_forms_fill(body: AgentFormFillRequest):
 @app.post("/agent/extract")
 async def agent_extract(body: AgentExtractRequest):
     """Extract schema-shaped data with source refs and field confidence."""
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
     try:
         if body.snapshot_id:
             snap = ax_snapshots.get(body.snapshot_id)
@@ -3546,7 +3588,7 @@ async def agent_extract(body: AgentExtractRequest):
                 raise StaleSnapshotError(f"Accessibility snapshot {body.snapshot_id!r} is missing")
         else:
             scope = body.scope if isinstance(body.scope, str) else (body.scope or {}).get("role", "page")
-            snap = await _capture_accessibility_snapshot(scope=scope)
+            snap = await _capture_accessibility_snapshot(scope=scope, target=target)
         return api_success("agent_extract", extract_by_schema(
             snap, body.extraction_schema, include_evidence=body.include_evidence,
         ))
@@ -3561,9 +3603,9 @@ async def agent_extract(body: AgentExtractRequest):
 @app.post("/agent/available-actions")
 async def agent_available_actions():
     """Return actions that are currently possible and their blocking reasons."""
-    await _ensure_browser()
+    target, _sess = await _resolve_session_client()
     try:
-        snap = await _capture_accessibility_snapshot()
+        snap = await _capture_accessibility_snapshot(target=target)
         result = available_actions(snap)
         result["snapshot_id"] = snap.snapshot_id
         return api_success("agent_available_actions", result)
@@ -3579,17 +3621,17 @@ async def agent_execute_task(body: AgentExecuteTaskRequest):
     filling and a single verified continuation click.  Unsupported or ambiguous
     goals return ``needs_attention`` with current candidate actions.
     """
-    await _ensure_browser()
+    tc, _sess = await _resolve_session_client()
     max_steps = min(max(int(body.constraints.get("max_steps", 20)), 1), 50)
     stop_before = {str(item).lower() for item in body.constraints.get("stop_before", [])}
     try:
-        snap = await _capture_accessibility_snapshot()
+        snap = await _capture_accessibility_snapshot(target=tc)
         steps: list[dict] = []
         forms = discover_forms(snap)
         if body.inputs and forms and len(steps) < max_steps:
-            fill_result = await _fill_semantic_form(snap, forms[0]["form_ref"], body.inputs)
+            fill_result = await _fill_semantic_form(snap, forms[0]["form_ref"], body.inputs, tc=tc)
             steps.append({"action": "fill_form", "result": fill_result})
-            snap = await _capture_accessibility_snapshot()
+            snap = await _capture_accessibility_snapshot(target=tc)
         blocked_terms = {"purchase", "buy", "pay", "submit payment", *stop_before}
         goal = body.goal.lower()
         candidates = [n for n in snap.nodes if "click" in n.actions]
@@ -3597,8 +3639,8 @@ async def agent_execute_task(body: AgentExecuteTaskRequest):
         target = next((n for n in candidates if any(word in n.name.lower() for word in continue_words)), None)
         if target and len(steps) < max_steps and not any(term in target.name.lower() for term in blocked_terms):
             before = snap
-            result = await client.click_backend_node(target.backend_node_id) if target.backend_node_id else await client.click_by_text(target.name)
-            after = await _capture_accessibility_snapshot()
+            result = await tc.click_backend_node(target.backend_node_id) if target.backend_node_id else await tc.click_by_text(target.name)
+            after = await _capture_accessibility_snapshot(target=tc)
             verification = validate_expectations(before, after, None)
             steps.append({"action": "click", "target": target.ref, "result": result, "verification": verification})
             snap = after
@@ -3708,6 +3750,9 @@ async def agent_run_flow(body: AgentFlowRequest):
     wait / eval / screenshot.  Optional screenshots + baseline diff per step;
     ``stop_on_error`` halts on the first failing step.
     """
+    # Ensure session is minted before the first step so direct client calls
+    # (screenshot, wait_for_text) below run on the caller's own tab.
+    flow_client, _sess = await _resolve_session_client()
     results = []
     ok_all = True
     start = time.monotonic()
@@ -3748,7 +3793,7 @@ async def agent_run_flow(body: AgentFlowRequest):
                 step_report["result"] = r.get("status")
                 step_report["value"] = str(r.get("result", ""))[:300]
             elif step.action == "screenshot":
-                shot = await client.screenshot()
+                shot = await flow_client.screenshot()
                 step_report["result"] = "ok"
                 step_report["screenshot"] = True
             else:
@@ -3756,12 +3801,12 @@ async def agent_run_flow(body: AgentFlowRequest):
 
             # Post-action expectation (success marker text).
             if step.expect:
-                wr = await client.wait_for_text(step.expect, timeout=step.timeout)
+                wr = await flow_client.wait_for_text(step.expect, timeout=step.timeout)
                 step_report["expect_ok"] = wr.get("status") == "ok"
 
             # Per-step screenshot.
             if step.screenshot:
-                shot = await client.screenshot()
+                shot = await flow_client.screenshot()
                 step_report["screenshot"] = True
 
             step_report["ok"] = True
