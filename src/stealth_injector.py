@@ -184,8 +184,24 @@ def _make_patches() -> dict[str, str]:
             "{get: () => undefined});"
         ),
         "navigator.plugins": (
-            "Object.defineProperty(navigator, 'plugins', "
-            "{get: () => [1,2,3,4,5]});"
+            "(() => { "
+            "var p = [];"
+            "function addPlugin(name, fn, desc) {"
+            "  var o = Object.create(Plugin.prototype);"
+            "  Object.defineProperty(o, 'name', {value: name});"
+            "  Object.defineProperty(o, 'filename', {value: fn});"
+            "  Object.defineProperty(o, 'description', {value: desc});"
+            "  Object.defineProperty(o, 'length', {value: 1});"
+            "  p.push(o);"
+            "}"
+            "addPlugin('Chrome PDF Plugin', 'internal-pdf-viewer', 'Portable Document Format');"
+            "addPlugin('Chrome PDF Viewer', 'mhjfbmdgcfjbbpaeojofohoefgiehjai', '');"
+            "addPlugin('Native Client', 'internal-nacl-plugin', '');"
+            "p.item = function(i) { return p[i] || null; };"
+            "p.namedItem = function(n) { return p.find(function(x) { return x.name === n; }) || null; };"
+            "p.refresh = function() {};"
+            "Object.defineProperty(navigator, 'plugins', {get: function() { return p; }});"
+            "})()"
         ),
         "navigator.languages": (
             "Object.defineProperty(navigator, 'languages', "
@@ -203,37 +219,54 @@ def _make_patches() -> dict[str, str]:
             "Object.defineProperty(navigator, 'deviceMemory', "
             "{get: () => 8});"
         ),
-        "navigator.userAgent": (
-            "Object.defineProperty(navigator, 'userAgent', "
-            "{get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36'});"
+        "window.chrome": (
+            "(() => {"
+            "  if (!window.chrome) {"
+            "    window.chrome = {};"
+            "  }"
+            "  if (!window.chrome.runtime) {"
+            "    window.chrome.runtime = {"
+            "      connect: function() { return {}; },"
+            "      sendMessage: function() {}"
+            "    };"
+            "  }"
+            "})()"
         ),
-        "WebGL.vendor": (
-            "const getExt = HTMLCanvasElement.prototype.getContext;"
-            "const origGetParameter = WebGLRenderingContext.prototype.getParameter;"
-            "WebGLRenderingContext.prototype.getParameter = function(p) {"
-            "if(p === 37445) return 'Google Inc. (NVIDIA)';"
-            "return origGetParameter.call(this, p);};"
-        ),
-        "WebGL.renderer": (
-            "const origGetParam2 = WebGLRenderingContext.prototype.getParameter;"
-            "WebGLRenderingContext.prototype.getParameter = function(p) {"
-            "if(p === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)';"
-            "return origGetParam2.call(this, p);};"
-        ),
-        "canvas.fingerprint": (
-            "const origToDataURL = HTMLCanvasElement.prototype.toDataURL;"
-            "HTMLCanvasElement.prototype.toDataURL = function(type, quality) {"
-            "const canvas = document.createElement('canvas');"
-            "canvas.width = this.width; canvas.height = this.height;"
-            "const ctx = canvas.getContext('2d');"
-            "ctx.drawImage(this, 0, 0);"
-            "return origToDataURL.call(canvas, type, quality);};"
+        "navigator.permissions": (
+            "(() => {"
+            "  const origQuery = navigator.permissions.query.bind(navigator.permissions);"
+            "  navigator.permissions.query = (desc) => {"
+            "    if (desc && desc.name) {"
+            "      return Promise.resolve({state: 'granted', status: desc.name === 'notifications' ? 'granted' : undefined});"
+            "    }"
+            "    return origQuery(desc);"
+            "  };"
+            "})()"
         ),
         "screen.orientation": (
             "Object.defineProperty(screen, 'orientation', "
             "{get: () => ({type: 'landscape-primary', angle: 0})});"
+        ),
+        "WebGL.vendor": (
+            "var _origGetParam37445 = WebGLRenderingContext.prototype.getParameter;"
+            "WebGLRenderingContext.prototype.getParameter = function(p) {"
+            "if(p === 37445) return 'Google Inc. (NVIDIA)';"
+            "return _origGetParam37445.call(this, p);};"
+        ),
+        "WebGL.renderer": (
+            "var _origGetParam37446 = WebGLRenderingContext.prototype.getParameter;"
+            "WebGLRenderingContext.prototype.getParameter = function(p) {"
+            "if(p === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0)';"
+            "return _origGetParam37446.call(this, p);};"
+        ),
+        "canvas.fingerprint": (
+            "var _origToDataURL = HTMLCanvasElement.prototype.toDataURL;"
+            "HTMLCanvasElement.prototype.toDataURL = function(type, quality) {"
+            "var canvas = document.createElement('canvas');"
+            "canvas.width = this.width; canvas.height = this.height;"
+            "var ctx = canvas.getContext('2d');"
+            "ctx.drawImage(this, 0, 0);"
+            "return _origToDataURL.call(canvas, type, quality);};"
         ),
     }
 
@@ -255,7 +288,8 @@ LEVEL_PATCHES: dict[str, list[str]] = {
         "navigator.platform",
         "navigator.hardwareConcurrency",
         "navigator.deviceMemory",
-        "navigator.userAgent",
+        "window.chrome",
+        "navigator.permissions",
         "WebGL.vendor",
         "WebGL.renderer",
         "canvas.fingerprint",
