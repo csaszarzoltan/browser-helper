@@ -328,6 +328,19 @@ class ChromeManager:
         else:
             logger.warning("Chrome started but CDP not responding on port %d", actual_port)
 
+        # Soft-start: wait for proxy extension to initialise.
+        # Chrome extensions (especially proxy switchers) need ~2-3 s after the
+        # browser window appears to finish their background script initialisation,
+        # load proxy lists and authenticate.  Without this delay the first
+        # navigation may route through the default (non-proxy) connection.
+        extension_warmup = self.settings.get("extension_warmup_sec", 3)
+        if extension_warmup:
+            logger.info(
+                "Extension warm-up: waiting %.1fs for proxy extension init",
+                extension_warmup,
+            )
+            await asyncio.sleep(extension_warmup)
+
         # Save to settings
         self.settings.set(
             chrome_launched_port=actual_port,
