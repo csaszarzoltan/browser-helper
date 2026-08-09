@@ -4,6 +4,14 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.23.3] — 2026-08-09
+
+#### Fixed
+- **Chrome nem indul a VNC újraindítása után** (`xauthority-fix`): a Chrome a `child_env`-ben csak a `DISPLAY`-t kapta, a `XAUTHORITY`-t nem. Ha a VNC (:1) újraindult, az `/root/.Xauthority` cookie megváltozott, és a Chrome "Invalid MIT-MAGIC-COOKIE-1 key" + "Missing X server" hibával azonnal kilépett → "Chrome started but CDP not responding on port 9557" → minden művelet 503. Mostantól a `chrome_manager.launch()` a `XAUTHORITY`-t is átadja a gyerek processnek (a systemd unit által létrehozott `/tmp/.Xauthority-zoltan` prioritással).
+
+#### Verified
+- VNC restart után: Chrome auto-launch → connected, teljes smoke (navigate/observe/eval/screenshot/click+confirm) átmegy, 1 session / 1 tab.
+
 ## [1.23.2] — 2026-08-09
 
 #### Fixed

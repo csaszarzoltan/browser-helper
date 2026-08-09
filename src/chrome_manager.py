@@ -287,6 +287,19 @@ class ChromeManager:
         if display:
             child_env["DISPLAY"] = display
             child_env["CHROME_DISPLAY"] = display
+        # Xauthority: a systemd unit a /tmp/.Xauthority-zoltan-t hozza létre
+        # (root Xauthority másolat). Enélkül a Chrome "Invalid MIT-MAGIC-
+        # COOKIE-1" hibával nem tud csatlakozni az X serverhez, ha a VNC
+        # újraindult (a cookie elévült).
+        xauth_candidates = [
+            os.environ.get("XAUTHORITY", ""),
+            "/tmp/.Xauthority-zoltan",
+            os.path.expanduser("~/.Xauthority"),
+        ]
+        for xa in xauth_candidates:
+            if xa and os.path.isfile(xa):
+                child_env["XAUTHORITY"] = xa
+                break
 
         try:
             proc = await asyncio.create_subprocess_exec(
