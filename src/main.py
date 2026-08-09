@@ -749,7 +749,7 @@ class AgentSearchRequest(BaseModel):
     result, and return the answer text — no manual sleeps or extra reads."""
 
     query: str
-    engine: str = "perplexity"  # "perplexity" | "google" | "ddg" | "bing"
+    engine: str = "google"  # "perplexity" | "google" | "ddg" | "bing"
     timeout: int = 45
     result_selector: str | None = None  # override the engine's answer selector
     max_chars: int = 6000

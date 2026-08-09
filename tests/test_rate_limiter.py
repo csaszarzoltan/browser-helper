@@ -404,6 +404,10 @@ class TestRateConfigAPILive:
 
     def test_get_rate_config_defaults(self):
         """GET /rate/config returns default values before any POST."""
+        from cdp_client import RateLimitConfig
+
+        # Reset to defaults first — other tests toggle the global config.
+        main.client.rate_limiter.config = RateLimitConfig()
         client = TestClient(main.app)
         response = client.get("/rate/config")
         assert response.status_code == 200
