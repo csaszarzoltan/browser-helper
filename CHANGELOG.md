@@ -4,6 +4,23 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.25.0] — 2026-08-09
+
+#### Added
+- **Rate limiter** (`RateLimitConfig` + `RateLimiter`): emberi tempójú CDP parancsok — uniform/log-normal delay a `_send_command` előtt (bot-detection).
+- `GET/POST /rate/config` API: részleges frissítés, validáció (min≤max, distribution), 422 hibákkal.
+- **Proxy pool enhanced**: geo-taggolás (`set_geo`/`get_geo`), típus-szűrés (`get_proxy(type=...)`, `get_pool(type=...)`), circuit breaker (3 egymás utáni hiba → 30s cooling), konkurrens `health_check_all` (ThreadPool), legacy formátum backcompat.
+- **Google keresés feloldva**: a stealth v1.24 javítások (plugins, window.chrome, permissions, natív UA) + behavioral engine átvitték a Google bot-detectionjét — nincs több CAPTCHA a VPS IP-ről.
+- **`/agent/search` engine default: `google`** (2-5s — a perplexity 45s helyett); `perplexity` továbbra is elérhető opcióként.
+- MCP `search` tool default: `google`.
+- `close_tab()`: `_activate_current()` hívás a close előtt (konzisztens tab-lifecycle).
+- SKILL.md: `/connect/remote`, `/rate/config`, `/scroll/config` route-ok dokumentálva.
+
+#### Fixed
+- **Teljes teszt-suite ZÖLD: 2493 passed / 0 failed** (a nap eleji 203 failed-hez képest).
+- `test_rate_limiter`: defaults teszt sorrend-független (saját reset).
+- MCP teszt-izoláció: `BH_TEST_NO_CHROME=1` — a subprocess nem csatlakozik az élő Chrome-hoz.
+
 ## [1.24.0] — 2026-08-09
 
 #### Added
