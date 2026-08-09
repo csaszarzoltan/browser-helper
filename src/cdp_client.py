@@ -3738,6 +3738,18 @@ class CDPClient:
         await self._send_command("Emulation.setScriptExecutionDisabled", {"value": False})
         return {"status": "ok"}
 
+    async def add_script_to_evaluate_on_new_document(self, source: str) -> dict:
+        """Register a script that runs on every new document (navigation).
+
+        Wraps the CDP ``Page.addScriptToEvaluateOnNewDocument`` command —
+        used for persistent bot-fingerprint masking (stealth patches that
+        survive navigations).
+        """
+        result = await self._send_command(
+            "Page.addScriptToEvaluateOnNewDocument", {"source": source}
+        )
+        return {"status": "ok", "identifier": result.get("identifier", "")}
+
     # ─── NEW: Misc helpers ────────────────────────────────────────
 
     async def get_performance_metrics(self) -> dict:

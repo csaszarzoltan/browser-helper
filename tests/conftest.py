@@ -27,12 +27,15 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_module_fingerprint_db():
+def _reset_module_fingerprint_db(tmp_path, monkeypatch):
     """Restore the API's fingerprint DB to a clean defaults-only state.
 
     Runs before every test: clears the in-memory store, reseeds the shipped
     defaults, and removes persisted JSON files so ``load()`` on a later
     ``FingerprintDatabase()`` construction cannot resurrect test templates.
+    Also redirects the baseline manager to a temp dir so screenshot/baseline
+    tests start from an empty state instead of seeing real recorded
+    baselines from the live service.
     """
     import main
 
@@ -46,11 +49,24 @@ def _reset_module_fingerprint_db():
                 json_file.unlink()
             except OSError:
                 pass
+
+    # Baseline manager: point at a fresh temp dir so /screenshot/baselines
+    # starts empty (real baselines were recorded during e2e runs).
+    try:
+        from baseline_manager import BaselineManager
+
+        fresh = tmp_path / "baselines"
+        fresh.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(
+            main, "baseline_mgr", BaselineManager(base_dir=str(fresh))
+        )
+    except Exception:
+        pass
     yield
 
 
 @pytest.fixture(autouse=True)
-def _no_real_chrome(monkeypatch):
+def _no_real_chrome(monkeypatch, request):
     """Prevent API endpoint tests from launching real Chrome.
 
     ``run_op`` / ``_resolve_session_client`` mint a per-client session via
@@ -59,6 +75,11 @@ def _no_real_chrome(monkeypatch):
     failure) and mark the global client as connected so ``_ensure_browser``
     short-circuits and the endpoint runs against the mocked client — same
     behaviour as the pre-session tests expected.
+
+    The MCP integration tests (``test_mcp_integration.py``) deliberately
+    exercise the NOT-connected gate ("CDP" error) — the connected mock
+    would make those tools return success. Skip the connected override
+    for them.
     """
     import main
 
@@ -81,5 +102,9 @@ def _no_real_chrome(monkeypatch):
     monkeypatch.setattr(main.session_registry, "create", _no_session)
     monkeypatch.setattr(main, "_ensure_browser", _noop_ensure_browser)
     monkeypatch.setattr(main, "_resolve_session_client", _resolve_no_session_client)
-    monkeypatch.setattr(main.client, "_connected", True, raising=False)
+    # MCP e2e tests assert the deterministic "not connected to CDP" error;
+    # leave the global client disconnected for them.
+    is_mcp = "mcp_integration" in str(request.node.fspath or "")
+    if not is_mcp:
+        monkeypatch.setattr(main.client, "_connected", True, raising=False)
     yield

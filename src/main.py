@@ -1255,6 +1255,14 @@ async def _ensure_browser(sess: Session | None = None) -> None:
     target = sess.client if sess is not None else client
     if target.is_connected:
         return
+    if os.environ.get("BH_TEST_NO_CHROME") == "1":
+        # Test isolation (MCP integration tests): never connect to a real
+        # Chrome. CDP-gated calls then fail with the deterministic CDP
+        # error instead of attaching to the live browser-helper service.
+        raise HTTPException(
+            status_code=503,
+            detail="Chrome CDP unavailable: BH_TEST_NO_CHROME test isolation",
+        )
     cdp_http = _local_cdp_http()
     try:
         launch_result = await chrome_mgr.launch()
@@ -1354,14 +1362,20 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
         # this client run on their own dedicated tab.  If the browser is not
         # available (e.g. tests without a running Chrome), fall back to the
         # shared default client so behaviour matches the legacy path.
-        try:
-            await chrome_mgr.launch()  # idempotent — reuses running Chrome
-            sess = await session_registry.create(_local_cdp_http())
-            # Advertise the fresh session to the middleware (Set-Cookie).
-            _set_current_session(sess)
-        except Exception as exc:
-            logger.warning("Session creation failed, falling back to default client: %s", exc)
+        if os.environ.get("BH_TEST_NO_CHROME") == "1":
+            # Test isolation (MCP integration tests): never launch real
+            # Chrome; fall back to the (disconnected) default client so
+            # CDP-gated calls fail with the deterministic CDP error.
             sess = None
+        else:
+            try:
+                await chrome_mgr.launch()  # idempotent — reuses running Chrome
+                sess = await session_registry.create(_local_cdp_http())
+                # Advertise the fresh session to the middleware (Set-Cookie).
+                _set_current_session(sess)
+            except Exception as exc:
+                logger.warning("Session creation failed, falling back to default client: %s", exc)
+                sess = None
     if sess is not None:
         # Route the operation onto the session's own client: the REST
         # endpoints pass a bound method of the *global* client; rebind the

@@ -70,19 +70,35 @@ def pm(storage_dir):
     yield mgr
 
 
-@pytest.fixture
-def pm_with_config(storage_dir):
-    """ProfileManager with a profile that has fingerprint_config set."""
-    from profile_manager import ProfileManager
+@pytest.fixture(autouse=True)
+def _bind_profile_mgr(pm, monkeypatch):
+    """Route the API's global profile_mgr at the test's isolated manager.
 
-    mgr = ProfileManager(storage_dir=storage_dir)
-    mgr.create_profile("fp-configured")
+    The REST endpoints in ``main.py`` read/write the module-level
+    ``main.profile_mgr``.  These tests build an isolated ``pm`` fixture in a
+    temp dir; without binding, the endpoints hit the real (empty) manager and
+    return 404.  Swapping ``main.profile_mgr`` makes the API tests operate on
+    the isolated manager so they pass offline.
+    """
+    import main as _main
+
+    monkeypatch.setattr(_main, "profile_mgr", pm)
+    # Some endpoints reference the manager under a private alias too.
+    if hasattr(_main, "_profile_mgr"):
+        monkeypatch.setattr(_main, "_profile_mgr", pm)
+    yield
+
+
+@pytest.fixture
+def pm_with_config(pm):
+    """ProfileManager with a profile that has fingerprint_config set."""
+    pm.create_profile("fp-configured")
     # Set fingerprint_config on the profile via raw dict — the dev's setter
     # or direct field assignment is expected
-    raw = mgr._data["fp-configured"]
+    raw = pm._data["fp-configured"]
     raw["fingerprint_config"] = dict(SAMPLE_CONFIG)
-    mgr.save()
-    return mgr
+    pm.save()
+    return pm
 
 
 # ===================================================================
@@ -368,6 +384,7 @@ class TestFingerprintConfigImportExport:
         """Importing legacy export without fingerprint_config should work."""
         import zipfile
 
+        pm.create_profile("legacy")
         export_path = str(tmp_path / "legacy.zip")
         pm.export_profile("legacy", export_path)
 

@@ -326,6 +326,30 @@ class HeadlessManager:
 
         self._pool.add(handle)
 
+        # ── Fingerprint injection (bot-detection bypass) ──────────
+        # If the resolved profile carries a fingerprint_config, generate the
+        # stealth scripts via FingerprintEngine and inject them into the new
+        # session's page so every navigation carries the profile's fingerprint.
+        if resolved_profile_name:
+            try:
+                from profile_manager import ProfileManager
+                from fingerprint_engine import FingerprintEngine
+
+                _pm = ProfileManager()
+                _fp_cfg = _pm.get_fingerprint_config(resolved_profile_name)
+                if _fp_cfg:
+                    engine = FingerprintEngine()
+                    engine.config = _fp_cfg
+                    scripts = engine.generate_all_scripts()
+                    if scripts:
+                        await self._inject_fingerprint_scripts(session_id, scripts)
+                        logger.info(
+                            "Session %s: %d fingerprint script(s) injected (profile %r)",
+                            session_id, len(scripts), resolved_profile_name,
+                        )
+            except Exception as exc:  # noqa: BLE001 - fingerprint is best-effort
+                logger.warning("Fingerprint injection skipped: %s", exc)
+
         # Start timeout guard if not running
         if self._timeout_task is None or self._timeout_task.done():
             self._timeout_task = asyncio.create_task(self._timeout_guard())
@@ -467,6 +491,82 @@ class HeadlessManager:
             }
         except (OSError, TimeoutError, RuntimeError, websockets.WebSocketException) as exc:
             return {"status": "error", "code": "cdp_error", "error": str(exc)}
+
+    async def _inject_fingerprint_scripts(
+        self, session_id: str, scripts: list[str]
+    ) -> dict:
+        """Register fingerprint-injection scripts on the session's page.
+
+        Uses ``Page.addScriptToEvaluateOnNewDocument`` so the scripts run on
+        every future navigation (persistent bot-fingerprint masking), and
+        also evaluates each script immediately on the current document.
+
+        Args:
+            session_id: The headless session to inject into.
+            scripts:    List of JavaScript source strings to inject.
+
+        Returns:
+            ``{"status": "ok", "registered": n}`` or an error dict.
+        """
+        handle = self._pool.get(session_id)
+        if handle is None:
+            return {"status": "error", "code": "session_not_found",
+                    "error": f"Session {session_id} not found"}
+        handle.last_active = time.time()
+        if not scripts:
+            return {"status": "ok", "registered": 0}
+
+        registered = 0
+        errors: list[str] = []
+        for script in scripts:
+            try:
+                # Persistent: runs on every new document (navigations)
+                await self._cdp_command(
+                    handle, "Page.addScriptToEvaluateOnNewDocument",
+                    {"source": script},
+                )
+                registered += 1
+            except Exception as exc:  # noqa: BLE001 - continue on per-script failure
+                errors.append(str(exc))
+        return {
+            "status": "ok" if not errors else "partial",
+            "registered": registered,
+            "errors": errors,
+            "session_id": session_id,
+        }
+
+    async def _apply_fingerprint_config(self, session_id: str, config: dict) -> dict:
+        """Generate and inject fingerprint scripts from a config dict.
+
+        Convenience wrapper: builds the stealth script set from a
+        fingerprint config (e.g. WebGL vendor/renderer, timezone, platform)
+        and injects them via :meth:`_inject_fingerprint_scripts`.
+        """
+        scripts: list[str] = []
+        vendor = config.get("webgl_vendor") or "Google Inc. (NVIDIA)"
+        renderer = config.get("webgl_renderer") or "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060)"
+        tz = config.get("timezone") or "America/New_York"
+        platform = config.get("platform") or "Win32"
+
+        if config.get("screen_width") and config.get("screen_height"):
+            scripts.append(
+                "Object.defineProperty(screen, 'width', {get: () => %d});"
+                "Object.defineProperty(screen, 'height', {get: () => %d});"
+                % (config["screen_width"], config["screen_height"])
+            )
+        scripts.append(
+            "Object.defineProperty(navigator, 'platform', {get: () => %r});" % platform
+        )
+        scripts.append(
+            "(() => {"
+            "var op = WebGLRenderingContext.prototype.getParameter;"
+            "WebGLRenderingContext.prototype.getParameter = function(p) {"
+            "if (p === 37445) return %r;"
+            "if (p === 37446) return %r;"
+            "return op.call(this, p);};})()"
+            % (vendor, renderer)
+        )
+        return await self._inject_fingerprint_scripts(session_id, scripts)
 
     async def screenshot(self, session_id: str, quality: int = 80) -> dict:
         """Capture a real JPEG screenshot and persist it as an artifact."""

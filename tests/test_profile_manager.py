@@ -1044,7 +1044,7 @@ class TestMultiProfileSessionIntegration:
             "launch_session must accept profile parameter for anti-detection integration"
         )
 
-    def test_fingerprint_used_by_fingerprint_randomizer(self):
+    def test_fingerprint_used_by_fingerprint_randomizer(self, pm):
         """get_fingerprint output must be consumable by FingerprintRandomizer."""
         from anti_detection.profile_types import ANTI_DETECTION_PROFILES
         from anti_detection.fingerprint_randomizer import FingerprintRandomizer

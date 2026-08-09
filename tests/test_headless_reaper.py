@@ -30,9 +30,12 @@ def test_reaps_none_when_no_headless(monkeypatch):
 def test_reaps_orphans_not_in_pool(monkeypatch):
     # pgrep finds 3 headless PIDs; pool owns only 2222 → 1111, 3333 reaped.
     out = MagicMock(stdout="1111\n2222\n3333\n")
+    main_out = MagicMock(stdout="5555\n")  # main Chrome on port 9557
     kills = []
 
     def fake_run(cmd, **kw):
+        if cmd[0] == "pgrep" and "remote-debugging-port=" in cmd[-1] and "chrome.*" not in cmd[-1]:
+            return main_out
         if cmd[0] == "pgrep":
             return out
         kills.append(cmd[2])  # the PID argument of `kill -9 <pid>`

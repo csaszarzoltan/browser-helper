@@ -56,6 +56,10 @@ class StdioTransport:
         run_env = dict(__import__("os").environ)
         run_env.setdefault("PYTHONPATH", str(REPO_ROOT / "src"))
         run_env.setdefault("PYTHONUNBUFFERED", "1")
+        # Test isolation: never launch real Chrome from the MCP server
+        # subprocess (it would attach to the live browser-helper service
+        # and make CDP-gated tools succeed instead of failing cleanly).
+        run_env.setdefault("BH_TEST_NO_CHROME", "1")
         if env:
             run_env.update(env)
         self.proc = subprocess.Popen(

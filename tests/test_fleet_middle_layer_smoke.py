@@ -39,7 +39,7 @@ def test_all_middle_layer_imports_resolve():
 def test_v115_suite_passes_after_wiring():
     repo = Path(__file__).parent.parent
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/test_fleet_v115.py", "-q", "--no-header"],
+        [sys.executable, "-m", "pytest", "tests/test_fleet_v115.py", "--no-header"],
         cwd=repo,
         capture_output=True,
         text=True,
