@@ -276,9 +276,9 @@ class TestGetDefaultConfigRED:
     """get_default_config behavioral tests — RED phase."""
 
     def test_get_default_config_raises_not_implemented(self):
-        """get_default_config() raises NotImplementedError until implemented."""
-        with pytest.raises(NotImplementedError):
-            FingerprintEngine.get_default_config()
+        """get_default_config() works (returns a FingerprintConfig)."""
+        cfg = FingerprintEngine.get_default_config()
+        assert cfg is not None
 
     def test_get_default_config_returns_fingerprint_config_type(self):
         """get_default_config() should return a FingerprintConfig instance."""
@@ -311,9 +311,9 @@ class TestGenerateCanvasNoiseScriptRED:
     """generate_canvas_noise_script behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """generate_canvas_noise_script raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            FingerprintEngine.generate_canvas_noise_script(seed=42)
+        """generate_canvas_noise_script works (returns a JS string)."""
+        result = FingerprintEngine.generate_canvas_noise_script(seed=42)
+        assert isinstance(result, str)
 
     def test_returns_string(self):
         """generate_canvas_noise_script should return a non-empty JS string."""
@@ -364,11 +364,11 @@ class TestGenerateWebGLOverrideScriptRED:
     """generate_webgl_override_script behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """generate_webgl_override_script raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            FingerprintEngine.generate_webgl_override_script(
-                vendor="NVIDIA", renderer="RTX 3080"
-            )
+        """generate_webgl_override_script works (returns a JS string)."""
+        result = FingerprintEngine.generate_webgl_override_script(
+            vendor="NVIDIA", renderer="RTX 3080"
+        )
+        assert isinstance(result, str)
 
     def test_returns_string(self):
         """generate_webgl_override_script should return a non-empty JS string."""
@@ -437,9 +437,9 @@ class TestGenerateAudioOverrideScriptRED:
     """generate_audio_override_script behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """generate_audio_override_script raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            FingerprintEngine.generate_audio_override_script(sample_rate=44100)
+        """generate_audio_override_script works (returns a JS string)."""
+        result = FingerprintEngine.generate_audio_override_script(sample_rate=44100)
+        assert isinstance(result, str)
 
     def test_returns_string(self):
         """generate_audio_override_script should return a non-empty JS string."""
@@ -479,10 +479,10 @@ class TestGenerateAllScriptsRED:
     """generate_all_scripts behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """generate_all_scripts() raises NotImplementedError."""
+        """generate_all_scripts() works (returns a list of scripts)."""
         engine = FingerprintEngine()
-        with pytest.raises(NotImplementedError):
-            engine.generate_all_scripts()
+        result = engine.generate_all_scripts()
+        assert isinstance(result, list)
 
     def test_returns_list(self):
         """generate_all_scripts() should return a list of strings."""
@@ -535,9 +535,9 @@ class TestGetPlausibleGpuPoolRED:
     """get_plausible_gpu_pool behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """get_plausible_gpu_pool() raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            FingerprintEngine.get_plausible_gpu_pool()
+        """get_plausible_gpu_pool() works (returns a dict)."""
+        result = FingerprintEngine.get_plausible_gpu_pool()
+        assert isinstance(result, dict)
 
     def test_returns_dict(self):
         """get_plausible_gpu_pool() should return a dict."""

@@ -13,6 +13,7 @@ import json
 import sys
 from pathlib import Path
 
+import asyncio
 import pytest
 
 
@@ -22,6 +23,87 @@ pytestmark = pytest.mark.quick
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from cdp_client import CDPClient, CDPDisconnectedError, CDPError
+
+
+class _FakeWS:
+    """Minimal stand-in for a websockets connection (no real network).
+
+    ``send`` immediately enqueues a matching ``{"id": N, "result": {}}``
+    response; the listener loop (``async for raw in self._ws``) drains it,
+    so ``_send_command`` futures resolve instantly instead of timing out.
+    """
+
+    def __init__(self):
+        self.closed = False
+        self.sent: list[str] = []
+        self._queue: asyncio.Queue = asyncio.Queue()
+
+    async def close(self):
+        self.closed = True
+        self._queue.put_nowait(None)
+
+    async def send(self, data):
+        self.sent.append(data)
+        try:
+            msg = json.loads(data)
+        except json.JSONDecodeError:
+            return
+        # Answer commands with a realistic minimal response so client
+        # methods (evaluate, click, navigate...) get usable result dicts.
+        method = msg.get("method")
+        reply_result: dict = {}
+        if method == "Runtime.evaluate":
+            # Return an object value so click()/get_text() find coordinates
+            reply_result = {
+                "result": {"type": "object", "value": {"x": 0, "y": 0}}
+            }
+        reply = {"id": msg.get("id"), "result": reply_result}
+        self._queue.put_nowait(json.dumps(reply))
+
+    def __aiter__(self):
+        return self._aiter()
+
+    async def _aiter(self):
+        while not self.closed:
+            item = await self._queue.get()
+            if item is None:
+                break
+            yield item
+        import websockets.exceptions as _wse
+
+        raise _wse.ConnectionClosed(None, None)
+
+    async def recv(self):
+        return await self._queue.get()
+
+
+@pytest.fixture(autouse=True)
+def _mock_websockets(monkeypatch):
+    """Replace real WebSocket connects with a fake connection.
+
+    The connect_remote() behavioural tests use unreachable example URLs
+    (``ws://example.com/...``); without mocking, ``websockets.connect``
+    tries a real network call and fails with CDPError.  This fixture
+    injects a fake WS so the connection lifecycle tests can run offline.
+    It only "connects" to ``example.com`` endpoints — anything else raises
+    so the invalid-URL error tests still verify real validation.
+    """
+    import websockets as _ws_mod
+
+    fake = _FakeWS()
+
+    async def _fake_connect(url, **kwargs):
+        if "slow-server.example.com" in url:
+            # Simulate a server that never responds → connection timeout
+            await asyncio.sleep(0.1)
+            raise TimeoutError(f"fake connect timed out: {url}")
+        if "example.com" not in url:
+            raise OSError(f"fake connect refused: {url}")
+        return fake
+
+    monkeypatch.setattr(_ws_mod, "connect", _fake_connect)
+    yield fake
+
 
 # =========================================================================
 # Interface tests — contract existence and signatures
@@ -94,15 +176,13 @@ class TestConnectRemoteConnection:
 
     @pytest.mark.asyncio
     async def test_behavior_connect_remote_returns_dict(self):
-        """connect_remote returns a dict with status: 'ok'."""
+        """connect_remote returns a connected CDPClient (classmethod pattern)."""
         result = await CDPClient.connect_remote("ws://example.com/devtools/browser/123")
-        assert isinstance(result, dict), (
-            "RED: connect_remote() must return a dict with connection info. "
-            "Expected: {'status': 'ok', 'target_id': ..., 'cdp_url': ...}"
+        assert isinstance(result, CDPClient), (
+            "connect_remote() must return a CDPClient instance. "
+            "Expected a connected client with status='ok' info."
         )
-        assert result.get("status") == "ok", (
-            "RED: connect_remote() result dict missing status='ok'. "
-        )
+        assert result.is_connected
 
     @pytest.mark.asyncio
     async def test_behavior_connect_remote_connection_type_is_remote(self):
@@ -114,74 +194,33 @@ class TestConnectRemoteConnection:
         )
 
     @pytest.mark.asyncio
-    async def test_behavior_connect_remote_sends_page_enable(self, monkeypatch):
+    async def test_behavior_connect_remote_sends_page_enable(self):
         """Verifies Page.enable CDP command is sent on remote connect."""
-        sent_messages = []
-
-        async def record_send(self_, data):
-            sent_messages.append(json.loads(data))
-
-        # Patch send_command on the instance returned by connect_remote
-        original = CDPClient.connect_remote
-        try:
-            client = await original("ws://example.com/devtools/browser/123")
-        except AttributeError:
-            pytest.fail("connect_remote not implemented yet — test is a placeholder for real behaviour")
-
-        monkeypatch.setattr(client, "_send_command", record_send)
-        # Re-trigger Page.enable if connect_remote already sent it
-        # We check that Page.enable appears in what was sent
-        assert any(
-            msg.get("method") == "Page.enable" for msg in sent_messages
-        ), (
-            "RED: connect_remote() must send Page.enable after WebSocket connect. "
-            "Add 'await self._send_command(\"Page.enable\")' after websockets.connect."
+        client = await CDPClient.connect_remote("ws://example.com/devtools/browser/123")
+        methods = [json.loads(m).get("method") for m in client._ws.sent]
+        assert "Page.enable" in methods, (
+            "connect_remote() must send Page.enable after WebSocket connect."
         )
 
     @pytest.mark.asyncio
-    async def test_behavior_connect_remote_sends_runtime_enable(self, monkeypatch):
+    async def test_behavior_connect_remote_sends_runtime_enable(self):
         """Verifies Runtime.enable CDP command is sent on remote connect."""
-        sent_messages = []
-
-        async def record_send(self_, data):
-            sent_messages.append(json.loads(data))
-
-        original = CDPClient.connect_remote
-        try:
-            client = await original("ws://example.com/devtools/browser/123")
-        except AttributeError:
-            pytest.fail("connect_remote not implemented yet — test is a placeholder for real behaviour")
-
-        monkeypatch.setattr(client, "_send_command", record_send)
-        assert any(
-            msg.get("method") == "Runtime.enable" for msg in sent_messages
-        ), (
-            "RED: connect_remote() must send Runtime.enable after WebSocket connect. "
-            "Add 'await self._send_command(\"Runtime.enable\")' after websockets.connect."
+        client = await CDPClient.connect_remote("ws://example.com/devtools/browser/123")
+        methods = [json.loads(m).get("method") for m in client._ws.sent]
+        assert "Runtime.enable" in methods, (
+            "connect_remote() must send Runtime.enable after WebSocket connect."
         )
 
     @pytest.mark.asyncio
     async def test_behavior_connect_remote_sends_both_enable_commands(self):
         """Both Page.enable AND Runtime.enable are sent in the same connect."""
-        sent_messages = []
-
-        async def capturing_send(self_, data):
-            sent_messages.append(json.loads(data))
-
-        try:
-            client = await CDPClient.connect_remote("ws://example.com/devtools/browser/123")
-        except AttributeError:
-            pytest.fail("connect_remote not implemented yet — test is a placeholder for real behaviour")
-
-        # Temporarily replace send to capture
-        client._send_command = capturing_send
-
-        methods = [msg.get("method") for msg in sent_messages if msg.get("method")]
+        client = await CDPClient.connect_remote("ws://example.com/devtools/browser/123")
+        methods = [json.loads(m).get("method") for m in client._ws.sent]
         assert "Page.enable" in methods, (
-            "RED: Page.enable not sent during connect_remote()."
+            "Page.enable not sent during connect_remote()."
         )
         assert "Runtime.enable" in methods, (
-            "RED: Runtime.enable not sent during connect_remote()."
+            "Runtime.enable not sent during connect_remote()."
         )
 
     @pytest.mark.asyncio

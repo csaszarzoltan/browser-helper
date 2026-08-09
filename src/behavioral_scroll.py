@@ -98,6 +98,17 @@ class BehavioralScroll:
         self._step_min = DEFAULT_STEP_MIN
         self._step_max = DEFAULT_STEP_MAX
         self._config: dict[str, Any] = {}
+        # Load persisted config (if a settings manager is provided)
+        if settings_manager is not None:
+            try:
+                saved = settings_manager.get("behavioral_scroll")
+                if isinstance(saved, dict):
+                    self._enabled = bool(saved.get("enabled", self._enabled))
+                    self._mode = saved.get("mode", self._mode)
+                    self._step_min = int(saved.get("step_min", self._step_min))
+                    self._step_max = int(saved.get("step_max", self._step_max))
+            except Exception:
+                pass
 
     # ── Config management ────────────────────────────────────────
 
@@ -113,7 +124,7 @@ class BehavioralScroll:
 
     def get_config(self) -> dict[str, Any]:
         """Return current config (alias for .config)."""
-        raise NotImplementedError("get_config — config serialization")
+        return self.config
 
     def update_config(
         self,
@@ -127,7 +138,28 @@ class BehavioralScroll:
         Raises InvalidModeError when mode is not one of smooth/jagged/auto.
         Raises ValueError when step bounds are out of 100-800 range.
         """
-        raise NotImplementedError("update_config — config mutation + validation")
+        if mode is not None:
+            if mode not in VALID_MODES:
+                raise InvalidModeError(mode)
+            self._mode = mode
+        if enabled is not None:
+            self._enabled = bool(enabled)
+        if step_min is not None:
+            if not (100 <= step_min <= 800):
+                raise ValueError(f"step_min must be 100-800, got {step_min}")
+            self._step_min = int(step_min)
+        if step_max is not None:
+            if not (100 <= step_max <= 800):
+                raise ValueError(f"step_max must be 100-800, got {step_max}")
+            self._step_max = int(step_max)
+        # Persist to the settings manager (if provided) so the config
+        # survives re-initialization.
+        if self._settings is not None:
+            try:
+                self._settings.set(behavioral_scroll=self.config)
+            except Exception:
+                pass
+        return self.config
 
     # ── Scroll execution ─────────────────────────────────────────
 
@@ -146,7 +178,17 @@ class BehavioralScroll:
         When *enabled* is False, returns a single immediate-scroll event
         (no humanization).
         """
-        raise NotImplementedError("scroll — human-like scroll orchestration")
+        distance = max(0, target_y - current_y)
+        if not getattr(self, "_enabled", True):
+            return [self._raw_scroll_event(distance)[0]]
+        mode = getattr(self, "_mode", "smooth")
+        if mode == "auto":
+            events = self._auto_mode(distance)
+        elif mode == "jagged":
+            events = self._jagged_scroll(distance)
+        else:
+            events = self._smooth_scroll(distance)
+        return [e.to_dict() if hasattr(e, "to_dict") else e for e in events]
 
     # ── Mode-specific generators ─────────────────────────────────
 
@@ -162,7 +204,34 @@ class BehavioralScroll:
         then decelerate near the end. Variable delay between events
         simulates real mouse-wheel inertia.
         """
-        raise NotImplementedError("_smooth_scroll — ease-in-out acceleration curve")
+        if distance <= 0:
+            return []
+        events = []
+        remaining = distance
+        # Ease-in-out curve: progress t from 0→1, step size = sin curve
+        # We chunk the distance into ~12-20 steps with sinusoidal weighting.
+        n_steps = max(4, min(20, distance // step_min))
+        base = max(1, step_min)
+        for i in range(n_steps):
+            t = i / max(1, n_steps - 1)
+            # ease-in-out: slow start, fast middle, slow end
+            ease = 0.5 - 0.5 * __import__("math").cos(t * __import__("math").pi)
+            step = max(1, int(round(base * (0.5 + ease))))
+            step = min(step, remaining)
+            if step <= 0:
+                continue
+            delay = max(10, int(50 + 150 * (1 - ease)))  # faster mid-scroll
+            events.append(ScrollStepEvent(delta_y=step, delay_ms=delay))
+            remaining -= step
+            if remaining <= 0:
+                break
+        # Ensure we reach the target
+        if remaining > 0 and events:
+            events[-1] = ScrollStepEvent(
+                delta_y=events[-1].delta_y + remaining,
+                delay_ms=events[-1].delay_ms,
+            )
+        return [e.to_dict() for e in events]
 
     @staticmethod
     def _jagged_scroll(
@@ -176,7 +245,17 @@ class BehavioralScroll:
         (scroll-stop-pause pattern). Pause length varies to simulate
         the user reading content before scrolling again.
         """
-        raise NotImplementedError("_jagged_scroll — scroll-stop-pause pattern")
+        if distance <= 0:
+            return []
+        events = []
+        remaining = distance
+        while remaining > 0:
+            step = max(1, min(step_max, BehavioralScroll._random_step(step_min, step_max)))
+            step = min(step, remaining)
+            pause = round(BehavioralScroll._log_normal_pause(), 1)
+            events.append(ScrollStepEvent(delta_y=step, delay_ms=20, pause_after=pause))
+            remaining -= step
+        return [e.to_dict() for e in events]
 
     @staticmethod
     def _auto_mode(
@@ -190,7 +269,16 @@ class BehavioralScroll:
         Returns jagged events for distances < 500px.
         For distances 500-1000px, uses a weighted random between the two.
         """
-        raise NotImplementedError("_auto_mode — distance-based mode selection")
+        if distance > 1000:
+            return BehavioralScroll._smooth_scroll(distance, step_min, step_max)
+        if distance < 500:
+            return BehavioralScroll._jagged_scroll(distance, step_min, step_max)
+        # 500-1000: weighted random
+        import random
+
+        if random.random() < 0.5:
+            return BehavioralScroll._jagged_scroll(distance, step_min, step_max)
+        return BehavioralScroll._smooth_scroll(distance, step_min, step_max)
 
     # ── Timing helpers ───────────────────────────────────────────
 
@@ -202,12 +290,16 @@ class BehavioralScroll:
         the range 150-1200ms with a right-skewed distribution, simulating
         reading time between scroll steps.
         """
-        raise NotImplementedError("_log_normal_pause — log-normal random pause")
+        import random
+
+        return max(50.0, round(random.lognormvariate(mu, sigma), 1))
 
     @staticmethod
     def _random_step(min_px: int = DEFAULT_STEP_MIN, max_px: int = DEFAULT_STEP_MAX) -> int:
         """Return a random step size within [min_px, max_px]."""
-        raise NotImplementedError("_random_step — randomised scroll step")
+        import random
+
+        return random.randint(min_px, max_px)
 
     # ── Raw fallthrough ──────────────────────────────────────────
 
@@ -217,7 +309,7 @@ class BehavioralScroll:
 
         Used when enabled=False or as a base primitive.
         """
-        raise NotImplementedError("_raw_scroll_event — fallthrough to raw CDP")
+        return [ScrollStepEvent(delta_y=max(0, distance), delay_ms=0).to_dict()]
 
 
 # ── Exceptions ────────────────────────────────────────────────────

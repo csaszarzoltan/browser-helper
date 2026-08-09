@@ -327,6 +327,12 @@ class ConnectRequest(BaseModel):
     proxy: str | None = None
 
 
+class ConnectRemoteRequest(BaseModel):
+    """POST /connect/remote body — requires a WebSocket endpoint."""
+
+    ws_endpoint: str = Field(..., min_length=1, description="CDP WebSocket URL (ws:// or wss://)")
+
+
 # ---------------------------------------------------------------------------
 # Pydantic request models — new endpoints
 # ---------------------------------------------------------------------------
@@ -1745,6 +1751,45 @@ async def post_stealth_test():
     return {
         name: False for name in LEVEL_PATCHES.get(state.get("stealth_level", "medium"), [])
     }
+
+
+@app.post("/connect/remote")
+async def connect_remote(body: ConnectRemoteRequest):
+    """Connect to a remote/cloud CDP WebSocket endpoint.
+
+    Creates a fresh CDPClient connected directly to the given
+    ``ws://``/``wss://`` endpoint (no local tab discovery) and enables the
+    Page + Runtime domains. Mirrors the ``/connect`` envelope.
+    """
+    start = time.monotonic()
+    try:
+        remote_client = await CDPClient.connect_remote(body.ws_endpoint)
+        # Register it as the active client so subsequent operations target it
+        global client
+        old = client
+        client = remote_client
+        if old is not None and old is not remote_client:
+            try:
+                await old.disconnect()
+            except Exception:
+                pass
+        elapsed = (time.monotonic() - start) * 1000
+        log_operation("connect_remote", "success", elapsed, body.ws_endpoint[:120])
+        await broadcast_state()
+        return {
+            "status": "ok",
+            "operation": "connect_remote",
+            "result": {
+                "status": "ok",
+                "cdp_url": body.ws_endpoint,
+                "target_id": remote_client._target_id or "",
+            },
+        }
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        logger.warning("connect_remote failed: %s", exc)
+        log_operation("connect_remote", "error", elapsed, str(exc)[:200])
+        return api_error("connect_remote", "CONNECT_FAILED", str(exc), 400)
 
 
 @app.post("/connect")
@@ -4839,13 +4884,22 @@ async def backend_status():
 
 
 from behavioral_mouse import MouseConfig as _MouseConfig
+from behavioral_scroll import BehavioralScroll as _BehavioralScroll, InvalidModeError
 
 _mouse_config_instance = _MouseConfig()
+_scroll_instance = _BehavioralScroll()
 
 
 class MouseConfigRequest(BaseModel):
     enabled: bool = True
     speed: str = "normal"
+
+
+class ScrollConfigRequest(BaseModel):
+    enabled: bool | None = None
+    mode: str | None = None
+    step_min: int | None = None
+    step_max: int | None = None
 
 
 @app.post("/mouse/config")
@@ -4868,6 +4922,33 @@ async def post_mouse_config(req: MouseConfigRequest):
 async def get_mouse_config():
     """Return the current mouse configuration."""
     return _mouse_config_instance.to_dict()
+
+
+@app.post("/scroll/config")
+async def post_scroll_config(req: ScrollConfigRequest):
+    """Update the behavioral scroll configuration."""
+    from fastapi.responses import JSONResponse
+
+    global _scroll_instance
+    try:
+        _scroll_instance.update_config(
+            enabled=req.enabled,
+            mode=req.mode,
+            step_min=req.step_min,
+            step_max=req.step_max,
+        )
+        return _scroll_instance.get_config()
+    except (ValueError, InvalidModeError) as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": f"Validation error: {exc}"},
+        )
+
+
+@app.get("/scroll/config")
+async def get_scroll_config():
+    """Return the current behavioral scroll configuration."""
+    return _scroll_instance.get_config()
 
 
 # ---------------------------------------------------------------------------

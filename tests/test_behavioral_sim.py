@@ -213,20 +213,20 @@ class TestBehavioralSimulatorInterface:
 
 
 class TestWindMouseBezierRED:
-    """wind_mouse_bezier behavioral tests — RED phase."""
+    """wind_mouse_bezier behavioral tests — feature implemented (was RED)."""
 
     def test_raises_not_implemented_simple(self):
-        """wind_mouse_bezier raises NotImplementedError for simple move."""
-        with pytest.raises(NotImplementedError):
-            BehavioralSimulator.wind_mouse_bezier(0, 0, 100, 100)
+        """wind_mouse_bezier works for a simple move (returns MouseMovementResult)."""
+        result = BehavioralSimulator.wind_mouse_bezier(0, 0, 100, 100)
+        assert isinstance(result, MouseMovementResult)
 
     def test_raises_not_implemented_with_defaults(self):
-        """wind_mouse_bezier raises NotImplementedError with all defaults."""
-        with pytest.raises(NotImplementedError):
-            BehavioralSimulator.wind_mouse_bezier(
-                100, 200, 800, 600,
-                gravity=9.0, wind=3.0, max_step=15.0, target_threshold=12.0,
-            )
+        """wind_mouse_bezier works with all defaults."""
+        result = BehavioralSimulator.wind_mouse_bezier(
+            100, 200, 800, 600,
+            gravity=9.0, wind=3.0, max_step=15.0, target_threshold=12.0,
+        )
+        assert isinstance(result, MouseMovementResult)
 
     def test_returns_mouse_movement_result_type(self):
         """wind_mouse_bezier should return a MouseMovementResult."""
@@ -334,17 +334,17 @@ class TestWindMouseBezierRED:
     )
     def test_various_start_end_combinations(self, start_x, start_y, dest_x, dest_y):
         """Should handle various start/end coordinate combinations."""
-        with pytest.raises(NotImplementedError):
-            BehavioralSimulator.wind_mouse_bezier(start_x, start_y, dest_x, dest_y)
+        result = BehavioralSimulator.wind_mouse_bezier(start_x, start_y, dest_x, dest_y)
+        assert isinstance(result, MouseMovementResult)
 
 
 class TestKeystrokeTimingRED:
     """keystroke_timing behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """keystroke_timing raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            BehavioralSimulator.keystroke_timing("Hello")
+        """keystroke_timing works (returns a list of dicts)."""
+        result = BehavioralSimulator.keystroke_timing("Hello")
+        assert isinstance(result, list)
 
     def test_returns_list(self):
         """keystroke_timing should return a list of dicts."""
@@ -458,9 +458,9 @@ class TestScrollSequenceRED:
     """scroll_sequence behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """scroll_sequence raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            BehavioralSimulator.scroll_sequence(viewport_height=1080)
+        """scroll_sequence works (returns a list of dicts)."""
+        result = BehavioralSimulator.scroll_sequence(viewport_height=1080)
+        assert isinstance(result, list)
 
     def test_returns_list(self):
         """scroll_sequence should return a list of dicts."""
@@ -569,11 +569,11 @@ class TestClickPositionRED:
     """click_position behavioral tests — RED phase."""
 
     def test_raises_not_implemented(self):
-        """click_position raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            BehavioralSimulator.click_position(
-                {"x": 100, "y": 200, "w": 50, "h": 30}
-            )
+        """click_position works (returns a dict with x, y, delay_ms)."""
+        result = BehavioralSimulator.click_position(
+            {"x": 100, "y": 200, "w": 50, "h": 30}
+        )
+        assert isinstance(result, dict)
 
     def test_returns_dict(self):
         """click_position should return a dict with x, y, delay_ms."""

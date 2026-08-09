@@ -60,6 +60,7 @@ class CDPClient:
         self._request_mocks: list[dict] = []
         self._fetch_enabled = False
         self._before_visual_state: dict = {}
+        self._connection_type: str = "local"
         # Event callbacks: method_name -> list of async callbacks
         self._event_callbacks: dict[str, list] = {}
         # ── Performance optimizations ──
@@ -72,6 +73,30 @@ class CDPClient:
     @property
     def is_connected(self) -> bool:
         return self._connected
+
+    @property
+    def connection_type(self) -> str:
+        """Return how this client is connected: 'local' or 'remote'."""
+        return getattr(self, "_connection_type", "local")
+
+    @classmethod
+    async def connect_remote(cls, ws_endpoint: str) -> "CDPClient":
+        """Connect to a remote/cloud CDP WebSocket endpoint.
+
+        Creates a fresh CDPClient, connects directly to the given
+        ``ws://``/``wss://`` endpoint (no local tab discovery), enables the
+        Page and Runtime domains, and marks the connection as ``remote``.
+
+        Returns:
+            A connected CDPClient instance (``connection_type == "remote"``).
+
+        Raises:
+            CDPError: if the WebSocket connect or domain enable fails.
+        """
+        client = cls()
+        client._connection_type = "remote"
+        await client.connect_ws(ws_endpoint)
+        return client
 
     @property
     def tabs_count(self) -> int:
@@ -3691,7 +3716,7 @@ class CDPClient:
 
     async def disconnect(self):
         """Alias for close()."""
-        await self.close()
+        return await self.close()
 
     async def close(self):
         """Close CDP connection and clean up resources."""

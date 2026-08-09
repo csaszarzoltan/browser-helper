@@ -3118,3 +3118,59 @@ Use `GET /api/v1/runs/compare?left={run_id}&right={run_id}` to compare two retai
 ### Daily work launchpad API (v1.18.0)
 
 `GET /api/v1/launchpad` returns the bounded daily work summary used by Overview. It is informational only and never executes a browser action.
+
+
+## Agent one-call endpoints (v1.5+)
+
+High-level agent operations that combine multiple CDP steps into one call:
+
+- `POST /agent/search` — search (perplexity/google/ddg/bing) and return the answer text.
+- `POST /agent/run-flow` — ordered E2E steps with per-step report.
+- `POST /agent/diff` — visual comparison of two URLs (pixel-diff + diff artifact).
+- `POST /agent/visual-regression` — multi-URL baseline record / compare.
+- `POST /agent/flow-vlm` — run flow + VLM assess the final screenshot.
+- `GET /agent/flow-templates` + `POST /agent/flow-templates/{name}` — prepackaged E2E templates.
+- `POST /agent/console` — browser console / JS error / failed network extraction.
+
+## Page content helpers
+
+- `POST /page/content` — main content (nav/sidebar stripped).
+- `POST /page/headline`, `POST /page/links`, `POST /page/forms`, `POST /page/table` — lightweight extractors.
+
+## Recording & network
+
+- `POST /recording/start`, `POST /recording/stop`, `GET /recording/status` — CDP screencast to GIF.
+- `POST /network/mock` — mock API responses.
+
+## Fleet orchestration (v1.18+)
+
+- `GET /fleet`, `/fleet/nodes`, `/fleet/sessions`
+- `POST /fleet/nodes/register`, `/fleet/failover`, `/fleet/queue/sweep`, `/fleet/session`
+- `POST /fleet/nodes/health-check`, `/fleet/nodes/{node_id}/health`, `/fleet/nodes/{node_id}/health-check`, `/fleet/nodes/{node_id}/unregister`
+- `POST /fleet/session/{session_id}/release`
+- `GET /backend/status`, `POST /backend/switch`
+
+## Stealth, profiles, mouse, session
+
+- `GET /stealth/config`, `POST /stealth/config`, `POST /stealth/test`
+- `GET /profile/{name}`, `POST /profile/{name}/fingerprint`, `POST /tools/fingerprint-test`
+- `POST /mouse/config` — behavioral mouse config.
+- `POST /session/new`, `POST /session/close`
+- `POST /api/v1/session`, `/api/v1/session/capture`, `/api/v1/session/restore`, `/api/v1/session/cleanup`, `/api/v1/session/{session_id}`
+
+## Environment / enterprise / compose APIs (v1.19+)
+
+- `GET /api/v1/environments` family (listed above)
+- `/api/v1/enterprise/evaluations`, `/enterprise/policies`, `/enterprise/replays`, `/enterprise/takeovers`, `/enterprise/workflows`, `GET /enterprise/{page}`
+- `POST /api/v1/compose`, `/api/v1/compose/export`, `/api/v1/compose/import`, `/api/v1/compose/resolve`, `/api/v1/compose/resolve-stealth`, `/api/v1/compose/test`
+- `GET /api/v1/capabilities`
+
+## Fingerprint & proxy APIs
+
+- `POST /api/v1/fingerprints`, `/api/v1/fingerprints/generate`, `/api/v1/fingerprints/import`, `/api/v1/fingerprints/{name}`, `/api/v1/fingerprints/{name}/export`
+- `GET /api/v1/proxy`, `POST /api/v1/proxy`, `/api/v1/proxy/load-from-env`, `GET /api/v1/proxy/stats`, `/api/v1/proxy/health`, `/api/v1/proxy/{proxy_id}`
+
+## Run management
+
+- `GET /api/v1/runs/{run_id}`, `/api/v1/runs/{run_id}/recovery`, `/api/v1/runs/{run_id}/support`
+- `/api/v1/enterprise/evaluations`, `/api/v1/enterprise/policies`, `/api/v1/enterprise/replays`, `/api/v1/enterprise/takeovers`, `/api/v1/enterprise/workflows`, `GET /enterprise/{page}`
