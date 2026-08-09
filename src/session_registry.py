@@ -155,6 +155,15 @@ class SessionRegistry:
             sess = Session(session_id=sid, client=client, tab_id=tab_id)
             sess.profile_dir = profile_dir
             self._sessions[sid] = sess
+            # Attach a behavioral engine with a human profile seeded from
+            # the session id — makes click/type/scroll automatically use
+            # human-like input patterns without any opt-in from the client.
+            try:
+                from behavioral_engine import HumanProfile
+
+                client.enable_behavioral(HumanProfile.from_session(sid))
+            except Exception:
+                pass  # non-critical: degrade gracefully to raw CDP
             logger.info("Session %s created (tab %s, total %d)", sid[:8], tab_id, len(self._sessions))
             return sess
 

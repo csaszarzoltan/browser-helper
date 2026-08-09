@@ -61,6 +61,11 @@ class CDPClient:
         self._fetch_enabled = False
         self._before_visual_state: dict = {}
         self._connection_type: str = "local"
+        # ── Behavioral engine (emberi bemenet) ──
+        # Létrehozás session-enként — a session_registry hozza létre,
+        # ha a profil engedélyezi. A type_text/scroll/click automatikusan
+        # használja, ha elérhető.
+        self._behavioral: Any = None
         # Event callbacks: method_name -> list of async callbacks
         self._event_callbacks: dict[str, list] = {}
         # ── Performance optimizations ──
@@ -1297,8 +1302,14 @@ class CDPClient:
         }
 
     async def click(self, selector: str) -> dict:
-        """Click element by CSS selector via real CDP mouse events."""
+        """Click element by CSS selector via real CDP mouse events.
+
+        If a behavioral engine is enabled, the click uses human-like mouse
+        trajectory (WindMouse + Bezier) with natural timing instead of an
+        instant jump-and-click.
+        """
         await self._activate_current()
+        # Get element position
         js = (
             f"(function() {{"
             f"  const el = document.querySelector({json.dumps(selector)});"
@@ -1313,19 +1324,29 @@ class CDPClient:
             return eval_result
         pos = eval_result.get("result", {})
         x, y = pos.get("x", 0), pos.get("y", 0)
-        await self._send_command("Input.dispatchMouseEvent", {
-            "type": "mousePressed", "x": x, "y": y,
-            "button": "left", "clickCount": 1,
-        })
-        await self._send_command("Input.dispatchMouseEvent", {
-            "type": "mouseReleased", "x": x, "y": y,
-            "button": "left", "clickCount": 1,
-        })
+        # Use behavioral engine if enabled
+        if self._behavioral and self._behavioral.profile.enabled:
+            await self._behavioral.click_at(x, y)
+        else:
+            await self._send_command("Input.dispatchMouseEvent", {
+                "type": "mousePressed", "x": x, "y": y,
+                "button": "left", "clickCount": 1,
+            })
+            await self._send_command("Input.dispatchMouseEvent", {
+                "type": "mouseReleased", "x": x, "y": y,
+                "button": "left", "clickCount": 1,
+            })
         return {"status": "ok", "selector": selector, "position": {"x": x, "y": y}}
 
     async def type_text(self, selector: str, text: str) -> dict:
-        """Type text into an element found by CSS selector."""
+        """Type text into an element found by CSS selector.
+
+        If a behavioral engine is enabled, uses dwell/flight timing with
+        natural keystroke rhythm instead of an instant insertText.
+        """
         await self._activate_current()
+        if self._behavioral and self._behavioral.profile.enabled:
+            return await self._behavioral.type_text(selector, text)
         js = (
             f"(function() {{"
             f"  const el = document.querySelector({json.dumps(selector)});"
@@ -1341,6 +1362,19 @@ class CDPClient:
             return result
         await self._send_command("Input.insertText", {"text": text})
         return {"status": "ok", "selector": selector, "chars": len(text)}
+
+    def enable_behavioral(self, profile: Any = None) -> None:
+        """Enable the behavioral engine for this CDPClient.
+
+        When enabled, ``click()`` and ``type_text()`` automatically use
+        human-like input patterns (mouse trajectory, dwell/flight timing).
+        If no profile is given, a default HumanProfile is used.
+        """
+        from behavioral_engine import BehavioralEngine, HumanProfile
+
+        if profile is None:
+            profile = HumanProfile()
+        self._behavioral = BehavioralEngine(self, profile=profile)
 
     async def screenshot(self, quality: int = 0) -> dict:
         """Take viewport screenshot, return base64 JPEG.
