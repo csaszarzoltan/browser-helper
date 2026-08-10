@@ -4,6 +4,28 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.0] — 2026-08-09
+
+#### Added
+- **Persistent MCP memory store**: SQLite + FTS5 keyword search with recency tie-breaking (`MemoryStore` in `src/mcp_server/memory/store.py`). WAL journal mode, parameterized SQL, FTS5 match-term quoting. Embeddings table reserved for optional future vector ranking.
+- **MCP memory tools**: `memory_remember`, `memory_recall`, `memory_forget`, `memory_list` — async handlers with input validation and normalized error envelopes. Registered on MCP server surface (19 tools total).
+- **`browser-helper memory` CLI**: `bh memory add|search|list|delete` wired into the main entry point.
+- **Memory config**: `MemorySettings` dataclass with `BROWSER_HELPER_MEMORY_DB` env override and CLI > env > settings > default precedence.
+- **Chrome soft-start warmup**: proxy extension warmup increased from 3s to 10s (`extension_warmup_sec` setting, default 10) — VPN Unlimited service worker needs time to initialize before first navigation.
+- Surface-level regression tests: `build_tool_defs()` + FastMCP tool list assertions verify memory tools are exposed.
+- Corrupt-store regression test: garbage-bytes store returns clean `operation_failed` error envelope with no traceback.
+
+#### Fixed
+- **MCP memory tools registration**: memory tool handlers were dead code for MCP clients — now properly registered in `_TOOL_CAPABILITY` + `_TOOL_PARAM_SCHEMAS` with `memory.persistent` capability.
+- **Corrupt SQLite store**: `sqlite3.DatabaseError` on non-database files now returns a clean error envelope instead of unhandled traceback.
+
+#### Tests
+- 128/128 touched-module tests passed (test_memory 59/59, test_mcp_server 55/55, test_mcp_integration 14/14).
+- Full suite: 2626 collected / 2584 passed / 1 failed (flaky stochastic assertion in untouched module) / 42 skipped.
+
+#### Docs
+- `docs/mcp-memory.md`: persistent memory feature documentation.
+
 ## [1.25.0] — 2026-08-09
 
 #### Added
