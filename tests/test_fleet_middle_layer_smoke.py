@@ -7,6 +7,7 @@ end-to-end with no ImportError or collection errors.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,13 +39,23 @@ def test_all_middle_layer_imports_resolve():
 
 def test_v115_suite_passes_after_wiring():
     repo = Path(__file__).parent.parent
+    # `-o addopts=""` disables the pyproject xdist addopts so the inner run
+    # is serial (xdist output is non-deterministic and the wrapper can't
+    # assert on it). Also seed PYTHONPATH so `python -m fleet.cli` inside
+    # the suite finds src/ (subprocesses don't inherit the in-process
+    # sys.path insert).
+    env = {**os.environ}
+    src = str(repo / "src")
+    env["PYTHONPATH"] = os.pathsep.join([src, env.get("PYTHONPATH", "")])
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/test_fleet_v115.py", "--no-header"],
+        [sys.executable, "-m", "pytest", "tests/test_fleet_v115.py",
+         "--no-header", "-o", "addopts="],
         cwd=repo,
         capture_output=True,
         text=True,
         timeout=180,
         check=False,
+        env=env,
     )
     out = proc.stdout + proc.stderr
     assert "29 passed" in out, out[-3000:]

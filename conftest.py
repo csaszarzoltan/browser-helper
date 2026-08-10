@@ -18,12 +18,42 @@ client exactly like they did before per-client sessions existed.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Repo gyökér = a tests/ mappa szülője (a root conftest a repo gyökerében van,
+# a tests/conftest.py a tests/ alatt — itt a __file__ a repo gyökere).
+_REPO = Path(__file__).resolve().parent
+_SRC = str(_REPO / "src")
+sys.path.insert(0, _SRC)
 
 import pytest
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _subprocess_pythonpath():
+    """Make ``src/`` importable for subprocess-based CLI tests.
+
+    Tests like ``test_fleet_v115.py::TestCLI`` and ``test_memory.py`` spawn
+    ``python -m fleet.cli`` / ``python -m mcp_server.memory.cli`` in a
+    subprocess with ``env={**os.environ}``.  Without ``src/`` on
+    ``PYTHONPATH`` those modules are not found (``No module named ...``) and
+    the CLI tests fail even though the package is healthy.  Seed the env
+    once per session so every spawned CLI sees the same import path the
+    in-process tests use.
+    """
+    env_key = "PYTHONPATH"
+    old = os.environ.get(env_key)
+    parts = [p for p in (old or "").split(os.pathsep) if p]
+    if _SRC not in parts:
+        os.environ[env_key] = os.pathsep.join([_SRC, *parts])
+        print(f"[conftest] PYTHONPATH={os.environ[env_key]}", flush=True)
+    yield
+    if old is None:
+        os.environ.pop(env_key, None)
+    else:
+        os.environ[env_key] = old
 
 
 @pytest.fixture(autouse=True)
