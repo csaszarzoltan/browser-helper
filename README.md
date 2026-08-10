@@ -1,8 +1,8 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.20.0-blue)
+![Version](https://img.shields.io/badge/version-1.26.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Tests](https://img.shields.io/badge/tests-1986%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2626%20passed-brightgreen)
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
@@ -172,7 +172,7 @@ See [LLM Agent API](docs/agent-api.md).
 
 ### v1.21 — MCP Server (Previous)
 
-Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server exposing the browser and fleet engine as 15 MCP tools — for Claude Code, Codex CLI, Cursor, Windsurf, or any MCP client. Tools call the same engine the REST API uses, in-process (no HTTP self-calls, no LLM).
+Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server exposing the browser, fleet engine, and persistent memory as 19 MCP tools — for Claude Code, Codex CLI, Cursor, Windsurf, or any MCP client. Tools call the same engine the REST API uses, in-process (no HTTP self-calls, no LLM).
 
 #### Quick start
 
@@ -225,9 +225,9 @@ bh mcp --http --host 0.0.0.0 --port 8765
 
 (Cursor: project/global `.cursor/mcp.json`; Windsurf: `~/.codeium/windsurf/mcp_config.json`. For a client on another machine, replace `localhost` with the server host.)
 
-#### Tool reference (12 tools)
+#### Tool reference (19 tools)
 
-All tools are backed by READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`); EXPERIMENTAL/UNAVAILABLE capabilities never surface. Every tool returns a JSON string with the REST envelope shape (`status`/`operation`/`data`/`error`/`meta`).
+All tools are backed by READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`); EXPERIMENTAL/UNAVAILABLE capabilities never surface. Every tool returns a JSON string with the REST envelope shape (`status`/`operation`/`data`/`error`/`meta`).
 
 | Tool | Parameters | Capability | REST mirror |
 |------|-----------|------------|-------------|
@@ -243,8 +243,14 @@ All tools are backed by READY capabilities (`browser.core`, `agent.semantic`, `d
 | `fleet_nodes` | — | `workflow.local` | `GET /fleet/nodes` |
 | `fleet_status` | — | `workflow.local` | `GET /fleet/sessions` |
 | `fleet_queue` | — | `workflow.local` | (allocation-queue peek) |
+| `memory_remember` | `key` (str, required), `content` (str, required), `metadata` (str, optional) | `memory.persistent` | — |
+| `memory_recall` | `query` (str, required), `limit` (int, optional) | `memory.persistent` | — |
+| `memory_forget` | `key_or_id` (str, required) | `memory.persistent` | — |
+| `memory_list` | `filter` (str, optional) | `memory.persistent` | — |
 
-Fleet tools are read-only (`meta.read_only: true`); browser tools need a live CDP connection (start Browser Helper / Chrome with `--remote-debugging-port=9555` first).
+Fleet tools are read-only (`meta.read_only: true`); browser tools need a live CDP connection (start Browser Helper / Chrome with `--remote-debugging-port=9555` first). Memory tools persist across restarts (SQLite at `~/.browser-helper/memory.db`).
+
+See [MCP Memory Tools](docs/mcp-memory.md) for tool signatures, storage schema, hybrid search behavior, CLI reference, and configuration.
 
 #### Configuration
 
