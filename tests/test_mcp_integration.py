@@ -83,6 +83,8 @@ EXPECTED_TOOLS = [
     "type",
     "screenshot",
     "snapshot",
+    "observe",
+    "act",
     "get_tabs",
     "switch_tab",
     "close_tab",
@@ -581,4 +583,8 @@ def _args_for(name: str) -> dict:
         return {"key_or_id": "test_key"}
     if name == "memory_list":
         return {}
+    if name == "observe":
+        return {"mode": "semantic", "max_nodes": 10}
+    if name == "act":
+        return {"action": "wait", "text": "noop", "timeout": 1}
     return {}

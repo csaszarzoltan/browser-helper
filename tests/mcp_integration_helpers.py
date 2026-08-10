@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import select
 import subprocess
 import threading
@@ -135,17 +136,30 @@ class StdioTransport:
             )
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
-        line = self._readline(timeout=self.timeout)
-        if line is None:
-            raise AssertionError(
-                f"no response to {method} within {self.timeout}s; stderr={self.stderr_tail()}"
-            )
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise AssertionError(
-                f"non-JSON response line {line!r}: {exc}; stderr={self.stderr_tail()}"
-            ) from exc
+        # The server may interleave notifications (e.g. memory tools log
+        # "notifications/message") before the actual response.  Keep reading
+        # until a line with our req_id arrives.
+        deadline = time.time() + self.timeout
+        while True:
+            remain = deadline - time.time()
+            if remain <= 0:
+                raise AssertionError(
+                    f"no response to {method} within {self.timeout}s; stderr={self.stderr_tail()}"
+                )
+            line = self._readline(timeout=remain)
+            if line is None:
+                raise AssertionError(
+                    f"no response to {method} within {self.timeout}s; stderr={self.stderr_tail()}"
+                )
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise AssertionError(
+                    f"non-JSON response line {line!r}: {exc}; stderr={self.stderr_tail()}"
+                ) from exc
+            if isinstance(parsed, dict) and parsed.get("id") == req_id:
+                return parsed
+            # else: notification or another request's response — skip it.
 
     def close(self) -> None:
         try:
@@ -238,6 +252,11 @@ def parse_mcp_response(payload: str) -> dict[str, Any]:
 
     Accepts a plain JSON body or an SSE frame stream (``event: message``
     followed by one or more ``data:`` lines).
+
+    The server may interleave *notifications* (``notifications/message``)
+    with the actual response.  Each ``data:`` line is its own JSON value;
+    the *last* one that is a response (has ``id``) is returned.  When only
+    a single value exists it is returned directly.
     """
     text = payload.strip()
     if not text.startswith("event:"):
@@ -245,15 +264,22 @@ def parse_mcp_response(payload: str) -> dict[str, Any]:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise AssertionError(f"invalid JSON-RPC body {payload!r}") from exc
-    data_lines: list[str] = []
+
+    values: list[dict[str, Any]] = []
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("data:"):
-            data_lines.append(line[len("data:") :].strip())
-    if not data_lines:
+            raw = line[len("data:") :].strip()
+            try:
+                values.append(json.loads(raw))
+            except json.JSONDecodeError:
+                continue  # partial/invalid frame — ignore
+    if not values:
         raise AssertionError(f"SSE frame without data lines: {payload!r}")
-    joined = "\n".join(data_lines)
-    try:
-        return json.loads(joined)
-    except json.JSONDecodeError as exc:
-        raise AssertionError(f"invalid JSON-RPC in SSE frame {payload!r}") from exc
+
+    # Prefer the last value that carries an id (a response, not a
+    # notification); fall back to the last value overall.
+    for value in reversed(values):
+        if isinstance(value, dict) and "id" in value:
+            return value
+    return values[-1]
