@@ -12,6 +12,7 @@ import platform
 import signal
 import socket
 import subprocess
+import time
 
 logger = logging.getLogger("browser-helper.chrome")
 
@@ -156,6 +157,12 @@ class ChromeManager:
         self._pid: int = 0
         self._port: int = 0
         self._chrome_path: str = ""
+        # Soft-start tracking: when this manager launched the browser it
+        # records the moment; requests arriving before the warm-up window
+        # has elapsed are held back so the proxy extension is ready before
+        # the first navigation (avoids the proxy-auth dialog flash).
+        self._launched_at: float = 0.0
+        self._warmup_sec: float = 0.0
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -341,6 +348,11 @@ class ChromeManager:
             )
             await asyncio.sleep(extension_warmup)
 
+        # Record the launch moment + warm-up window so the request path can
+        # force-hold early calls (see `await_chrome_ready`).
+        self._launched_at = time.monotonic()
+        self._warmup_sec = float(extension_warmup or 0)
+
         # Save to settings
         self.settings.set(
             chrome_launched_port=actual_port,
@@ -382,6 +394,25 @@ class ChromeManager:
             "message": "Chrome stopped",
             "killed_pid": pid,
         }
+
+    async def await_chrome_ready(self, timeout: float = 20.0) -> None:
+        """Block until the proxy-extension warm-up window has elapsed.
+
+        If this manager launched Chrome (``_launched_at`` set) and the warm-up
+        window has not yet passed, wait for the remainder.  This force-holds
+        requests that race the soft-start so the first navigation does not
+        flash the proxy-auth dialog (extension not ready yet).
+
+        When Chrome was already running (reused from another process) the
+        warm-up does not apply — the extension is long since initialised.
+        """
+        if self._launched_at <= 0 or self._warmup_sec <= 0:
+            return
+        elapsed = time.monotonic() - self._launched_at
+        remain = self._warmup_sec - elapsed
+        if remain > 0:
+            logger.info("Chrome soft-start: holding %.1fs (warm-up)", remain)
+            await asyncio.sleep(remain)
 
     def status(self) -> dict:
         """Return current Chrome status (without contacting CDP)."""

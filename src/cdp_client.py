@@ -132,6 +132,10 @@ class CDPClient:
         self.rate_limiter = RateLimiter()
         self._tabs: list[dict] = []
         self._active_tab_id: str | None = None
+        # Fix-1: the tab the WebSocket is actually attached to.
+        # _active_tab_id may temporarily drift (cross-origin targetCreated);
+        # _ws_tab_id always reflects the real WS endpoint.
+        self._ws_tab_id: str | None = None
         self._network_entries: list[dict] = []
         self._network_monitoring = False
         self._console_entries: list[dict] = []
@@ -279,10 +283,12 @@ class CDPClient:
         self._ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
         self._target_id = target_id
         self._active_tab_id = target_id
+        self._ws_tab_id = target_id
         self._connected = True
         self._message_id = 0
         self._pending = {}
         self._network_entries = []
+        self._ws_tab_id = None
 
         asyncio.create_task(self._listener())
 
@@ -387,7 +393,8 @@ class CDPClient:
                             logger.warning("Event callback error for %s", ev_method)
 
                 # Track target lifecycle: when Chrome creates a new target (e.g. cross-origin navigation),
-                # update _active_tab_id so session stays on the correct tab.
+                # update _active_tab_id ONLY for OUR WebSocket's tab (_ws_tab_id).
+                # Other sessions' tab creations must NOT affect us.
                 if ev_method == "Target.targetCreated":
                     target_info = msg.get("params", {}).get("targetInfo", {})
                     if target_info.get("type") == "page":
@@ -395,14 +402,20 @@ class CDPClient:
                         new_id = target_info.get("targetId")
                         if new_id:
                             logger.debug("CDP targetCreated: %s (%s)", new_id, target_info.get("url", ""))
-                            self._active_tab_id = new_id
-                            self._tabs_cache = []  # Invalidate cache
+                            if new_id == self._ws_tab_id:
+                                # Our own tab recreated (cross-origin navigation) — track it
+                                self._active_tab_id = new_id
+                                self._tabs_cache = []  # Invalidate cache
+                            else:
+                                # External tab (another session/agent) — ignore for isolation
+                                logger.debug("CDP external targetCreated ignored: %s (ws_tab=%s)", new_id, self._ws_tab_id)
 
                 elif ev_method == "Target.targetDestroyed":
                     target_id = msg.get("params", {}).get("targetId")
-                    if target_id and target_id == self._active_tab_id:
-                        logger.debug("CDP targetDestroyed: %s", target_id)
+                    if target_id and target_id == self._ws_tab_id:
+                        logger.debug("CDP targetDestroyed (our tab): %s", target_id)
                         self._active_tab_id = None
+                        self._ws_tab_id = None
                         self._tabs_cache = []  # Invalidate cache
 
                 # Screencast frame capture (video recording)
@@ -523,6 +536,15 @@ class CDPClient:
         """
         if extra:
             params = {**(params or {}), **extra}
+        # Fix-2: tab-drift guard — the WebSocket is bound to _ws_tab_id; if
+        # _active_tab_id drifted (external targetCreated, manual switch),
+        # correct it back BEFORE sending so commands always hit our tab.
+        if self._ws_tab_id and self._active_tab_id != self._ws_tab_id:
+            logger.warning(
+                "Tab drift: active=%s ws=%s — correcting to WS tab",
+                self._active_tab_id, self._ws_tab_id,
+            )
+            self._active_tab_id = self._ws_tab_id
         # Human pacing: sleep the configured random delay before sending
         # (no-op when rate limiting is disabled).
         delay_ms = self.rate_limiter.get_delay()
@@ -621,9 +643,44 @@ class CDPClient:
     # ─── Page operations ─────────────────────────────────────────
 
     async def navigate(self, url: str) -> dict:
-        """Navigate to URL."""
+        """Navigate to URL.
+
+        Fix-3 (1-tab-per-session): after navigation, check if Chrome created
+        a new target (cross-origin navigation). If so, reconnect WS to the
+        new target and update _ws_tab_id so the session follows the page.
+        """
         await self._activate_current()
         result = await self._send_command("Page.navigate", {"url": url})
+
+        # After navigation, discover tabs to see if a new target was created
+        # for this frame. If so, roam the session's WS to the new target.
+        try:
+            tabs = await self.discover_tabs()
+            pages = [t for t in tabs if t.get("type") == "page"]
+            # Find the page target matching our frame (by URL or newest)
+            frame_id = result.get("frameId", "")
+            target = None
+            if frame_id:
+                for t in pages:
+                    if t.get("id") == frame_id or frame_id in t.get("id", ""):
+                        target = t
+                        break
+            if not target and pages:
+                # Fallback: the active target is likely the new one
+                for t in pages:
+                    if t.get("url", "").startswith("http") and url.split("/")[2] in t.get("url", ""):
+                        target = t
+                        break
+            if not target and pages:
+                # Last resort: newest page target
+                target = pages[-1]
+
+            if target and target["id"] != self._ws_tab_id:
+                logger.info("Navigate cross-origin: roaming %s -> %s", self._ws_tab_id[:8], target["id"][:8])
+                await self.connect_to_target(target["id"])
+        except Exception as exc:
+            logger.debug("Navigate tab sync skipped: %s", exc)
+
         return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url}
 
     async def evaluate(self, js_code: str) -> dict:
@@ -658,11 +715,16 @@ class CDPClient:
 
         Sends ``Target.activateTarget`` so Chrome wakes the tab and the
         user sees it being active.
+
+        Fix-2: now tab-bound — the targetId sent is the WebSocket's real
+        tab (_ws_tab_id), not a drifted _active_tab_id.  Only activates when
+        we have a live connection (no-op otherwise).
         """
-        if self._active_tab_id:
+        tab_id = self._ws_tab_id or self._active_tab_id
+        if tab_id:
             try:
                 await self._send_command("Target.activateTarget",
-                                         {"targetId": self._active_tab_id})
+                                         {"targetId": tab_id})
                 await asyncio.sleep(0.1)
             except Exception:
                 pass  # Best-effort — tab might already be active
@@ -2788,6 +2850,7 @@ class CDPClient:
         self._ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
         self._target_id = tab_id
         self._active_tab_id = tab_id
+        self._ws_tab_id = tab_id
         self._connected = True
         self._message_id = 0
         self._pending = {}
@@ -3922,6 +3985,8 @@ class CDPClient:
             except Exception:
                 pass
             self._ws = None
+        # Fix-1: clear WS tab binding on disconnect
+        self._ws_tab_id = None
         # Fail all pending futures with CDPDisconnectedError
         exc = CDPDisconnectedError("Connection closed")
         for future in self._pending.values():

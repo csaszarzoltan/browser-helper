@@ -122,6 +122,111 @@ async def snapshot(ctx: Context | None = None) -> str:
     return json_dumps(await run_op("page_analyze", target.analyze_page))
 
 
+async def observe(
+    mode: str = "semantic",
+    scope: str = "page",
+    max_nodes: int = 250,
+    interactive_only: bool = False,
+    include_hidden: bool = False,
+    condensed: bool = True,
+    ctx: Context | None = None,
+) -> str:
+    """Observe the page as accessibility tree or semantic snapshot (capability ``agent.semantic``, READY).
+
+    Backed by the same engine as ``POST /agent/observe``.
+    """
+    if ctx is not None:
+        ctx.info(f"observe mode={mode} scope={scope}")
+    # Use internal snapshot functions directly (same as REST endpoint)
+    from main import _capture_accessibility_snapshot, _capture_agent_snapshot, _set_current_session, paginate_snapshot
+    
+    sess, run_op = await _mcp_session()  # local function
+    _set_current_session(sess)
+    
+    try:
+        target = sess.client if sess else None
+        if mode.lower() in {"accessibility", "ax"}:
+            snap = await _capture_accessibility_snapshot(
+                scope=("dialog" if True and scope == "page" else scope),
+                include=None, interactive_only=interactive_only,
+                include_hidden=include_hidden,
+                target=target,
+            )
+            data = snap.as_dict(max_nodes=min(max(max_nodes, 1), 1000))
+        else:
+            snap = await _capture_agent_snapshot(condensed, target=target)
+            data = paginate_snapshot(snap, 6000, max_nodes, None)
+        return tool_result("observe", data)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("observe", "operation_failed", str(exc))
+
+
+async def act(
+    action: str,
+    snapshot_id: str | None = None,
+    ref: str | None = None,
+    element_id: str | None = None,
+    selector: str | None = None,
+    text: str | None = None,
+    label: str | None = None,
+    url: str | None = None,
+    value: str | None = None,
+    fields: list[dict] | None = None,
+    option: str | None = None,
+    timeout: int = 10,
+    expression: str | None = None,
+    ctx: Context | None = None,
+) -> str:
+    """Act on the page: click, fill, select, wait, navigate (capability ``agent.semantic``, READY).
+
+    Backed by the same engine as ``POST /agent/act``. Use with observe's snapshot_id/ref.
+    """
+    if ctx is not None:
+        ctx.info(f"act -> {action}")
+    import json as _json
+    import urllib.request as _ur
+    from mcp_server.tools import _MCP_SESSION
+
+    sess, run_op = await _mcp_session()
+    target_dict = {
+        "snapshot_id": snapshot_id,
+        "ref": ref,
+        "element_id": element_id,
+        "selector": selector,
+        "text": text,
+        "label": label,
+        "url": url,
+        "value": value,
+        "backend_node_id": None,
+    }
+    body = {
+        "action": action,
+        "target": {k: v for k, v in target_dict.items() if v is not None},
+        "url": url,
+        "value": value,
+        "fields": fields,
+        "option": option,
+        "timeout": timeout,
+        "expression": expression,
+    }
+    # Route through the running service to get identical behaviour
+    try:
+        cookie = ""
+        if _MCP_SESSION.get("session") is not None:
+            cookie = _MCP_SESSION["session"].session_id
+        req = _ur.Request(
+            f"http://127.0.0.1:8020/agent/act",
+            data=_json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "X-Session-ID": cookie},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=60) as resp:
+            result = _json.loads(resp.read().decode())
+        return tool_result("act", result.get("data", {}))
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("act", "operation_failed", str(exc))
+
+
 async def get_tabs(ctx: Context | None = None) -> str:
     """List all open tabs ``{id, title, url, active}`` (capability ``browser.core``, READY).
 

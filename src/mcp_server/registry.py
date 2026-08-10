@@ -31,6 +31,9 @@ _TOOL_CAPABILITY = {
     "fleet_nodes": "workflow.local",
     "fleet_status": "workflow.local",
     "fleet_queue": "workflow.local",
+    # Agent semantic tools
+    "observe": "agent.semantic",
+    "act": "agent.semantic",
     # Persistent memory tools (F1 fix — registered on server surface)
     "memory_remember": "memory.persistent",
     "memory_recall": "memory.persistent",
@@ -63,6 +66,36 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     "screenshot": {"type": "object", "properties": {}},
     "snapshot": {"type": "object", "properties": {}},
     "get_tabs": {"type": "object", "properties": {}},
+    "observe": {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "description": "semantic|accessibility (default semantic)"},
+            "scope": {"type": "string", "description": "page|dialog|viewport (default page)"},
+            "max_nodes": {"type": "integer", "description": "Max nodes (default 250)"},
+            "interactive_only": {"type": "boolean", "description": "Only interactive elements (default false)"},
+            "include_hidden": {"type": "boolean", "description": "Include hidden nodes (default false)"},
+            "condensed": {"type": "boolean", "description": "Condensed semantic snapshot (default true)"},
+        },
+    },
+    "act": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "description": "click|fill|select|wait|navigate|select_tab|wait_for_element|wait_for_text|eval|screenshot"},
+            "snapshot_id": {"type": "string", "description": "Snapshot id from observe (pin target)"},
+            "ref": {"type": "string", "description": "AX ref of the element (from observe accessibility)"},
+            "element_id": {"type": "string", "description": "Element id from semantic snapshot"},
+            "selector": {"type": "string", "description": "CSS selector alternative"},
+            "text": {"type": "string", "description": "Text to find or type"},
+            "label": {"type": "string", "description": "Label for fill/select"},
+            "url": {"type": "string", "description": "URL for navigate action"},
+            "value": {"type": "string", "description": "Value for fill/type"},
+            "fields": {"type": "array", "description": "List of {label, value} for fill"},
+            "option": {"type": "string", "description": "Option for select"},
+            "timeout": {"type": "integer", "description": "Timeout in seconds (default 10)"},
+            "expression": {"type": "string", "description": "JS expression for eval action"},
+        },
+        "required": ["action"],
+    },
     "switch_tab": {
         "type": "object",
         "properties": {"id": {"type": "string", "description": "Tab id"}},

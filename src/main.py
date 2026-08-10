@@ -131,7 +131,8 @@ async def lifespan(application: FastAPI):
         logger.warning("Orphan headless reap failed: %s", exc)
     # Connect to the LOCAL Chrome on the saved launched/debug port — NOT the
     # CDPClient default (9555), which may be another machine's SSH tunnel.
-    local_port = (
+    # Priority: CHROME_AUTO_PORT (run.py --debug-port) > settings > 9557.
+    local_port = int(os.environ["CHROME_AUTO_PORT"]) if os.environ.get("CHROME_AUTO_PORT") else (
         settings_mgr.get("chrome_launched_port")
         or settings_mgr.get("chrome_debug_port")
         or 9557
@@ -1269,6 +1270,11 @@ async def _ensure_browser(sess: Session | None = None) -> None:
     """
     target = sess.client if sess is not None else client
     if target.is_connected:
+        # Even when already connected, force-hold if the browser was just
+        # (re)launched and the proxy extension is still warming up — the
+        # first navigation would otherwise bypass the proxy and flash the
+        # auth dialog.
+        await chrome_mgr.await_chrome_ready()
         return
     if os.environ.get("BH_TEST_NO_CHROME") == "1":
         # Test isolation (MCP integration tests): never connect to a real
@@ -1403,6 +1409,11 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
     else:
         target = client
     try:
+        # Force-hold during the proxy-extension warm-up window (soft-start):
+        # the first browser operation must NOT race the extension init,
+        # otherwise the navigation bypasses the proxy and shows the auth
+        # dialog (seen as the "proxy password" popup on VNC).
+        await chrome_mgr.await_chrome_ready()
         await _ensure_browser(sess)
         start = time.monotonic()
         try:
@@ -1884,18 +1895,40 @@ async def connect(body: ConnectRequest | None = None):
 
 @app.post("/navigate")
 async def navigate(url: str = Query(..., description="Target URL to navigate to")):
-    """Navigate the current tab to *url*."""
+    """Navigate the current tab to *url*.
+
+    Fix-3 (1-tab-per-session): cross-origin navigation can make Chrome create
+    a fresh target.  When that happens the session ROAMS onto the new tab AND
+    closes the old one, so a session never ends up owning two tabs.
+    """
     # Invalidate tab cache — navigation changes the page URL
     client._tabs_cache = []
     client._tabs_cache_ts = 0
-    result = await run_op("navigate", client.navigate, url)
-    # After navigation, update the session's tab_id to the client's current active tab
-    # (Chrome may create a new target on navigation, e.g. cross-origin)
+
     sess = _get_current_session()
-    if sess is not None and getattr(sess.client, "_active_tab_id", None):
-        sess.tab_id = sess.client._active_tab_id
-    # Also refresh the client's tab cache so next discover_tabs picks up the new target
+    old_tab = None
+    if sess is not None and sess.client._ws_tab_id:
+        old_tab = sess.client._ws_tab_id
+
+    result = await run_op("navigate", client.navigate, url)
+
+    # Fix-1/3: tab-drift + 1-tab-per-session.
+    # After navigation, if the session's WS moved to a NEW tab (cross-origin
+    # target), close the old tab so the session owns exactly one.
     if sess is not None:
+        new_tab = getattr(sess.client, "_ws_tab_id", None) or getattr(sess.client, "_active_tab_id", None)
+        if new_tab:
+            sess.tab_id = new_tab
+        if old_tab and new_tab and old_tab != new_tab:
+            logger.info(
+                "Session %s cross-origin roam: %s -> %s (closing old tab)",
+                sess.session_id[:8], old_tab[:8], new_tab[:8],
+            )
+            try:
+                await sess.client.close_tab(old_tab)
+            except Exception:
+                pass
+        # Refresh the client's tab cache so next discover_tabs picks up the new target
         sess.client._tabs_cache = []
         sess.client._tabs_cache_ts = 0
     return result
@@ -3001,7 +3034,23 @@ async def readiness_check():
 
 @app.post("/tab/new")
 async def tab_new(body: NewTabRequest):
-    """Open a new browser tab to the specified URL (default: about:blank)."""
+    """Open a new browser tab to the specified URL (default: about:blank).
+
+    Fix-3 (1-tab-per-session): for a session-scoped caller this does NOT open
+    a second tab — it navigates the caller's existing dedicated tab instead,
+    preserving the one-tab-per-session invariant.  Unsigned (cookie-less)
+    callers still get a fresh tab.
+    """
+    sess = _get_current_session()
+    if sess is not None:
+        # Session already owns a tab — navigate it rather than leaking a 2nd.
+        sess.client._tabs_cache = []
+        sess.client._tabs_cache_ts = 0
+        result = await run_op("navigate", client.navigate, body.url)
+        new_tab = getattr(sess.client, "_ws_tab_id", None) or sess.tab_id
+        if new_tab:
+            sess.tab_id = new_tab
+        return result
     return await run_op("open_new_tab", client.open_new_tab, body.url)
 
 
