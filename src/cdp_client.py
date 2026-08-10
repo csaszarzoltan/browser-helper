@@ -241,6 +241,9 @@ class CDPClient:
 
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
+        # Enable Network domain + auto-cancel proxy auth prompts
+        await self._send_command("Network.enable")
+        self.enable_auto_cancel_auth()
         self._apply_stealth_patches()
 
         return {
@@ -288,6 +291,9 @@ class CDPClient:
 
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
+        # Enable Network domain + auto-cancel proxy auth prompts
+        await self._send_command("Network.enable")
+        self.enable_auto_cancel_auth()
         self._apply_stealth_patches()
 
         return {
@@ -581,6 +587,42 @@ class CDPClient:
             self._event_callbacks[method] = [
                 cb for cb in self._event_callbacks[method] if cb is not callback
             ]
+
+    # ─── Proxy auth auto-cancel ───────────────────────────────────
+
+    def enable_auto_cancel_auth(self) -> None:
+        """Auto-dismiss proxy auth prompts (HTTP 401/407).
+
+        When a proxy (e.g. the VPN Unlimited extension) requests credentials
+        via ``Network.authRequired``, Chrome shows a password dialog that
+        blocks the page load.  Registering a listener that answers every
+        challenge with ``Cancel`` makes the dialog never appear -- the request
+        simply fails instead of hanging on a password prompt.
+        """
+        if getattr(self, "_auth_cancel_registered", False):
+            return
+
+        async def _cancel_auth(evt: dict) -> None:
+            try:
+                params = evt.get("params", {})
+                req_id = params.get("requestId", "")
+                if not req_id:
+                    return
+                await self._send_command(
+                    "Network.authChallengeResponse",
+                    {"requestId": req_id, "response": "Cancel"},
+                )
+                logger.info("Proxy auth challenge auto-cancelled (%s)", req_id[:16])
+            except Exception:
+                pass
+
+        self.add_event_listener("Network.authRequired", _cancel_auth)
+        self._auth_cancel_registered = True
+        logger.info("Auto-cancel of proxy auth challenges enabled")
+
+    def disable_auto_cancel_auth(self) -> None:
+        """Stop auto-cancelling proxy auth challenges."""
+        self._auth_cancel_registered = False
 
     # ─── Page operations ─────────────────────────────────────────
 
@@ -2758,6 +2800,9 @@ class CDPClient:
         asyncio.create_task(self._listener())
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
+        # Enable Network domain + auto-cancel proxy auth prompts.
+        await self._send_command("Network.enable")
+        self.enable_auto_cancel_auth()
         self._apply_stealth_patches()
         return {"status": "ok", "target_id": tab_id, "cdp_url": ws_url}
 
