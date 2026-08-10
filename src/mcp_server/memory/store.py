@@ -170,21 +170,31 @@ class MemoryStore:
         parent = Path(self.db_path).parent
         if self.db_path != ":memory:":
             parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn: sqlite3.Connection | None = None
         try:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             # Autocommit mode: transactions are managed explicitly with
             # BEGIN IMMEDIATE so concurrent writers each own their transaction
             # (Python's implicit BEGIN would otherwise join a shared txn and
-            # race on commit — "cannot commit - no transaction is active").
+            # race on commit -- "cannot commit - no transaction is active").
             conn.isolation_level = None
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
             conn.executescript(_SCHEMA_SQL)
             if self._fts5:
                 conn.executescript(_FTS_TRIGGERS_SQL)
+        except sqlite3.DatabaseError as exc:
+            # F2 fix: corrupt/garbage file -- close if opened, then propagate
+            # with a clear message so _get_store() can surface a clean envelope.
+            if conn is not None:
+                conn.close()
+            raise sqlite3.DatabaseError(
+                f"memory store is corrupt (file is not a database): {self.db_path}"
+            ) from exc
         except sqlite3.Error:
-            conn.close()
+            if conn is not None:
+                conn.close()
             raise
         self._conn = conn
 

@@ -93,6 +93,10 @@ EXPECTED_TOOLS = [
     "fleet_nodes",
     "fleet_status",
     "fleet_queue",
+    "memory_remember",
+    "memory_recall",
+    "memory_forget",
+    "memory_list",
 ]
 
 #: Minimum response-envelope shape asserted for every successful tool call.
@@ -569,4 +573,12 @@ def _args_for(name: str) -> dict:
         return {"url": "about:blank", "wait_ready": False}
     if name == "run_flow":
         return {"steps": [], "name": "noop"}
+    if name == "memory_remember":
+        return {"key": "test_key", "content": "test content"}
+    if name == "memory_recall":
+        return {"query": "test"}
+    if name == "memory_forget":
+        return {"key_or_id": "test_key"}
+    if name == "memory_list":
+        return {}
     return {}

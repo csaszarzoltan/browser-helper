@@ -104,6 +104,12 @@ class CapabilityRegistry:
                     action="Open Diagnostics",
                 ),
                 Capability(
+                    "memory.persistent", "Persistent agent memory", "Agent Tools",
+                    CapabilityStatus.READY,
+                    "Remember, recall, forget, and list persistent memories across sessions.",
+                    action="Open Memory",
+                ),
+                Capability(
                     "workflow.local", "Local workflow assistant", "Automation",
                     CapabilityStatus.READY,
                     "Validate, format, draft, and run bounded JSON action workflows.",

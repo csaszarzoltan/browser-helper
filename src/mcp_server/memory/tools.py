@@ -45,19 +45,24 @@ async def _log(ctx: Context | None, message: str) -> None:
         await ctx.info(message)
 
 
-def _get_store() -> MemoryStore:
+async def _get_store() -> MemoryStore:
     """Return the process-scoped MemoryStore, opening it on first use.
 
     The store is bound to ``load_memory_settings().store_path`` (which
-    honours the ``BROWSER_HELPER_MEMORY_DB`` env override — CLI > env >
+    honours the ``BROWSER_HELPER_MEMORY_DB`` env override -- CLI > env >
     settings > default precedence). If the configured path changes between
     calls (e.g. an env override set after first use), a fresh store is
     opened for the new path; the old one is left to the process.
+
+    On corrupt/unopenable databases, raises sqlite3.DatabaseError with a
+    clear message. Handlers catch this and return a clean error envelope.
     """
     global _STORE, _STORE_PATH
     path = load_memory_settings().store_path
     if _STORE is None or _STORE_PATH != path:
-        _STORE = MemoryStore(db_path=path)
+        store = MemoryStore(db_path=path)
+        await store.open()  # raises sqlite3.DatabaseError on corrupt file
+        _STORE = store
         _STORE_PATH = path
     return _STORE
 
@@ -105,7 +110,7 @@ async def memory_remember(
     except ValueError as exc:
         return _error("memory_remember", "invalid_params", str(exc))
     try:
-        store = _get_store()
+        store = await _get_store()
         entry = await store.remember(key=key, content=content, metadata=meta, source_session="")
         return tool_result("memory_remember", entry)
     except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
@@ -120,6 +125,7 @@ async def memory_recall(
     """Recall memories by keyword search with relevance ranking.
 
     Returns JSON list of matching entries ordered by relevance.
+    Capability: memory.persistent, READY.
     """
     if ctx is not None:
         await _log(ctx, f"memory_recall query={query!r} limit={limit}")
@@ -130,7 +136,7 @@ async def memory_recall(
     if limit <= 0:
         return _error("memory_recall", "invalid_params", "limit must be positive")
     try:
-        store = _get_store()
+        store = await _get_store()
         entries = await store.recall(query=query, limit=limit)
         return tool_result(
             "memory_recall",
@@ -147,13 +153,14 @@ async def memory_forget(
     """Forget a memory entry by key or id.
 
     Returns JSON status with removed=True/False.
+    Capability: memory.persistent, READY.
     """
     if ctx is not None:
         await _log(ctx, f"memory_forget key_or_id={key_or_id!r}")
     if not isinstance(key_or_id, str) or not key_or_id.strip():
         return _error("memory_forget", "invalid_params", "key_or_id must be a non-empty string")
     try:
-        store = _get_store()
+        store = await _get_store()
         removed = await store.forget(key_or_id)
         return tool_result("memory_forget", {"removed": removed})
     except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
@@ -167,13 +174,14 @@ async def memory_list(
     """List all stored memories, optionally filtered.
 
     Returns JSON list of all entries.
+    Capability: memory.persistent, READY.
     """
     if ctx is not None:
         await _log(ctx, f"memory_list filter={filter!r}")
     if filter is not None and not isinstance(filter, str):
         return _error("memory_list", "invalid_params", "filter must be a string or None")
     try:
-        store = _get_store()
+        store = await _get_store()
         entries = await store.list_entries(filter_expr=filter)
         return tool_result(
             "memory_list",

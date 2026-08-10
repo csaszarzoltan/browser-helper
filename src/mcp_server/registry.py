@@ -31,6 +31,11 @@ _TOOL_CAPABILITY = {
     "fleet_nodes": "workflow.local",
     "fleet_status": "workflow.local",
     "fleet_queue": "workflow.local",
+    # Persistent memory tools (F1 fix — registered on server surface)
+    "memory_remember": "memory.persistent",
+    "memory_recall": "memory.persistent",
+    "memory_forget": "memory.persistent",
+    "memory_list": "memory.persistent",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -97,6 +102,37 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     "fleet_nodes": {"type": "object", "properties": {}},
     "fleet_status": {"type": "object", "properties": {}},
     "fleet_queue": {"type": "object", "properties": {}},
+    # Persistent memory tool schemas (F1 fix)
+    "memory_remember": {
+        "type": "object",
+        "properties": {
+            "key": {"type": "string", "description": "Unique memory identifier"},
+            "content": {"type": "string", "description": "Memory content text"},
+            "metadata": {"type": "string", "description": "Optional JSON metadata string"},
+        },
+        "required": ["key", "content"],
+    },
+    "memory_recall": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+            "limit": {"type": "integer", "description": "Max results (default 10)"},
+        },
+        "required": ["query"],
+    },
+    "memory_forget": {
+        "type": "object",
+        "properties": {
+            "key_or_id": {"type": "string", "description": "Key or id to forget"},
+        },
+        "required": ["key_or_id"],
+    },
+    "memory_list": {
+        "type": "object",
+        "properties": {
+            "filter": {"type": "string", "description": "Optional metadata filter"},
+        },
+    },
 }
 
 
@@ -167,10 +203,13 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
     # Lazy handler resolution avoids engine import at module load (§2.2) and
     # circularity; handlers are resolved by name but never invoked here.
     from . import fleet_tools, tools  # lazy import — avoids engine import at module load
+    from .memory import tools as memory_tools  # memory handlers
 
     def _handler(name: str):
         if name in ("fleet_nodes", "fleet_status", "fleet_queue"):
             return getattr(fleet_tools, name)
+        if name.startswith("memory_"):
+            return getattr(memory_tools, name)
         return getattr(tools, name)
 
     defs: list[ToolDef] = []

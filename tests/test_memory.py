@@ -791,3 +791,131 @@ class TestBehavioralCLI:
             assert p2.returncode == 0
         except NotImplementedError:
             pytest.skip("Not implemented yet — RED phase")
+
+
+# ---------------------------------------------------------------------------
+# Surface-level regression tests — F1 (tool registration on server surface)
+# ---------------------------------------------------------------------------
+
+
+class TestToolSurface:
+    """F1 RELEASE-BLOCKER regression: memory tools must appear on the real
+    MCP server surface, not just exist as dead-code handlers.
+
+    These tests call ``build_tool_defs()`` (the capability-derived registry)
+    and (if the SDK is present) ``MCPServer.mcp`` to verify the 4 memory
+    tools are surfaced to MCP clients.
+    """
+
+    def test_memory_tools_in_build_tool_defs(self):
+        """memory_* tools must appear in the capability-derived tool set."""
+        from mcp_server.registry import build_tool_defs
+
+        names = {t.name for t in build_tool_defs()}
+        for tool in EXPECTED_MEMORY_TOOLS:
+            assert tool in names, (
+                f"{tool} missing from build_tool_defs() — not on server surface"
+            )
+
+    def test_memory_tools_capability_ready(self):
+        """memory tools must be backed by memory.persistent (READY)."""
+        from mcp_server.registry import build_tool_defs
+
+        registry = {t.name: t for t in build_tool_defs()}
+        for tool in EXPECTED_MEMORY_TOOLS:
+            assert tool in registry, f"{tool} not in build_tool_defs()"
+            td = registry[tool]
+            assert td.capability_id == "memory.persistent", (
+                f"{tool} has wrong capability: {td.capability_id}"
+            )
+            assert td.status.value == "ready", (
+                f"{tool} capability not READY: {td.status}"
+            )
+
+    def test_memory_tools_in_fastmcp_surface(self):
+        """Memory tools must appear in FastMCP's registered tool list."""
+        pytest.importorskip("mcp", reason="MCP SDK required")
+        from mcp_server.server import MCPServer
+
+        server = MCPServer()
+        # Trigger lazy mcp construction + tool registration
+        mcp = server.mcp
+        # FastMCP.list_tools() is async — run it
+        import asyncio
+
+        tools = asyncio.run(mcp.list_tools())
+        tool_names = {t.name for t in tools}
+        for name in EXPECTED_MEMORY_TOOLS:
+            assert name in tool_names, (
+                f"{name} not in FastMCP tool list — never registered"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Corrupt-store regression — F2 (MAJOR): clean error, no traceback
+# ---------------------------------------------------------------------------
+
+
+class TestCorruptStore:
+    """F2 MAJOR regression: a corrupt SQLite memory store must produce clean
+    error envelopes (operation_failed), never raw tracebacks into FastMCP.
+    """
+
+    @pytest.mark.asyncio
+    async def test_memory_recall_on_corrupt_store_returns_error_envelope(self, tmp_path):
+        """Write garbage bytes to the store path; recall must return a clean
+        error envelope (status=error, operation_failed) with no traceback.
+        """
+        from mcp_server.memory.tools import memory_recall, memory_remember
+
+        db = tmp_path / "corrupt.db"
+        db.write_bytes(b"this is not a sqlite database at all, just garbage bytes" * 10)
+        # Override the env so _get_store() binds to our corrupt file
+        import os
+
+        os.environ["BROWSER_HELPER_MEMORY_DB"] = str(db)
+        try:
+            result = await memory_recall(query="anything", ctx=None)
+            data = json.loads(result)
+            assert data["status"] == "error", f"expected error status, got: {data['status']}"
+            assert data["error"] is not None, "error field is None"
+            assert "operation_failed" in data["error"]["code"] or "error" in data["error"]["code"]
+            # Must contain a human-readable message, not a traceback
+            msg = data["error"]["message"]
+            assert "traceback" not in msg.lower()
+            assert "exception" not in msg.lower()
+            assert len(msg) > 10, f"error message too short: {msg!r}"
+        finally:
+            # Reset so other tests aren't affected
+            if "BROWSER_HELPER_MEMORY_DB" in os.environ:
+                del os.environ["BROWSER_HELPER_MEMORY_DB"]
+            # Reset the module singleton
+            import mcp_server.memory.tools as _t
+
+            _t._STORE = None
+            _t._STORE_PATH = None
+
+    @pytest.mark.asyncio
+    async def test_memory_remember_on_corrupt_store_returns_error_envelope(self, tmp_path):
+        """Write garbage bytes; remember must return clean error envelope."""
+        from mcp_server.memory.tools import memory_remember
+
+        db = tmp_path / "corrupt_remember.db"
+        db.write_bytes(b"\x00\x01\x02garbage" * 50)
+        import os
+
+        os.environ["BROWSER_HELPER_MEMORY_DB"] = str(db)
+        try:
+            result = await memory_remember(key="k", content="v", ctx=None)
+            data = json.loads(result)
+            assert data["status"] == "error", f"expected error status, got: {data['status']}"
+            assert data["error"] is not None
+            msg = data["error"]["message"]
+            assert "traceback" not in msg.lower()
+        finally:
+            if "BROWSER_HELPER_MEMORY_DB" in os.environ:
+                del os.environ["BROWSER_HELPER_MEMORY_DB"]
+            import mcp_server.memory.tools as _t
+
+            _t._STORE = None
+            _t._STORE_PATH = None

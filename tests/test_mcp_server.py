@@ -58,6 +58,10 @@ EXPECTED_TOOLS = [
     "fleet_nodes",
     "fleet_status",
     "fleet_queue",
+    "memory_remember",
+    "memory_recall",
+    "memory_forget",
+    "memory_list",
 ]
 
 # tool -> required parameter names (spec §8.1: exact required params)
@@ -77,6 +81,10 @@ EXPECTED_REQUIRED_PARAMS = {
     "fleet_nodes": [],
     "fleet_status": [],
     "fleet_queue": [],
+    "memory_remember": ["key", "content"],
+    "memory_recall": ["query"],
+    "memory_forget": ["key_or_id"],
+    "memory_list": [],
 }
 
 # tool -> (capability_id, expected status)
@@ -96,6 +104,10 @@ EXPECTED_CAPABILITY = {
     "fleet_nodes": ("workflow.local", "ready"),
     "fleet_status": ("workflow.local", "ready"),
     "fleet_queue": ("workflow.local", "ready"),
+    "memory_remember": ("memory.persistent", "ready"),
+    "memory_recall": ("memory.persistent", "ready"),
+    "memory_forget": ("memory.persistent", "ready"),
+    "memory_list": ("memory.persistent", "ready"),
 }
 
 TOOL_MODULES = {
@@ -114,6 +126,10 @@ TOOL_MODULES = {
     "fleet_nodes": "fleet_tools",
     "fleet_status": "fleet_tools",
     "fleet_queue": "fleet_tools",
+    "memory_remember": "memory.tools",
+    "memory_recall": "memory.tools",
+    "memory_forget": "memory.tools",
+    "memory_list": "memory.tools",
 }
 
 
@@ -124,11 +140,12 @@ def _require_pkg(name: str, what: str) -> None:
 
 
 def _load_tool_handlers() -> dict[str, object]:
-    """Return {tool_name: handler} from mcp_server.tools / fleet_tools.
+    """Return {tool_name: handler} from mcp_server.tools / fleet_tools / memory.tools.
 
     Raises ModuleNotFoundError (fail) when the module is absent.
     """
     import mcp_server.fleet_tools
+    import mcp_server.memory.tools
     import mcp_server.tools
 
     handlers = {
@@ -141,6 +158,13 @@ def _load_tool_handlers() -> dict[str, object]:
             name: getattr(mcp_server.fleet_tools, name)
             for name in EXPECTED_TOOLS
             if TOOL_MODULES[name] == "fleet_tools"
+        }
+    )
+    handlers.update(
+        {
+            name: getattr(mcp_server.memory.tools, name)
+            for name in EXPECTED_TOOLS
+            if TOOL_MODULES[name] == "memory.tools"
         }
     )
     return handlers
@@ -385,7 +409,7 @@ class TestInterface:
             doc = (handler.__doc__ or "") + repr(inspect.signature(handler))
             assert doc.strip(), f"{name}: empty docstring"
             assert "browser.core" in doc or "fleet" in doc or \
-                "capability" in doc, f"{name}: docstring lacks capability"
+                "capability" in doc.lower(), f"{name}: docstring lacks capability"
 
     def test_tools_module_no_llm_imports(self):
         """Anti-LLM gate (§8.2): mcp_server/ must never import LLM clients."""
@@ -698,7 +722,7 @@ class TestBehavioralFastMCP:
         mcp = server.mcp  # memoized builder; registers tools
         assert mcp is not None
         tools = asyncio.run(mcp.list_tools())
-        assert len(tools) == 15
+        assert len(tools) == len(EXPECTED_TOOLS)
         names = {t.name for t in tools}
         assert names == set(EXPECTED_TOOLS)
 
