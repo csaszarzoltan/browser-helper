@@ -267,15 +267,6 @@ class ChromeManager:
             "--disable-infobars",
         ]
 
-        # Disable all extensions except the allowlist (uBlock Origin Lite).
-        # A VPN/proxy extension (VPN Unlimited) pops a password dialog on
-        # startup — auto-cancel handles the CDP auth prompt, but the
-        # extension's own UI still appears on the VNC display.  Disabling
-        # every extension except the ad-blocker removes the popup for good.
-        allowlist = self.settings.get("extension_allowlist", "")
-        if allowlist:
-            cmd.append(f"--disable-extensions-except={allowlist}")
-
         # Headless mode: --headless=new (Chrome 112+), fallback --headless for older
         if headless:
             cmd.append("--headless=new")

@@ -241,9 +241,6 @@ class CDPClient:
 
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
-        # Enable Network domain + auto-cancel proxy auth prompts
-        await self._send_command("Network.enable")
-        self.enable_auto_cancel_auth()
         self._apply_stealth_patches()
 
         return {
@@ -291,9 +288,6 @@ class CDPClient:
 
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
-        # Enable Network domain + auto-cancel proxy auth prompts
-        await self._send_command("Network.enable")
-        self.enable_auto_cancel_auth()
         self._apply_stealth_patches()
 
         return {
@@ -2800,9 +2794,6 @@ class CDPClient:
         asyncio.create_task(self._listener())
         await self._send_command("Page.enable")
         await self._send_command("Runtime.enable")
-        # Enable Network domain + auto-cancel proxy auth prompts.
-        await self._send_command("Network.enable")
-        self.enable_auto_cancel_auth()
         self._apply_stealth_patches()
         return {"status": "ok", "target_id": tab_id, "cdp_url": ws_url}
 
