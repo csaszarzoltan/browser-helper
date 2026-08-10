@@ -58,11 +58,16 @@ class _Client:
 
 @pytest.fixture(scope="module")
 def _bh_service_ready():
-    """Verify the live service is up; skip the module if not."""
+    """Verify the live service is up; skip the module if not.
+
+    Uses ``browser_available`` (NOT ``connected``) — the ``connected`` flag
+    reflects only the shared default client, while per-client sessions live
+    independently and are what these tests exercise.
+    """
     try:
         with urllib.request.urlopen(f"{BH}/status", timeout=5) as resp:
             st = json.loads(resp.read().decode())
-        assert st.get("connected"), "service not connected to Chrome"
+        assert st.get("browser_available"), "service has no Chrome available"
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"browser-helper service not reachable: {exc}")
     return True
