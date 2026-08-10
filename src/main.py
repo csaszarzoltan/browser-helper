@@ -3955,7 +3955,16 @@ async def agent_search(body: AgentSearchRequest):
     try:
         # First navigation creates/mints the session; afterwards resolve the
         # session client so direct evaluate calls hit the session's own tab.
-        await run_op("search_navigate", client.navigate, url)
+        # Must use _resolve_session_client() FIRST so the navigate runs on the
+        # caller's OWN session tab, NOT the shared default client (which is
+        # what run_op does on a fresh cookie-less call — it would navigate the
+        # shared tab and every parallel agent would overwrite the same tab).
+        target, sess = await _resolve_session_client()
+        if sess is not None:
+            _set_current_session(sess)
+            await run_op("search_navigate", sess.client.navigate, url)
+        else:
+            await run_op("search_navigate", client.navigate, url)
         sess = _get_current_session()
         target = sess.client if sess is not None else client
         # Wait for the answer container to fill: poll until it has content
