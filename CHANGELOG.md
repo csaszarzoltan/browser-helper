@@ -4,6 +4,21 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.1] — 2026-08-10
+
+#### Fixed
+- **Parallel session isolation (3-layer)**: `_ws_tab_id` tracking + listener filter (external targets ignored), `_send_command` drift-guard, 1-tab-per-session enforcement (`/navigate` roams + closes old tab, `/tab/new` navigates existing). Fixes cross-session screenshot/eval/observe bleed under parallel agent load.
+- **`/agent/search` parallel tab-overwrite**: eager `_resolve_session_client()` before the first `run_op` so the navigate lands on the caller's OWN tab from the very first call (was racing on the shared default tab).
+- **Port priority**: `CHROME_AUTO_PORT` (run.py `--debug-port`) now wins over `settings.json` at auto-connect — prevents silent reattach to the wrong Chrome (9555 SSH tunnel vs 9557 VNC Chrome).
+- **Proxy-extension soft-start force-hold**: `ChromeManager._launched_at` + `await_chrome_ready()` called from `_ensure_browser()` and `run_op()` — requests arriving during the warm-up window are held instead of bypassing the proxy (auth-dialog flash).
+
+#### Added
+- **MCP `observe` + `act` tools** (`agent.semantic`): the REST-only agent endpoints now have an MCP surface (was `Invalid argument 'name'`). 21 MCP tools total.
+- **Parallel session isolation regression test**: `tests/test_parallel_session_isolation.py` — two concurrent cookie-jar clients navigate + `/agent/search` without tab overwrite (skips when live service down).
+
+#### Changed
+- **Test infra**: conftest seeds `PYTHONPATH` for subprocess CLI tests (root-conftest path fix); MCP e2e helpers tolerate notification-interleaved responses; fleet/memory CLI tests green. **Full suite: 2559 passed, 0 failed.**
+
 ## [1.26.0] — 2026-08-09
 
 #### Added

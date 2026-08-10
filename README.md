@@ -1,8 +1,8 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.26.0-blue)
+![Version](https://img.shields.io/badge/version-1.26.1-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Tests](https://img.shields.io/badge/tests-2626%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2559%20passed-brightgreen)
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
