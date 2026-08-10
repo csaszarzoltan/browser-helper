@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.2] — 2026-08-10
+
+#### Fixed
+- **Chrome restart loop (user-observed: "Chrome újraindul túl gyakran")**: the health watchdog watched the GLOBAL client's WS state (`client.is_connected`). Since v1.24 all traffic runs on per-session CDPClients, so the global client was often disconnected while Chrome was perfectly healthy — and `_reap_orphan_tabs` closing unowned tabs killed its page-target WS. The watchdog misread this as "Chrome dead" and auto-restarted every 5 min (repeating the 10s proxy warm-up + soft-start hold + possible auth-dialog flash). **Fix:** watchdog now probes the CDP HTTP port (`/json/version`); the global client attaches to the **browser-level WebSocket** (`/devtools/browser/<id>`) via new `CDPClient.connect_browser()`, which survives tab churn. Verified live: 3-session churn keeps `connected: true`; a full watchdog cycle runs with zero restarts.
+- **`_ws_tab_id` overwritten to None in `connect()`**: the Fix-1 tab-drift binding (`self._ws_tab_id = target_id`) was immediately clobbered by a leftover `self._ws_tab_id = None` — the drift guard/listener filter never worked for clients attached via `connect()`. Removed the stale line.
+
+#### Changed
+- `_ensure_global_client_attached()` helper: startup, watchdog, and auto-launch paths all use browser-level attach.
+
 ## [1.26.1] — 2026-08-10
 
 #### Fixed

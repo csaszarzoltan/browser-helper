@@ -214,6 +214,31 @@ class CDPClient:
         self._tabs_cache_ts = now
         return self._tabs_cache
 
+    async def connect_browser(self, ws_url: str) -> dict:
+        """Connect to the BROWSER-LEVEL CDP WebSocket (``/devtools/browser/<id>``).
+
+        Unlike :meth:`connect` / :meth:`connect_ws`, this does NOT send
+        page-scoped commands (``Page.enable``, ``Runtime.enable``, stealth
+        patches) — the browser-level socket only supports browser-scoped
+        methods (``Target.*``, ``Browser.*``).  Used by the global default
+        client so its connection survives tab open/close churn.
+
+        Returns:
+            ``{\"status\": \"ok\", \"target_id\": \"\", \"cdp_url\": ws_url}``
+        """
+        try:
+            self._ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
+        except Exception as exc:
+            raise CDPError(f"Cannot connect to browser CDP WebSocket {ws_url}: {exc}") from exc
+        self._connected = True
+        self._target_id = None
+        self._active_tab_id = None
+        self._ws_tab_id = None
+        self._message_id = 0
+        self._pending = {}
+        asyncio.create_task(self._listener())
+        return {"status": "ok", "target_id": "", "cdp_url": ws_url}
+
     async def connect_ws(self, ws_url: str) -> dict:
         """Connect directly to a CDP WebSocket URL (``ws://`` or ``wss://``).
 
@@ -288,7 +313,6 @@ class CDPClient:
         self._message_id = 0
         self._pending = {}
         self._network_entries = []
-        self._ws_tab_id = None
 
         asyncio.create_task(self._listener())
 

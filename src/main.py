@@ -139,10 +139,25 @@ async def lifespan(application: FastAPI):
     )
     client.cdp_http_url = f"http://127.0.0.1:{local_port}"
     try:
-        result = await client.connect()
-        state["connected"] = True
-        state["cdp_url"] = result.get("cdp_url", "auto-discovered")
-        logger.info("Auto-connected to CDP at %s", state["cdp_url"])
+        # Attach the global client to the BROWSER-LEVEL WebSocket (stable —
+        # survives tab churn), not a page target (which _reap_orphan_tabs may
+        # close, killing the WS and flipping connected → False; the watchdog
+        # then misread that as a dead Chrome and auto-restarted every 5 min).
+        import httpx as _httpx
+
+        async with _httpx.AsyncClient(timeout=3.0) as http:
+            resp = await http.get(f"http://127.0.0.1:{local_port}/json/version")
+            if resp.status_code == 200:
+                ws_url = resp.json().get("webSocketDebuggerUrl", "")
+                if ws_url:
+                    await client.connect_browser(ws_url)
+                    state["connected"] = True
+                    state["cdp_url"] = ws_url
+                    logger.info("Auto-connected to browser-level CDP at %s", ws_url)
+                else:
+                    raise ConnectionError("no webSocketDebuggerUrl")
+            else:
+                raise ConnectionError(f"HTTP {resp.status_code}")
     except Exception as exc:
         logger.warning("Auto-connect to CDP failed (server will start anyway): %s", exc)
     # ── Auto-launch Chrome (if --launch-chrome was passed to run.py) ──
@@ -171,9 +186,7 @@ async def lifespan(application: FastAPI):
                         logger.info("Auto-connecting to launched Chrome at %s", cdp_url)
                         # Update the client's base CDP URL before connecting
                         client.cdp_http_url = cdp_url.rstrip("/")
-                        conn = await client.connect()
-                        state["connected"] = True
-                        state["cdp_url"] = conn.get("cdp_url", cdp_url)
+                        await _ensure_global_client_attached()
                     except Exception as exc2:
                         logger.warning("Auto-connect to launched Chrome failed: %s", exc2)
             else:
@@ -230,7 +243,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.26.1",
+    version="1.26.2",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -1187,6 +1200,45 @@ def _reap_orphan_headless() -> int:
     return killed
 
 
+async def _ensure_global_client_attached() -> None:
+    """Attach the global default client to a STABLE CDP endpoint.
+
+    Since v1.24 the per-client sessions run on their own CDPClients; the
+    global ``client`` is only used by legacy cookie-less paths.  It must NOT
+    attach to a page target — session churn (``_reap_orphan_tabs`` closing
+    unowned tabs, sessions dying) would kill the WS and flip
+    ``state[\"connected\"]`` to False, which the watchdog used to misread as
+    \"Chrome dead\" and auto-restart every 5 minutes (user-observed).
+
+    The browser-level WebSocket (``/devtools/browser/<id>``) survives tab
+    open/close — that is the correct anchor for the global client.
+    """
+    main_port = (
+        settings_mgr.get("chrome_launched_port")
+        or settings_mgr.get("chrome_debug_port")
+        or 9557
+    )
+    client.cdp_http_url = f"http://127.0.0.1:{main_port}"
+    if client.is_connected:
+        return
+    try:
+        import httpx as _httpx
+
+        async with _httpx.AsyncClient(timeout=3.0) as http:
+            resp = await http.get(f"http://127.0.0.1:{main_port}/json/version")
+            if resp.status_code != 200:
+                raise ConnectionError("Chrome not responding")
+            ws_url = resp.json().get("webSocketDebuggerUrl", "")
+        if not ws_url:
+            raise ConnectionError("no browser WebSocket URL in /json/version")
+        await client.connect_browser(ws_url)
+        state["connected"] = True
+        state["cdp_url"] = ws_url
+        logger.info("Global client attached to browser-level CDP: %s", ws_url)
+    except Exception as exc:
+        logger.debug("Global client browser-level attach failed: %s", exc)
+
+
 async def _chrome_health_watchdog() -> None:
     """Periodic background task: reap orphan Chrome + auto-restart if dead.
 
@@ -1203,42 +1255,37 @@ async def _chrome_health_watchdog() -> None:
             if reaped:
                 logger.info("Watchdog: reaped %d orphan Chrome process(es)", reaped)
 
-            # 2. Check if the main Chrome is alive
+            # 2. Check if the main Chrome is alive — probe the CDP HTTP port,
+            # NOT the global client's WS state.  Since v1.24 the per-client
+            # sessions run on their OWN CDPClients; the global `client` is
+            # only used by legacy cookie-less paths and may be disconnected
+            # while Chrome (and every active session) is perfectly healthy.
+            # Watching `client.is_connected` here caused a false-positive
+            # auto-restart every 5 minutes (user-observed: Chrome restarted
+            # suspiciously often, soft-start warm-up repeated constantly).
             main_port = (
                 settings_mgr.get("chrome_launched_port")
                 or settings_mgr.get("chrome_debug_port")
                 or 9557
             )
-            if client.is_connected:
-                continue  # all good
-
-            # Chrome is dead — try to auto-restart
-            logger.warning("Watchdog: Chrome not connected (port %d), attempting auto-restart", main_port)
             try:
-                import subprocess
                 import httpx as _httpx
 
-                # Check if Chrome is actually running on the port
                 async with _httpx.AsyncClient(timeout=3.0) as http:
                     resp = await http.get(f"http://127.0.0.1:{main_port}/json/version")
-                    if resp.status_code != 200:
-                        raise ConnectionError("Chrome not responding")
-                # Port is open but client is disconnected — reconnect
-                client.cdp_http_url = f"http://127.0.0.1:{main_port}"
-                result = await client.connect()
-                state["connected"] = True
-                state["cdp_url"] = result.get("cdp_url", f"ws://127.0.0.1:{main_port}")
-                logger.info("Watchdog: auto-reconnected to Chrome at %s", state["cdp_url"])
+                    if resp.status_code == 200:
+                        # Chrome is up.  If the global client happens to be
+                        # disconnected, re-attach it quietly (no restart).
+                        if not client.is_connected:
+                            await _ensure_global_client_attached()
+                        continue  # all good — Chrome is alive
+                    raise ConnectionError("Chrome not responding")
             except Exception as exc:
                 # Chrome not running at all — launch a new one
                 logger.warning("Watchdog: Chrome not running, launching fresh instance: %s", exc)
                 try:
                     await chrome_mgr.launch()
-                    client.cdp_http_url = f"http://127.0.0.1:{main_port}"
-                    result = await client.connect()
-                    state["connected"] = True
-                    state["cdp_url"] = result.get("cdp_url", f"ws://127.0.0.1:{main_port}")
-                    logger.info("Watchdog: launched and connected to Chrome at %s", state["cdp_url"])
+                    await _ensure_global_client_attached()
                 except Exception as exc2:
                     logger.warning("Watchdog: auto-launch failed: %s", exc2)
         except Exception as exc:
@@ -1311,9 +1358,11 @@ async def _ensure_browser(sess: Session | None = None) -> None:
             state["connected"] = True
             state["cdp_url"] = target.cdp_http_url
         else:
-            result = await target.connect()
-            state["connected"] = True
-            state["cdp_url"] = result.get("cdp_url", cdp_http)
+            # Global (session-less) path: attach to the browser-level WS so
+            # the connection survives tab churn (see _ensure_global_client_attached).
+            await _ensure_global_client_attached()
+            if not client.is_connected:
+                raise ConnectionError("browser-level attach failed")
         logger.info("Auto-connected to local Chrome at %s", state["cdp_url"])
     except Exception as exc:
         state["connected"] = False
