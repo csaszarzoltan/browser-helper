@@ -2480,6 +2480,52 @@ async def page_diff(body: dict | None = None):
     return await run_op("page_diff", client.page_diff, prev)
 
 
+# ── v1.27: F5 — download helper ───────────────────────────────────
+
+class DownloadRequest(BaseModel):
+    """Download a file via the browser and store it as an artifact."""
+
+    url: str = Field(..., description="URL to download (navigates the current tab)")
+    timeout: int = Field(30, description="Max seconds to wait for the file")
+
+
+@app.post("/page/download")
+async def page_download(body: DownloadRequest):
+    """Download a file via the browser and store it as an artifact.
+
+    Sets the download behavior to a temp dir, navigates to *url*, waits for
+    the file, then stores it in the artifact store.  The artifact is served
+    at ``GET /artifacts/{artifact_id}``.
+    """
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="bh-dl-") as dl_dir:
+            res = await run_op("page_download", client.download_file,
+                               body.url, dl_dir, body.timeout)
+            if not isinstance(res, dict) or res.get("data", {}).get("status") != "ok":
+                return api_error("page_download", "download_failed",
+                                 str(res.get("data", {}).get("error", res)), 502)
+            data = res["data"]
+            path = data["path"]
+            import mimetypes
+
+            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            suffix = Path(path).suffix or None
+            with open(path, "rb") as f:
+                binary = f.read()
+            record = artifact_store.put(binary, mime, suffix=suffix,
+                                        metadata={"source_url": body.url, "name": data["name"]})
+            return api_success("page_download", {
+                "artifact": record,
+                "source_url": body.url,
+                "file_name": data["name"],
+                "size_bytes": data["size_bytes"],
+            })
+    except Exception as exc:
+        return api_error("page_download", "download_failed", str(exc), 502)
+
+
 # ─── New: File upload ─────────────────────────────────────────
 
 

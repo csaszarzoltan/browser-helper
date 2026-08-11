@@ -2579,6 +2579,46 @@ class CDPClient:
         await self._send_command("Network.clearBrowserCookies")
         return {"status": "ok"}
 
+    # ─── v1.27: F5 — download helper ───────────────────────────────
+
+    async def download_file(self, url: str, download_dir: str, timeout: int = 30) -> dict:
+        """Download a file into *download_dir* via the browser.
+
+        Sets ``Browser.setDownloadBehavior`` (allow + path), navigates the
+        current tab to *url*, and waits for the file to appear in
+        *download_dir* (polling up to *timeout* seconds).  Returns the
+        absolute path of the newest file written.
+        """
+        import os
+        import time as _time
+        from pathlib import Path
+
+        await self._activate_current()
+        try:
+            await self._send_command("Browser.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": download_dir,
+                "eventsEnabled": True,
+            })
+        except Exception as exc:
+            return {"status": "error", "error": f"setDownloadBehavior failed: {exc}"}
+        os.makedirs(download_dir, exist_ok=True)
+        before = set(Path(download_dir).iterdir()) if Path(download_dir).is_dir() else set()
+        await self.navigate(url)
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                files = set(Path(download_dir).iterdir())
+                new = [f for f in files if f not in before and f.is_file() and not f.name.endswith((".crdownload", ".tmp"))]
+                if new:
+                    newest = max(new, key=lambda f: f.stat().st_mtime)
+                    return {"status": "ok", "path": str(newest),
+                            "name": newest.name, "size_bytes": newest.stat().st_size}
+            except OSError:
+                pass
+            await asyncio.sleep(0.5)
+        return {"status": "error", "error": f"download timeout after {timeout}s"}
+
     # ─── NEW: DOM query ───────────────────────────────────────────
 
     async def dom_query(self, selector: str, attribute: str | None = None) -> dict:

@@ -120,7 +120,10 @@ class TestCookieRestEndpoints:
         assert r.json()["data"]["imported"] == 1
 
     def test_import_cookies_invalid_payload(self, app_client):
+        import main
+
         c = app_client
+        self._fake_session(main)
         r = c.post("/session/sess123/import-cookies", json={"cookies": "not-a-list"})
         assert r.status_code == 400
         assert "invalid_payload" in r.json()["error"]["code"]

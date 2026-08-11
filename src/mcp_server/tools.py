@@ -560,3 +560,46 @@ async def form_extract(ctx: Context | None = None) -> str:
                            "data": res, "error": None, "meta": {}})
     except Exception as exc:
         return tool_error("form_extract", "form_extract_failed", str(exc))
+
+
+# ── Download helper (v1.27.0, F5) ───────────────────────────────────
+
+
+async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> str:
+    """Download a file via the browser and store it as an artifact
+    (capability ``browser.core``, READY).
+
+    Returns the artifact record — fetch the file at
+    ``GET /artifacts/{artifact_id}``.
+    """
+    from main import client, run_op
+
+    if ctx is not None:
+        ctx.info(f"download url={url}")
+    sess, run_op_fn = await _mcp_session()
+    target = sess.client if sess is not None else client
+    try:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory(prefix="bh-dl-") as dl_dir:
+            res = await run_op_fn("download", target.download_file, url, dl_dir, timeout)
+            if not isinstance(res, dict) or res.get("status") != "ok":
+                return tool_error("download", "download_failed",
+                                  str(res.get("error", res)))
+            path = res["path"]
+            import mimetypes
+
+            mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            with open(path, "rb") as f:
+                binary = f.read()
+            from main import artifact_store
+
+            record = artifact_store.put(binary, mime, suffix=Path(path).suffix or None,
+                                        metadata={"source_url": url, "name": res["name"]})
+            return json_dumps({"status": "ok", "operation": "download",
+                               "data": {"artifact": record, "file_name": res["name"],
+                                        "size_bytes": res["size_bytes"]},
+                               "error": None, "meta": {}})
+    except Exception as exc:
+        return tool_error("download", "download_failed", str(exc))

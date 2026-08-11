@@ -52,6 +52,8 @@ _TOOL_CAPABILITY = {
     "form_extract": "browser.core",
     # Fleet run-batch (v1.27.0, F4)
     "fleet_run_batch": "workflow.local",
+    # Download helper (v1.27.0, F5)
+    "download": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -247,6 +249,15 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "concurrency": {"type": "integer", "description": "Parallel tasks (default 4, max 8)"},
         },
         "required": ["tasks"],
+    },
+    # Download helper (v1.27.0, F5)
+    "download": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL to download (navigates the current tab)"},
+            "timeout": {"type": "integer", "description": "Max seconds to wait for the file (default 30)"},
+        },
+        "required": ["url"],
     },
 }
 
