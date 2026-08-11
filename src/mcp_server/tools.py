@@ -281,6 +281,25 @@ async def session_status(ctx: Context | None = None) -> str:
         return tool_error("session_status", "operation_failed", str(exc))
 
 
+async def mcp_export_cookies(session_id: str, ctx: Context | None = None) -> str:
+    """Export every cookie for *session_id* as JSON text (capability ``diagnostics.cookies``, READY).
+
+    Backed by the same engine as ``POST /session/{sid}/export-cookies``:
+    resolves the session's CDP client and returns ``Network.getAllCookies``
+    results with the stable keys ``name``, ``value``, ``domain``, ``path``,
+    ``expires``, ``httpOnly``, ``secure``, ``sameSite``.
+    """
+    if ctx is not None:
+        ctx.info(f"export_cookies -> session {session_id}")
+    try:
+        from services.cookie_service import export_cookies
+
+        result = await export_cookies(session_id)
+        return tool_result("export_cookies", result)
+    except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
+        return tool_error("export_cookies", "operation_failed", str(exc))
+
+
 # ── High-level tools (capability agent.search / agent.flow) ────────
 
 
@@ -345,3 +364,104 @@ async def run_flow(steps: list[dict], name: str = "flow", stop_on_error: bool = 
     )
     resp = await agent_run_flow(req)
     return json_dumps(resp)
+
+
+# ── Auth-session clone / cookie porting (v1.27.0, F1) ────────────────
+
+
+async def _resolve_cookie_target(session_id: str | None):
+    """Resolve the target CDP client + session for a cookie op.
+
+    Returns ``(client, sess)`` where *client* is the session's client (when a
+    session is given or minted) or the shared default client.  Raises
+    KeyError with a message when an explicit *session_id* does not exist.
+
+    Like the REST endpoints, cookie ops call the client methods DIRECTLY —
+    never through ``main.run_op``.  ``run_op`` logs ``str(result)[:200]``
+    into the operation timeline; cookie values must never land there
+    (product security rule: "cookie-k soha nem log-ba/chatbe").
+    """
+    from main import _set_current_session, client, session_registry
+
+    if session_id:
+        sess = session_registry.get(session_id)
+        if sess is None:
+            raise KeyError(f"Session {session_id} not found")
+        _set_current_session(sess)
+        return sess.client, sess
+    # No explicit session: use the process-scoped MCP session (or the
+    # shared default client when the browser is unavailable).
+    sess, _ = await _mcp_session()
+    return (sess.client if sess is not None else client), sess
+
+
+async def export_cookies(session_id: str | None = None, ctx: Context | None = None) -> str:
+    """Export all cookies from a session (capability ``browser.core``, READY).
+
+    Returns CDP Cookie objects (name, value, domain, path, expires,
+    httpOnly, secure, sameSite) for re-import into another session.
+
+    Cookie values travel only over the direct client call and are never
+    written to the operation log or chat.
+    """
+    if ctx is not None:
+        ctx.info(f"export_cookies session={session_id}")
+    try:
+        target, _ = _resolve_cookie_target(session_id)
+        res = await target.get_cookies()
+        return tool_result("export_cookies", res)
+    except KeyError as exc:
+        return tool_error("export_cookies", "session_not_found", str(exc))
+    except Exception as exc:
+        return tool_error("export_cookies", "cookie_export_failed", str(exc))
+
+
+async def import_cookies(cookies: list[dict], session_id: str | None = None,
+                         ctx: Context | None = None) -> str:
+    """Import cookies into a session (capability ``browser.core``, READY).
+
+    Body cookies are CDP CookieParam shapes: {name, value, domain, path?,
+    expires?, httpOnly?, secure?, sameSite?}.  Values are never echoed back
+    into the operation log or chat — only a count is returned.
+    """
+    if ctx is not None:
+        ctx.info(f"import_cookies session={session_id} n={len(cookies or [])}")
+    cookies = cookies or []
+    try:
+        target, _ = _resolve_cookie_target(session_id)
+        res = await target.set_cookies(cookies)
+        return tool_result("import_cookies", res)
+    except KeyError as exc:
+        return tool_error("import_cookies", "session_not_found", str(exc))
+    except Exception as exc:
+        return tool_error("import_cookies", "cookie_import_failed", str(exc))
+
+
+async def clone_session(session_id: str | None = None, ctx: Context | None = None) -> str:
+    """Clone a session: mint a new session and copy all cookies over
+    (capability ``browser.core``, READY).
+
+    The new session is immediately usable and carries the source session's
+    authenticated state (Cloudflare cf_clearance, Google session, ...).
+    Cookie values are never written to the operation log or chat — only the
+    copy count is returned.
+    """
+    if ctx is not None:
+        ctx.info(f"clone_session source={session_id}")
+    try:
+        source, src_sess = _resolve_cookie_target(session_id)
+        res = await source.get_cookies()
+        cookies = (res or {}).get("cookies", [])
+        from main import _local_cdp_http, chrome_mgr, session_registry as _sr
+
+        await chrome_mgr.launch()
+        new_sess = await _sr.create(_local_cdp_http())
+        imp = await new_sess.client.set_cookies(cookies)
+        return tool_result("clone_session", {
+            "session_id": new_sess.session_id,
+            "cookies_copied": imp.get("imported", 0),
+        })
+    except KeyError as exc:
+        return tool_error("clone_session", "session_not_found", str(exc))
+    except Exception as exc:
+        return tool_error("clone_session", "clone_failed", str(exc))

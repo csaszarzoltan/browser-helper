@@ -25,6 +25,7 @@ _TOOL_CAPABILITY = {
     "switch_tab": "browser.core",
     "close_tab": "browser.core",
     "session_status": "diagnostics.privacy",
+    "export_cookies": "diagnostics.cookies",
     "search": "agent.search",
     "get_content": "agent.search",
     "run_flow": "agent.flow",
@@ -39,6 +40,10 @@ _TOOL_CAPABILITY = {
     "memory_recall": "memory.persistent",
     "memory_forget": "memory.persistent",
     "memory_list": "memory.persistent",
+    # Auth-session clone / cookie porting (v1.27.0, F1)
+    "export_cookies": "browser.core",
+    "import_cookies": "browser.core",
+    "clone_session": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -107,6 +112,11 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["id"],
     },
     "session_status": {"type": "object", "properties": {}},
+    "export_cookies": {
+        "type": "object",
+        "properties": {"session_id": {"type": "string", "description": "Session id to export cookies for"}},
+        "required": ["session_id"],
+    },
     "search": {
         "type": "object",
         "properties": {
@@ -164,6 +174,27 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "filter": {"type": "string", "description": "Optional metadata filter"},
+        },
+    },
+    # Auth-session clone / cookie porting (v1.27.0, F1)
+    "export_cookies": {
+        "type": "object",
+        "properties": {
+            "session_id": {"type": "string", "description": "Source session id (optional — uses current session)"},
+        },
+    },
+    "import_cookies": {
+        "type": "object",
+        "properties": {
+            "cookies": {"type": "array", "description": "List of CDP CookieParam dicts: {name, value, domain, path?, expires?, httpOnly?, secure?, sameSite?}"},
+            "session_id": {"type": "string", "description": "Target session id (optional — uses current session)"},
+        },
+        "required": ["cookies"],
+    },
+    "clone_session": {
+        "type": "object",
+        "properties": {
+            "session_id": {"type": "string", "description": "Source session id to clone (optional — uses current session)"},
         },
     },
 }

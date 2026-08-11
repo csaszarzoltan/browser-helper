@@ -104,6 +104,12 @@ class CapabilityRegistry:
                     action="Open Diagnostics",
                 ),
                 Capability(
+                    "diagnostics.cookies", "Cookie export", "Diagnostics",
+                    CapabilityStatus.READY,
+                    "Export a session's full cookie jar as JSON via CDP Network.getAllCookies.",
+                    action="Open Diagnostics",
+                ),
+                Capability(
                     "memory.persistent", "Persistent agent memory", "Agent Tools",
                     CapabilityStatus.READY,
                     "Remember, recall, forget, and list persistent memories across sessions.",

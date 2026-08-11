@@ -2382,6 +2382,23 @@ class CDPClient:
         except CDPError as e:
             return {"status": "error", "error": str(e)}
 
+    async def set_cookies(self, cookies: list[dict]) -> dict:
+        """Bulk-import cookies into the current tab's context.
+
+        Each cookie dict follows the CDP ``Network.CookieParam`` shape:
+        ``name``, ``value``, ``domain``, ``path``, ``expires`` (epoch s),
+        ``httpOnly``, ``secure``, ``sameSite``.  Used by the auth-clone
+        flow to transfer a logged-in state between sessions.
+        """
+        if not cookies:
+            return {"status": "ok", "imported": 0}
+        await self._activate_current()
+        try:
+            await self._send_command("Network.setCookies", {"cookies": cookies})
+            return {"status": "ok", "imported": len(cookies)}
+        except CDPError as e:
+            return {"status": "error", "error": str(e)}
+
     async def clear_cookies(self) -> dict:
         """Clear all browser cookies."""
         await self._activate_current()

@@ -89,6 +89,7 @@ EXPECTED_TOOLS = [
     "switch_tab",
     "close_tab",
     "session_status",
+    "export_cookies",
     "search",
     "get_content",
     "run_flow",
@@ -587,4 +588,6 @@ def _args_for(name: str) -> dict:
         return {"mode": "semantic", "max_nodes": 10}
     if name == "act":
         return {"action": "wait", "text": "noop", "timeout": 1}
+    if name == "export_cookies":
+        return {"session_id": "noop_session"}
     return {}

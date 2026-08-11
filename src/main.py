@@ -1796,6 +1796,92 @@ async def session_close(session_id: str = Query(..., description="Session id to 
     return api_success("session_close", {"session_id": session_id, "closed": True})
 
 
+# ── Auth-session clone / cookie porting (v1.27.0, F1) ──────────────
+
+def _resolve_session_or_404(session_id: str):
+    """Return the session or raise a 404-style error response."""
+    sess = session_registry.get(session_id)
+    if sess is None:
+        return None, api_error("auth_clone", "session_not_found",
+                               f"Session {session_id} not found", 404)
+    return sess, None
+
+
+@app.get("/session/{session_id}/export-cookies")
+async def session_export_cookies(session_id: str):
+    """Export all cookies from a session (auth-clone source).
+
+    Returns the cookies as CDP ``Network.Cookie`` objects (name, value,
+    domain, path, expires, httpOnly, secure, sameSite).  The payload is
+    intended for immediate re-import into another session via
+    ``/session/{sid}/import-cookies``.
+    """
+    sess, err = _resolve_session_or_404(session_id)
+    if err:
+        return err
+    try:
+        res = await sess.client.get_cookies()
+    except Exception as exc:
+        return api_error("auth_clone", "cookie_export_failed", str(exc), 502)
+    return api_success("auth_clone", {
+        "session_id": session_id,
+        "count": res.get("count", 0),
+        "cookies": res.get("cookies", []),
+    })
+
+
+@app.post("/session/{session_id}/import-cookies")
+async def session_import_cookies(session_id: str, payload: dict):
+    """Import cookies into a session (auth-clone target).
+
+    Body: ``{"cookies": [...]}`` — CDP ``Network.CookieParam`` shapes.
+    """
+    sess, err = _resolve_session_or_404(session_id)
+    if err:
+        return err
+    cookies = payload.get("cookies")
+    if not isinstance(cookies, list):
+        return api_error("auth_clone", "invalid_payload",
+                         "Body must be {'cookies': [...]}", 400)
+    try:
+        res = await sess.client.set_cookies(cookies)
+    except Exception as exc:
+        return api_error("auth_clone", "cookie_import_failed", str(exc), 502)
+    return api_success("auth_clone", {
+        "session_id": session_id,
+        "imported": res.get("imported", 0),
+    })
+
+
+@app.post("/session/{session_id}/clone")
+async def session_clone(session_id: str):
+    """Clone a session: mint a new session and copy all cookies over.
+
+    The new session is immediately usable and carries the source session's
+    authenticated state (e.g. Cloudflare cf_clearance, Google session).
+    """
+    src_sess, err = _resolve_session_or_404(session_id)
+    if err:
+        return err
+    try:
+        # 1. Export cookies from the source session.
+        res = await src_sess.client.get_cookies()
+        cookies = res.get("cookies", [])
+        # 2. Mint a fresh session (own tab) via the registry.
+        new_sess = await session_registry.create(_local_cdp_http(), url="about:blank")
+        # 3. Import the cookies into the new session's tab.
+        imp = await new_sess.client.set_cookies(cookies)
+        imported = imp.get("imported", 0)
+    except Exception as exc:
+        return api_error("auth_clone", "clone_failed", str(exc), 502)
+    return api_success("auth_clone", {
+        "session_id": new_sess.session_id,
+        "tab_id": new_sess.tab_id,
+        "source_session_id": session_id,
+        "cookies_copied": imported,
+    })
+
+
 @app.get("/stealth/config")
 async def get_stealth_config():
     """Return the current stealth configuration (enabled level, patches)."""
@@ -2932,6 +3018,36 @@ async def set_cookie(body: SetCookieRequest):
 async def clear_cookies():
     """Clear all browser cookies."""
     return await run_op("clear_cookies", client.clear_cookies)
+
+
+@app.post("/session/{sid}/export-cookies")
+async def handle_export_cookies(request: Request, sid: str):
+    """Export every cookie for the session *sid* as JSON.
+
+    Resolves the session from the ``X-Session-ID`` header / ``bh_session``
+    cookie (path parameter) and returns its full cookie jar via CDP
+    ``Network.getAllCookies``. Each cookie carries the stable keys ``name``,
+    ``value``, ``domain``, ``path``, ``expires``, ``httpOnly``, ``secure``,
+    ``sameSite``.
+
+    Responses: 200 with ``{"cookies": [...]}`` on success, 404 with a JSON
+    error body when the session does not exist, 503 when the session's CDP
+    connection is unavailable.
+    """
+    if not sid:
+        return api_error("export_cookies", "invalid_session_id", "sid must be a non-empty string", 400)
+    try:
+        from services.cookie_service import export_cookies
+        from services.cookie_service import SessionNotFoundError
+
+        data = await export_cookies(sid)
+    except SessionNotFoundError:
+        return api_error("export_cookies", "session_not_found", f"Session {sid} not found", 404)
+    except Exception as exc:
+        logger.exception("Cookie export failed for session %s", sid)
+        return api_error("export_cookies", "operation_failed", str(exc), 503)
+    return JSONResponse(content=api_success("export_cookies", data))
+
 
 
 # ---------------------------------------------------------------------------
