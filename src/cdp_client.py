@@ -1002,6 +1002,107 @@ class CDPClient:
             data = {"error": "parse failed"}
         return {"status": "ok", "selector": selector, "timeout": timeout, "result": data}
 
+    # ─── v1.27: F2 — generic wait-for / assertion engine ───────────
+
+    async def wait_for_condition(self, kind: str, value: str, condition: str = "present",
+                                 timeout: int = 10) -> dict:
+        """Wait until a DOM condition holds (selector|text|url × present|gone|visible).
+
+        *kind*: ``selector`` (CSS), ``text`` (visible text), ``url`` (substring
+        of the current URL).
+        *condition*: ``present`` (exists), ``gone`` (does not exist),
+        ``visible`` (exists and visible).
+        Polls every 200 ms; returns ok/error deterministically.
+        """
+        await self._activate_current()
+        cond_js = {
+            "selector": "document.querySelector({v}) !== null",
+            "text": "document.body && document.body.innerText.includes({v})",
+            "url": "location.href.includes({v})",
+        }
+        if kind not in cond_js:
+            return {"status": "error", "error": f"unknown kind: {kind} (selector|text|url)"}
+        if condition not in ("present", "gone", "visible"):
+            return {"status": "error", "error": f"unknown condition: {condition} (present|gone|visible)"}
+        base = cond_js[kind]
+        if kind == "selector" and condition == "visible":
+            base = "(() => { const el = document.querySelector({v}); return el !== null && el.offsetParent !== null; })()"
+        check = f"!({base})" if condition == "gone" else base
+        js = f"""
+(async function() {{
+  const deadline = Date.now() + {int(timeout) * 1000};
+  const poll = 200;
+  const v = {json.dumps(value)};
+  while (Date.now() < deadline) {{
+    try {{
+      if ({check}) return JSON.stringify({{status: "ok", condition: "{condition}", kind: "{kind}"}});
+    }} catch (e) {{ if ("{condition}" === "gone") return JSON.stringify({{status: "ok", condition: "gone"}}); }}
+    await new Promise(r => setTimeout(r, poll));
+  }}
+  return JSON.stringify({{status: "error", error: "timeout after {int(timeout)}s waiting for {condition} {kind}=" + v}});
+}})();
+"""
+        result = await self.evaluate(js)
+        raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed"}
+        return {"status": "ok", "kind": kind, "value": value, "condition": condition,
+                "timeout": timeout, "result": data}
+
+    async def assert_elements(self, kind: str, value: str, condition: str = "exists",
+                              expected: int | None = None) -> dict:
+        """Assert a DOM condition, returning structured pass/fail.
+
+        *kind*: ``selector`` | ``text`` | ``url``.
+        *condition*: ``exists`` | ``not_exists`` | ``count`` | ``contains``.
+        For ``count``, *expected* is the exact number of matches.
+        For ``contains`` (text only), *expected* is the substring to find
+        inside the matched element's text.
+        Returns ``{"status": "ok", "passed": bool, ...}`` — callers decide
+        whether a failed assertion is an error (REST 409 / MCP tool_error).
+        """
+        await self._activate_current()
+        if kind not in ("selector", "text", "url"):
+            return {"status": "error", "error": f"unknown kind: {kind} (selector|text|url)"}
+        if condition not in ("exists", "not_exists", "count", "contains"):
+            return {"status": "error", "error": f"unknown condition: {condition} (exists|not_exists|count|contains)"}
+        if condition == "count" and expected is None:
+            return {"status": "error", "error": "expected count required for condition=count"}
+        js = f"""
+(() => {{
+  const v = {json.dumps(value)};
+  let found, count = 0, sample = "";
+  if ("{kind}" === "selector") {{
+    const els = document.querySelectorAll(v);
+    count = els.length;
+    found = count > 0;
+    sample = found ? (els[0].textContent || "").trim().substring(0, 200) : "";
+  }} else if ("{kind}" === "text") {{
+    found = document.body ? document.body.innerText.includes(v) : false;
+    count = found ? 1 : 0;
+  }} else {{
+    found = location.href.includes(v);
+    count = found ? 1 : 0;
+  }}
+  let passed;
+  if ("{condition}" === "exists") passed = found;
+  else if ("{condition}" === "not_exists") passed = !found;
+  else if ("{condition}" === "count") passed = count === {int(expected) if expected is not None else -1};
+  else passed = found && sample.includes({json.dumps(expected) if expected is not None else ""});
+  return JSON.stringify({{passed, found, count, sample: sample.substring(0, 200), kind: "{kind}", condition: "{condition}"}});
+}})();
+"""
+        result = await self.evaluate(js)
+        raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"passed": False, "error": "parse failed"}
+        return {"status": "ok", "kind": kind, "value": value, "condition": condition,
+                "expected": expected, "result": data}
+
     # ─── v0.8: Wait for visible element ─────────────────────────────
 
     async def wait_visible(self, selector: str, timeout: int = 10) -> dict:

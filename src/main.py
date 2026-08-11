@@ -2406,6 +2406,55 @@ async def wait_network_idle(body: WaitNavigationRequest | None = None):
                         timeout, quiet_ms)
 
 
+# ── v1.27: F2 — generic wait-for / assertion engine ────────────────
+
+class WaitForRequest(BaseModel):
+    """Generic DOM wait: kind × condition."""
+
+    kind: str = Field("selector", description="selector|text|url")
+    value: str = Field(..., description="CSS selector, text substring, or URL substring")
+    condition: str = Field("present", description="present|gone|visible")
+    timeout: int = Field(10, description="Max seconds to wait")
+
+
+class AssertRequest(BaseModel):
+    """DOM assertion: kind × condition, with optional expected value."""
+
+    kind: str = Field("selector", description="selector|text|url")
+    value: str = Field(..., description="CSS selector, text substring, or URL substring")
+    condition: str = Field("exists", description="exists|not_exists|count|contains")
+    expected: int | str | None = Field(None, description="Expected count (int) or substring (str)")
+
+
+@app.post("/wait/for")
+async def wait_for(body: WaitForRequest):
+    """Wait until a DOM condition holds (deterministic, no guessy sleeps).
+
+    kind=selector|text|url, condition=present|gone|visible.
+    """
+    return await run_op("wait_for", client.wait_for_condition,
+                        body.kind, body.value, body.condition, body.timeout)
+
+
+@app.post("/assert")
+async def assert_dom(body: AssertRequest):
+    """Assert a DOM condition, returning structured pass/fail.
+
+    On a failed assertion returns HTTP 409 with the mismatch details —
+    the caller's test can fail deterministically instead of guessing.
+    """
+    res = await run_op("assert", client.assert_elements,
+                       body.kind, body.value, body.condition, body.expected)
+    data = res.get("data", {}) if isinstance(res, dict) else {}
+    result = data.get("result") if isinstance(data, dict) else None
+    passed = result.get("passed") if isinstance(result, dict) else None
+    if passed is False:
+        return api_error("assert", "assertion_failed",
+                         f"Assertion failed: {body.condition} {body.kind}={body.value}",
+                         409, details=data)
+    return res
+
+
 @app.post("/page/diff")
 async def page_diff(body: dict | None = None):
     """Compare current page state with a previous snapshot.

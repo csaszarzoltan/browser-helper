@@ -44,6 +44,9 @@ _TOOL_CAPABILITY = {
     "export_cookies": "browser.core",
     "import_cookies": "browser.core",
     "clone_session": "browser.core",
+    # Wait-for / assertion engine (v1.27.0, F2)
+    "wait_for": "browser.core",
+    "assert": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -197,6 +200,27 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "session_id": {"type": "string", "description": "Source session id to clone (optional — uses current session)"},
         },
     },
+    # Wait-for / assertion engine (v1.27.0, F2)
+    "wait_for": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "description": "selector|text|url (default selector)"},
+            "value": {"type": "string", "description": "CSS selector, text substring, or URL substring"},
+            "condition": {"type": "string", "description": "present|gone|visible (default present)"},
+            "timeout": {"type": "integer", "description": "Max seconds to wait (default 10)"},
+        },
+        "required": ["value"],
+    },
+    "assert": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "description": "selector|text|url (default selector)"},
+            "value": {"type": "string", "description": "CSS selector, text substring, or URL substring"},
+            "condition": {"type": "string", "description": "exists|not_exists|count|contains (default exists)"},
+            "expected": {"oneOf": [{"type": "integer"}, {"type": "string"}], "description": "Expected count (int) or substring (str)"},
+        },
+        "required": ["value"],
+    },
 }
 
 
@@ -274,6 +298,8 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
             return getattr(fleet_tools, name)
         if name.startswith("memory_"):
             return getattr(memory_tools, name)
+        if name == "assert":
+            return getattr(tools, "assert_")  # Python keyword — module uses assert_
         return getattr(tools, name)
 
     defs: list[ToolDef] = []

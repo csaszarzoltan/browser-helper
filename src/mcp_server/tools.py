@@ -465,3 +465,54 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
         return tool_error("clone_session", "session_not_found", str(exc))
     except Exception as exc:
         return tool_error("clone_session", "clone_failed", str(exc))
+
+
+# ── Wait-for / assertion engine (v1.27.0, F2) ────────────────────────
+
+
+async def wait_for(kind: str = "selector", value: str = "", condition: str = "present",
+                   timeout: int = 10, ctx: Context | None = None) -> str:
+    """Wait until a DOM condition holds (capability ``browser.core``, READY).
+
+    kind=selector|text|url, condition=present|gone|visible.  Deterministic —
+    no guessy sleeps; returns ok once the condition holds, error on timeout.
+    """
+    from main import client, run_op
+
+    if ctx is not None:
+        ctx.info(f"wait_for kind={kind} value={value} condition={condition} timeout={timeout}")
+    sess, run_op_fn = await _mcp_session()
+    target = sess.client if sess is not None else client
+    try:
+        res = await run_op_fn("wait_for", target.wait_for_condition,
+                              kind, value, condition, timeout)
+        return json_dumps({"status": "ok", "operation": "wait_for",
+                           "data": res, "error": None, "meta": {}})
+    except Exception as exc:
+        return tool_error("wait_for", "wait_failed", str(exc))
+
+
+async def assert_(kind: str = "selector", value: str = "", condition: str = "exists",
+                  expected: int | str | None = None, ctx: Context | None = None) -> str:
+    """Assert a DOM condition (capability ``browser.core``, READY).
+
+    Returns a structured pass/fail; a failed assertion is reported as an
+    error so the agent's test fails deterministically.
+    """
+    from main import client, run_op
+
+    if ctx is not None:
+        ctx.info(f"assert kind={kind} value={value} condition={condition} expected={expected}")
+    sess, run_op_fn = await _mcp_session()
+    target = sess.client if sess is not None else client
+    try:
+        res = await run_op_fn("assert", target.assert_elements,
+                              kind, value, condition, expected)
+        result = (res or {}).get("result") if isinstance(res, dict) else None
+        if isinstance(result, dict) and result.get("passed") is False:
+            return tool_error("assert", "assertion_failed",
+                              f"Assertion failed: {condition} {kind}={value} (found={result.get('found')}, count={result.get('count')})")
+        return json_dumps({"status": "ok", "operation": "assert",
+                           "data": res, "error": None, "meta": {}})
+    except Exception as exc:
+        return tool_error("assert", "assertion_failed", str(exc))
