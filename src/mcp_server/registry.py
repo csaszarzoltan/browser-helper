@@ -41,9 +41,9 @@ _TOOL_CAPABILITY = {
     "memory_forget": "memory.persistent",
     "memory_list": "memory.persistent",
     # Auth-session clone / cookie porting (v1.27.0, F1)
-    "export_cookies": "browser.core",
-    "import_cookies": "browser.core",
-    "clone_session": "browser.core",
+    "export_cookies": "diagnostics.cookies",
+    "import_cookies": "diagnostics.cookies",
+    "clone_session": "diagnostics.cookies",
     # Wait-for / assertion engine (v1.27.0, F2)
     "wait_for": "browser.core",
     "assert": "browser.core",
@@ -195,6 +195,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "session_id": {"type": "string", "description": "Source session id (optional — uses current session)"},
         },
+        "required": ["session_id"],
     },
     "import_cookies": {
         "type": "object",

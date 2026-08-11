@@ -395,7 +395,7 @@ async def _resolve_cookie_target(session_id: str | None):
     return (sess.client if sess is not None else client), sess
 
 
-async def export_cookies(session_id: str | None = None, ctx: Context | None = None) -> str:
+async def export_cookies(session_id: str, ctx: Context | None = None) -> str:
     """Export all cookies from a session (capability ``browser.core``, READY).
 
     Returns CDP Cookie objects (name, value, domain, path, expires,
@@ -470,7 +470,7 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
 # ── Wait-for / assertion engine (v1.27.0, F2) ────────────────────────
 
 
-async def wait_for(kind: str = "selector", value: str = "", condition: str = "present",
+async def wait_for(value: str, kind: str = "selector", condition: str = "present",
                    timeout: int = 10, ctx: Context | None = None) -> str:
     """Wait until a DOM condition holds (capability ``browser.core``, READY).
 
@@ -492,8 +492,8 @@ async def wait_for(kind: str = "selector", value: str = "", condition: str = "pr
         return tool_error("wait_for", "wait_failed", str(exc))
 
 
-async def assert_(kind: str = "selector", value: str = "", condition: str = "exists",
-                  expected: int | str | None = None, ctx: Context | None = None) -> str:
+async def assert_(value: str, kind: str = "selector", condition: str = "exists",
+                  expected: str | int | None = None, ctx: Context | None = None) -> str:
     """Assert a DOM condition (capability ``browser.core``, READY).
 
     Returns a structured pass/fail; a failed assertion is reported as an

@@ -1,12 +1,23 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.26.3-blue)
+![Version](https://img.shields.io/badge/version-1.27.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-2559%20passed-brightgreen)
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
 ## Latest UX improvements
+
+### v1.27 — Agent Toolkit (2026-08-11)
+
+Six developer-facing features for deterministic automation and multi-agent workflows:
+
+- **Auth-session clone (F1)** — `POST /session/{sid}/export-cookies`, `/import-cookies`, `/clone`: port a logged-in session (cookies, `cf_clearance`) across profiles/browsers. MCP: `export_cookies`, `import_cookies`, `clone_session`.
+- **Wait-for / assertion engine (F2)** — `POST /wait/for` (selector|text|url × present|gone|visible) and `POST /assert` (exists|not_exists|count|contains; 409 on failure). MCP: `wait_for`, `assert`. No more sleep-guessing in tests.
+- **Form-intelligence (F3)** — `POST /form/extract` discovers form structure (label/type/required/visible). MCP: `form_fill`, `form_extract`.
+- **Fleet run-batch (F4)** — `POST /fleet/run-batch`: run N isolated browsing tasks in parallel (1-8), per-task error isolation, aggregated report. MCP: `fleet_run_batch`.
+- **Download helper (F5)** — `POST /page/download` downloads a file through the browser into the artifact store. MCP: `download`.
+- **Network interception (F6)** — `POST /network/block` fails requests matching URL regexes (analytics/trackers, error-path tests); `POST /network/mock` (existing) now exposed via MCP `network_block` / `network_mock`.
 
 ### v1.19 - Visual workflow builder
 

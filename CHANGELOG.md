@@ -4,6 +4,17 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.0] — 2026-08-11
+
+#### Added — Agent Toolkit (6 features)
+
+- **F1 — Auth-session clone**: `POST /session/{sid}/export-cookies`, `POST /session/{sid}/import-cookies`, `POST /session/{sid}/clone` + `CDPClient.set_cookies` (bulk). MCP: `export_cookies`, `import_cookies`, `clone_session`. Lets you port a logged-in session (e.g. Cloudflare `cf_clearance`) across profiles/browsers.
+- **F2 — Wait-for / assertion engine**: `POST /wait/for` (selector|text|url × present|gone|visible) + `POST /assert` (exists|not_exists|count|contains, 409 on failure) + `CDPClient.wait_for_condition` / `assert_elements`. MCP: `wait_for`, `assert`. Deterministic UI testing — no sleep-guessing.
+- **F3 — Form-intelligence**: `POST /form/extract` + `CDPClient.form_extract` (label/type/required/visible per field). MCP: `form_fill`, `form_extract`. Discover SPA forms before filling.
+- **F4 — Fleet run-batch**: `POST /fleet/run-batch` — parallel isolated browsing tasks (1-8 concurrency), per-task error isolation, aggregated report. MCP: `fleet_run_batch`.
+- **F5 — Download helper**: `POST /page/download` + `CDPClient.download_file` (Browser.setDownloadBehavior + poll), artifacts stored via `ArtifactStore` (`GET /artifacts/{id}`). MCP: `download`.
+- **F6 — Network interception**: `POST /network/block` + `CDPClient.set_network_block` (Fetch.failRequest, regex patterns); `POST /network/mock` (existing) now has MCP: `network_block`, `network_mock`. Block analytics/trackers or test error paths deterministically.
+
 ## [1.26.3] — 2026-08-11
 
 #### Fixed

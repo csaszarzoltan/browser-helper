@@ -450,6 +450,7 @@ curl -s -X POST http://localhost:8000/type \
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/form/fill` | Fill multiple form fields by label, CSS selector, or placeholder **v1.1 enhanced** |
+| `POST` | `/form/extract` | Extract form structure (label/type/required/visible per field) **v1.27** |
 | `POST` | `/form/select` | Select an option from a dropdown |
 | `POST` | `/form/select/by-label` | Alias for `/form/select` with `by=label` **NEW v0.8** |
 | `POST` | `/dropdown/select` | Simplified dropdown selection by label **NEW v0.8** |
@@ -666,6 +667,8 @@ curl -s -X POST http://localhost:8000/checkbox/deselect \
 | `POST` | `/wait/text` | Wait for text content to appear/disappear |
 | `POST` | `/wait/navigation` | Wait for page navigation to complete |
 | `POST` | `/wait/network-idle` | Wait for network to be idle |
+| `POST` | `/wait/for` | Wait for a DOM condition (selector|text|url × present|gone|visible) **v1.27** |
+| `POST` | `/assert` | Assert a DOM condition (exists|not_exists|count|contains; 409 on failure) **v1.27** |
 
 #### POST /wait
 
@@ -865,6 +868,7 @@ curl -s -X POST http://localhost:8000/wait/network-idle \
 | `POST` | `/page/find` | Find elements containing specific text |
 | `POST` | `/page/outline` | Get a simplified outline of the page structure |
 | `POST` | `/page/diff` | Compare current page state against previous snapshot |
+| `POST` | `/page/download` | Download a file through the browser into the artifact store **v1.27** |
 
 #### POST /page/analyze
 
@@ -1796,6 +1800,10 @@ curl -s -X POST http://localhost:8000/network/clear \
 |--------|------|-------------|
 | `POST` | `/session/save` | Save the current session state |
 | `POST` | `/session/restore` | Restore a previously saved session |
+| `POST` | `/session/{session_id}/export-cookies` | Export all cookies from a session **v1.27** |
+| `POST` | `/session/{sid}/export-cookies` | Export all cookies from a session (alias) **v1.27** |
+| `POST` | `/session/{session_id}/import-cookies` | Import cookies into a session **v1.27** |
+| `POST` | `/session/{session_id}/clone` | Clone a session (cookies + storage) into a new session **v1.27** |
 
 #### POST /session/save
 
@@ -3146,11 +3154,13 @@ High-level agent operations that combine multiple CDP steps into one call:
 
 - `POST /recording/start`, `POST /recording/stop`, `GET /recording/status` — CDP screencast to GIF.
 - `POST /network/mock` — mock API responses.
+- `POST /network/block` — fail requests matching URL regex patterns (analytics/trackers, error-path tests) **v1.27**.
 
 ## Fleet orchestration (v1.18+)
 
 - `GET /fleet`, `/fleet/nodes`, `/fleet/sessions`
 - `POST /fleet/nodes/register`, `/fleet/failover`, `/fleet/queue/sweep`, `/fleet/session`
+- `POST /fleet/run-batch` — run N isolated browsing tasks in parallel with per-task error isolation **v1.27**
 - `POST /fleet/nodes/health-check`, `/fleet/nodes/{node_id}/health`, `/fleet/nodes/{node_id}/health-check`, `/fleet/nodes/{node_id}/unregister`
 - `POST /fleet/session/{session_id}/release`
 - `GET /backend/status`, `POST /backend/switch`
