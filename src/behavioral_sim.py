@@ -275,8 +275,13 @@ class BehavioralSimulator:
         if not text:
             return []
 
+        # Deterministic seed: crc32 (NOT hash() — PYTHONHASHSEED-randomized
+        # per process, and the old code reseeded rng with a fresh Random()
+        # below, making typo generation fully non-deterministic → flaky tests).
+        import zlib
+
         rng = random.Random()
-        rng.seed(hash(text) % (2**31))
+        rng.seed(zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF)
 
         min_wpm, max_wpm = wpm_range
         base_wpm = rng.randint(min_wpm, max_wpm)
@@ -290,9 +295,9 @@ class BehavioralSimulator:
 
         results: list[dict[str, Any]] = []
 
-        # Use fresh randomness for each call
-        import random as _random_module
-        rng = _random_module.Random()
+        # rng is already seeded deterministically above — do NOT reseed here
+        # (the old `import random as _random_module; rng = _random_module.Random()`
+        # discarded the seed and made typo generation non-deterministic).
 
         # Letters near home row are faster
         fast_chars = set("asdfghjkl;'qwertyuiop[]zxcvbnm,./ ")
