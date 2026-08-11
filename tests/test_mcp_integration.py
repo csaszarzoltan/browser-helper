@@ -90,12 +90,22 @@ EXPECTED_TOOLS = [
     "close_tab",
     "session_status",
     "export_cookies",
+    "import_cookies",
+    "clone_session",
+    "wait_for",
+    "assert",
+    "form_fill",
+    "form_extract",
+    "download",
+    "network_block",
+    "network_mock",
     "search",
     "get_content",
     "run_flow",
     "fleet_nodes",
     "fleet_status",
     "fleet_queue",
+    "fleet_run_batch",
     "memory_remember",
     "memory_recall",
     "memory_forget",
@@ -590,4 +600,24 @@ def _args_for(name: str) -> dict:
         return {"action": "wait", "text": "noop", "timeout": 1}
     if name == "export_cookies":
         return {"session_id": "noop_session"}
+    if name == "import_cookies":
+        return {"cookies": []}
+    if name == "clone_session":
+        return {"session_id": "noop_session"}
+    if name == "wait_for":
+        return {"value": "#noop", "kind": "selector", "condition": "present", "timeout": 1}
+    if name == "assert":
+        return {"value": "#noop", "kind": "selector", "condition": "exists"}
+    if name == "form_fill":
+        return {"fields": []}
+    if name == "form_extract":
+        return {}
+    if name == "download":
+        return {"url": "about:blank", "timeout": 1}
+    if name == "network_block":
+        return {"patterns": []}
+    if name == "network_mock":
+        return {"mocks": []}
+    if name == "fleet_run_batch":
+        return {"tasks": []}
     return {}
