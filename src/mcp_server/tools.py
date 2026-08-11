@@ -516,3 +516,47 @@ async def assert_(kind: str = "selector", value: str = "", condition: str = "exi
                            "data": res, "error": None, "meta": {}})
     except Exception as exc:
         return tool_error("assert", "assertion_failed", str(exc))
+
+
+# ── Form-intelligence (v1.27.0, F3) ──────────────────────────────────
+
+
+async def form_fill(fields: list[dict], timeout: int = 5, ctx: Context | None = None) -> str:
+    """Fill SPA form fields by label/selector (capability ``browser.core``, READY).
+
+    Each field: {label|selector|placeholder, value, nth?}.  Uses the
+    value-setter technique (native setter + input/change/blur events) so
+    React/Angular controlled inputs register the change.
+    """
+    from main import client, run_op
+
+    if ctx is not None:
+        ctx.info(f"form_fill fields={len(fields or [])}")
+    sess, run_op_fn = await _mcp_session()
+    target = sess.client if sess is not None else client
+    try:
+        res = await run_op_fn("form_fill", target.smart_form_fill, fields or [], timeout)
+        return json_dumps({"status": "ok", "operation": "form_fill",
+                           "data": res, "error": None, "meta": {}})
+    except Exception as exc:
+        return tool_error("form_fill", "form_fill_failed", str(exc))
+
+
+async def form_extract(ctx: Context | None = None) -> str:
+    """Extract the page's form structure (capability ``browser.core``, READY).
+
+    Returns each form's fields: tag, type, name, label, placeholder,
+    required, visible — feed the labels into form_fill.
+    """
+    from main import client, run_op
+
+    if ctx is not None:
+        ctx.info("form_extract")
+    sess, run_op_fn = await _mcp_session()
+    target = sess.client if sess is not None else client
+    try:
+        res = await run_op_fn("form_extract", target.form_extract)
+        return json_dumps({"status": "ok", "operation": "form_extract",
+                           "data": res, "error": None, "meta": {}})
+    except Exception as exc:
+        return tool_error("form_extract", "form_extract_failed", str(exc))

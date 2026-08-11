@@ -875,6 +875,79 @@ class CDPClient:
             data = {"error": "parse failed", "raw": str(raw)[:200]}
         return {"status": "ok", "fields": fields, "result": data}
 
+    # ─── v1.27: F3 — form structure extraction ─────────────────────
+
+    async def form_extract(self) -> dict:
+        """Extract the page's form structure (fields, types, labels, required).
+
+        Returns a list of form descriptors — each field's name, type,
+        placeholder, aria-label, associated label text, required flag, and
+        whether it's visible.  Lets an agent introspect a form before
+        filling it (``smart_form_fill`` with exact labels).
+        """
+        await self._activate_current()
+        js = r"""
+(() => {
+  const forms = Array.from(document.querySelectorAll("form"));
+  const seen = new Set();
+  const out = [];
+  for (const form of forms) {
+    const fields = Array.from(form.querySelectorAll("input, textarea, select, button[type='submit'], [contenteditable='true']"));
+    const descs = [];
+    for (const el of fields) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      let labelText = "";
+      if (el.id && document.querySelector("label[for='" + CSS.escape(el.id) + "']")) {
+        labelText = document.querySelector("label[for='" + CSS.escape(el.id) + "']").textContent.trim();
+      } else {
+        const wrap = el.closest("label");
+        if (wrap) labelText = wrap.textContent.trim();
+      }
+      if (!labelText) {
+        const prev = el.previousElementSibling;
+        if (prev && (prev.tagName === "LABEL" || prev.tagName === "SPAN" || prev.tagName === "DIV"))
+          labelText = prev.textContent.trim().substring(0, 100);
+      }
+      const tag = el.tagName.toLowerCase();
+      const type = el.type || (tag === "select" ? "select" : tag === "textarea" ? "textarea" : "text");
+      descs.push({
+        tag: tag,
+        type: type,
+        name: el.name || "",
+        id: el.id || "",
+        placeholder: el.placeholder || "",
+        aria_label: el.getAttribute("aria-label") || "",
+        label: labelText.substring(0, 120),
+        required: !!el.required || el.getAttribute("aria-required") === "true",
+        visible: el.offsetParent !== null,
+        options: tag === "select" ? Array.from(el.options).map(o => o.text).slice(0, 20) : undefined
+      });
+    }
+    if (descs.length) out.push({form_id: form.id || "", form_action: form.action || "", fields: descs});
+  }
+  // Orphan fields (outside <form>)
+  const orphan = Array.from(document.querySelectorAll("input:not(form input), textarea:not(form textarea)"));
+  const od = [];
+  for (const el of orphan) {
+    if (seen.has(el)) continue;
+    seen.add(el);
+    od.push({tag: el.tagName.toLowerCase(), type: el.type || "text", name: el.name || "",
+             id: el.id || "", placeholder: el.placeholder || "", required: !!el.required,
+             visible: el.offsetParent !== null});
+  }
+  if (od.length) out.push({form_id: "(orphan)", form_action: "", fields: od});
+  return JSON.stringify({forms: out.length, form_count: out.length, forms_list: out});
+})();
+"""
+        result = await self.evaluate(js)
+        raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            data = {"error": "parse failed", "raw": str(raw)[:200]}
+        return {"status": "ok", "result": data}
+
     async def fill_autocomplete(self, label: str, value: str, timeout_ms: int = 5000) -> dict:
         """Fill an autocomplete field and click the first matching visible option."""
         await self._activate_current()

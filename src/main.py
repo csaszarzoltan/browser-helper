@@ -2122,6 +2122,16 @@ async def form_fill(body: FormFillRequest):
                         body.fields, body.timeout)
 
 
+@app.post("/form/extract")
+async def form_extract():
+    """Extract the page's form structure (fields, types, labels, required).
+
+    Lets an agent introspect a SPA form before filling it — the returned
+    labels/names feed directly into /form/fill.
+    """
+    return await run_op("form_extract", client.form_extract)
+
+
 @app.post("/wait")
 async def wait_element(body: WaitRequest):
     """Wait until an element matching *selector* appears in the DOM.

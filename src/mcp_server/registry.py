@@ -47,6 +47,9 @@ _TOOL_CAPABILITY = {
     # Wait-for / assertion engine (v1.27.0, F2)
     "wait_for": "browser.core",
     "assert": "browser.core",
+    # Form-intelligence (v1.27.0, F3)
+    "form_fill": "browser.core",
+    "form_extract": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -220,6 +223,19 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "expected": {"oneOf": [{"type": "integer"}, {"type": "string"}], "description": "Expected count (int) or substring (str)"},
         },
         "required": ["value"],
+    },
+    # Form-intelligence (v1.27.0, F3)
+    "form_fill": {
+        "type": "object",
+        "properties": {
+            "fields": {"type": "array", "description": "List of {label|selector|placeholder, value, nth?} field descriptors"},
+            "timeout": {"type": "integer", "description": "Max seconds per field (default 5)"},
+        },
+        "required": ["fields"],
+    },
+    "form_extract": {
+        "type": "object",
+        "properties": {},
     },
 }
 
