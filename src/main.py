@@ -331,6 +331,10 @@ class ClickRequest(BaseModel):
     selector: str
 
 
+class NavigateRequest(BaseModel):
+    url: str
+
+
 class TypeRequest(BaseModel):
     selector: str
     text: str
@@ -2044,13 +2048,26 @@ async def connect(body: ConnectRequest | None = None):
 
 
 @app.post("/navigate")
-async def navigate(url: str = Query(..., description="Target URL to navigate to")):
+async def navigate(url: str | None = Query(default=None, description="Target URL to navigate to"),
+                   body: NavigateRequest | None = None):
     """Navigate the current tab to *url*.
+
+    The URL is accepted either as the ``?url=`` query parameter (legacy) OR
+    in the JSON body ``{"url": "..."}``.  If neither is provided → 422 with
+    a clear message (this used to be a bare 422 that confused callers into
+    thinking the service was broken — see the 2026-08-11 agent incident).
 
     Fix-3 (1-tab-per-session): cross-origin navigation can make Chrome create
     a fresh target.  When that happens the session ROAMS onto the new tab AND
     closes the old one, so a session never ends up owning two tabs.
     """
+    if url is None and body is not None:
+        url = getattr(body, "url", None)
+    if url is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Missing 'url' — pass it as ?url=... query param OR JSON body {\"url\": \"...\"}",
+        )
     # Invalidate tab cache — navigation changes the page URL
     client._tabs_cache = []
     client._tabs_cache_ts = 0
@@ -2092,8 +2109,27 @@ async def eval_js(body: EvalRequest):
 
 @app.post("/click")
 async def click_element(body: ClickRequest):
-    """Click the element matching *selector* (CSS selector)."""
-    return await run_op("click", client.click, body.selector)
+    """Click the element matching *selector* (CSS selector).
+
+    Returns 404 with a clear message when the selector matches nothing on the
+    current tab — previously the underlying CDP call returned ``200 OK`` with
+    an ``{error: "Element not found"}`` payload, which callers misread as a
+    successful click on a wrong/blank tab (2026-08-11 agent incident).
+    """
+    result = await run_op("click", client.click, body.selector)
+    # The CDP click returns {status: "error"} INSIDE the run_op "data" — the
+    # run_op envelope itself is always "ok" for a completed (non-throwing) CDP
+    # call.  Unwrap the inner status to detect "Element not found" and turn it
+    # into a real 404 instead of a misleading 200 OK.
+    inner = result.get("data") if isinstance(result, dict) else None
+    if isinstance(inner, dict) and inner.get("status") == "error":
+        err = str(inner.get("error", ""))
+        if "not found" in err.lower() or "no element" in err.lower():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Element not found for selector {body.selector!r} on the current tab",
+            )
+    return result
 
 
 @app.post("/click/coordinates")
