@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.1] — 2026-08-11
+
+#### Fixed
+- **`POST /navigate` accepts the URL in the JSON body** (`{"url": "..."}`) in addition to the legacy `?url=` query param. Previously a body-only caller got a bare 422 and — worse — their session stayed on `about:blank`, so subsequent clicks silently ran on a blank tab (the "Uncaught" agent-incident). A missing URL now returns a clear, actionable 422: `"Missing 'url' — pass it as ?url=... query param OR JSON body {...}"`.
+- **`POST /click` returns 404 "Element not found"** when the selector matches nothing on the current tab (was: misleading 200 OK wrapping `{status: "error"}` inside `data`, which callers misread as a successful click). The unwrap now checks the inner CDP status.
+- **`CDPClient.click` treats an empty/undefined JS result as "Element not found"** — previously a JS exception inside `scrollIntoView`/`getBoundingClientRect` produced `ok @ (0,0)` and dispatched a click on the page corner. Now it returns `{status: "error", error: "Element not found: ..."}`.
+- **`BehavioralSimulator.keystroke_timing` is deterministic** — the RNG was seeded with `hash(text)` (PYTHONHASHSEED-randomized per process) and then reseeded with a fresh unseeded `Random()`, making typo generation fully non-deterministic and the `test_occasional_typo_backspace` test flaky. Now seeds via `crc32(text)` and drops the dead reseed. Verified: 20/20 runs pass across different `PYTHONHASHSEED`s.
+- **scipy added to the dev venv** — fixes the two pre-existing rate-limiter KS tests (`ModuleNotFoundError: scipy`).
+
 ## [1.27.0] — 2026-08-11
 
 #### Added — Agent Toolkit (6 features)

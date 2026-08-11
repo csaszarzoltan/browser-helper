@@ -1,12 +1,19 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.27.0-blue)
+![Version](https://img.shields.io/badge/version-1.27.1-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-2559%20passed-brightgreen)
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
 ## Latest UX improvements
+
+### v1.27.1 — Agent-incident fixes (2026-08-11)
+
+- **`POST /navigate` accepts the URL in the JSON body** (`{"url": "..."}`) — the old query-param-only contract made body-only callers fail with a bare 422 and stay on `about:blank`. Missing URL now returns a clear 422 message.
+- **`POST /click` returns 404 "Element not found"** when the selector matches nothing — no more misleading 200 OK on a blank/wrong tab.
+- **`CDPClient.click`** treats empty JS results as "Element not found" (was clicking `(0,0)`).
+- **Deterministic `keystroke_timing()`** RNG (crc32 seed) — the flaky typo test is stable.
 
 ### v1.27 — Agent Toolkit (2026-08-11)
 
