@@ -332,7 +332,7 @@ class ClickRequest(BaseModel):
 
 
 class NavigateRequest(BaseModel):
-    url: str
+    url: str | None = None
 
 
 class TypeRequest(BaseModel):

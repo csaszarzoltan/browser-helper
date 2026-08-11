@@ -1724,6 +1724,14 @@ class CDPClient:
         if eval_result.get("status") == "error":
             return eval_result
         pos = eval_result.get("result", {})
+        if not isinstance(pos, dict) or not pos.get("tag"):
+            # Runtime.evaluate returned undefined/empty (e.g. the JS threw
+            # inside scrollIntoView) or the element query failed silently —
+            # treat as "Element not found" instead of clicking (0, 0).
+            return {
+                "status": "error",
+                "error": f"Element not found: {selector}",
+            }
         x, y = pos.get("x", 0), pos.get("y", 0)
         # Use behavioral engine if enabled
         if self._behavioral and self._behavioral.profile.enabled:
