@@ -4,6 +4,11 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.26.3] — 2026-08-11
+
+#### Fixed
+- **Chrome double-launch storm (watchdog vs run_op)**: when a request path (`run_op`) triggered `chrome_mgr.launch()`, the in-flight launch was invisible to the health watchdog — a watchdog tick landing inside the warm-up window (CDP port momentarily unreachable) decided "Chrome not running" and launched a SECOND Chrome. The two instances fought over the profile SingletonLock and both died, producing `json/new` 500s and repeated launch storms. **Fix:** `ChromeManager._launch_in_progress` flag — set at the start of `launch()`, cleared on every return path. A concurrent `launch()` waits for the in-flight one and reuses its result; the watchdog skips relaunching when a launch is already in progress. Verified live: 5 watchdog cycles, 0 restarts, `Chrome launched on port 9557 (PID …)` reuses the same PID.
+
 ## [1.26.2] — 2026-08-10
 
 #### Fixed

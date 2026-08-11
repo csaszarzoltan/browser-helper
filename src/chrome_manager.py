@@ -163,6 +163,14 @@ class ChromeManager:
         # the first navigation (avoids the proxy-auth dialog flash).
         self._launched_at: float = 0.0
         self._warmup_sec: float = 0.0
+        # Launch-in-progress flag: set while `launch()` is awaiting the CDP
+        # port + extension warm-up, cleared when it returns.  The health
+        # watchdog checks this before deciding to launch a "fresh" Chrome —
+        # without it, a watchdog tick landing inside the warm-up window sees
+        # a momentarily-unreachable port and spawns a SECOND Chrome, which
+        # fights the first over the profile SingletonLock and both die
+        # (observed 2026-08-11: json/new 500s, double launch storm).
+        self._launch_in_progress: bool = False
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -198,11 +206,34 @@ class ChromeManager:
                          "Set it via POST /settings or edit settings.json.",
             }
 
+        # ── Guard against concurrent launches ──
+        # If another task is already inside launch() (awaiting the CDP port
+        # or the extension warm-up), do NOT start a second Chrome — wait for
+        # that launch to finish and reuse its result.  Prevents the double-
+        # launch storm where two instances fight over the SingletonLock.
+        if self._launch_in_progress:
+            logger.info("Chrome launch already in progress — waiting for it to finish")
+            deadline = time.monotonic() + 30.0
+            while self._launch_in_progress and time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+            if _is_port_in_use(port) and _detect_chrome_on_port(port):
+                self._port = port
+                self.settings.set(chrome_launched_port=port)
+                self._launch_in_progress = False
+                return {
+                    "status": "ok",
+                    "message": "Chrome already running (launched concurrently)",
+                    "port": port,
+                    "already_running": True,
+                }
+        self._launch_in_progress = True
+
         # ── Check if Chrome is already running on this port ──
         if _is_port_in_use(port) and _detect_chrome_on_port(port):
             self._port = port
             self._pid = 0  # We don't own the process
             self.settings.set(chrome_launched_port=port)
+            self._launch_in_progress = False
             return {
                 "status": "ok",
                 "message": "Chrome is already running",
@@ -236,6 +267,7 @@ class ChromeManager:
                     "Chrome already running with profile %s on port %d — reusing",
                     profile_dir, existing,
                 )
+                self._launch_in_progress = False
                 return {
                     "status": "ok",
                     "message": "Chrome already running with this profile",
@@ -252,6 +284,7 @@ class ChromeManager:
                     actual_port = candidate
                     break
             else:
+                self._launch_in_progress = False
                 return {
                     "status": "error",
                     "error": f"Port {port} through {port + 10} all in use — "
@@ -316,11 +349,13 @@ class ChromeManager:
                 env=child_env,
             )
         except FileNotFoundError:
+            self._launch_in_progress = False
             return {
                 "status": "error",
                 "error": f"Chrome executable not found: {self._chrome_path}",
             }
         except Exception as exc:
+            self._launch_in_progress = False
             return {"status": "error", "error": str(exc)}
 
         self._process = proc
@@ -363,6 +398,7 @@ class ChromeManager:
         cdp_url = f"http://127.0.0.1:{actual_port}"
         ws_url = f"ws://127.0.0.1:{actual_port}/devtools/browser/"
 
+        self._launch_in_progress = False
         return {
             "status": "ok",
             "port": actual_port,

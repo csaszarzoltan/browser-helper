@@ -243,7 +243,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.26.2",
+    version="1.26.3",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -1281,7 +1281,16 @@ async def _chrome_health_watchdog() -> None:
                         continue  # all good — Chrome is alive
                     raise ConnectionError("Chrome not responding")
             except Exception as exc:
-                # Chrome not running at all — launch a new one
+                # Chrome not running at all — launch a new one.  But if a
+                # launch is ALREADY in progress (run_op triggered it and the
+                # warm-up window is still open), do NOT spawn a second
+                # instance — the two would fight over the profile
+                # SingletonLock and both die (observed 2026-08-11: json/new
+                # 500s, launch storm).  Wait for the in-flight launch instead.
+                if chrome_mgr._launch_in_progress:
+                    logger.info("Watchdog: launch already in progress — waiting instead of relaunching")
+                    await asyncio.sleep(5.0)
+                    continue
                 logger.warning("Watchdog: Chrome not running, launching fresh instance: %s", exc)
                 try:
                     await chrome_mgr.launch()
