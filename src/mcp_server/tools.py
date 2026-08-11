@@ -603,3 +603,51 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
                                "error": None, "meta": {}})
     except Exception as exc:
         return tool_error("download", "download_failed", str(exc))
+
+
+# ── Network interception (v1.27.0, F6) ─────────────────────────────
+
+
+async def network_block(patterns: list[str], ctx: Context | None = None) -> str:
+    """Block network requests whose URL matches any regex *patterns*
+    (capability ``browser.core``, READY).
+
+    Matching requests fail with a network error (``Fetch.failRequest``) —
+    useful for stubbing analytics/trackers or testing error paths.
+    Empty list clears all blocks.
+    """
+    from main import client, run_op
+
+    if ctx is not None:
+        ctx.info(f"network_block patterns={len(patterns)}")
+    try:
+        result = await run_op("network_block", client.set_network_block, patterns)
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return tool_error("network_block", "block_failed", str(result))
+        return json_dumps({"status": "ok", "operation": "network_block",
+                           "data": {"blocked": result.get("blocked", len(patterns))},
+                           "error": None, "meta": {}})
+    except Exception as exc:
+        return tool_error("network_block", "block_failed", str(exc))
+
+
+async def network_mock(mocks: list[dict], ctx: Context | None = None) -> str:
+    """Install URL-pattern request mocks (capability ``browser.core``, READY).
+
+    Each mock: ``{"pattern": "regex", "status": 200, "body": "...",
+    "content_type": "application/json"}``.  Matching requests receive the
+    mocked response instead of hitting the network.  Empty list clears.
+    """
+    from main import client, run_op
+
+    if ctx is not None:
+        ctx.info(f"network_mock mocks={len(mocks)}")
+    try:
+        result = await run_op("network_mock", client.set_request_mocks, mocks)
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return tool_error("network_mock", "mock_failed", str(result))
+        return json_dumps({"status": "ok", "operation": "network_mock",
+                           "data": {"mocks": result.get("mocks", len(mocks))},
+                           "error": None, "meta": {}})
+    except Exception as exc:
+        return tool_error("network_mock", "mock_failed", str(exc))

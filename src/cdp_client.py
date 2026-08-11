@@ -2735,6 +2735,16 @@ class CDPClient:
             except Exception:
                 pass
             return
+        if self._match_block(url) and rid:
+            # Blocked pattern → fail the request (network error path).
+            try:
+                await self._send_command("Fetch.failRequest", {
+                    "requestId": rid,
+                    "errorReason": "BlockedByClient",
+                })
+            except Exception:
+                pass
+            return
         mock = self._match_mock(url)
         if mock is not None and rid:
             try:
@@ -2755,6 +2765,50 @@ class CDPClient:
                 await self._send_command("Fetch.continueRequest", {"requestId": rid})
             except Exception:
                 pass
+
+    # ─── v1.27: F6 — network interception (block) ─────────────────
+
+    async def set_network_block(self, patterns: list[str]) -> dict:
+        """Block network requests whose URL matches any regex *patterns*.
+
+        Uses the same Fetch domain as request mocks: matching requests are
+        failed immediately (``Fetch.failRequest``) so the page sees a
+        network error instead of the real response.  Useful for stubbing
+        out analytics/trackers or testing error paths.
+        """
+        self._block_patterns = list(patterns or [])
+        if not self._block_patterns:
+            # No blocks left — if there are no mocks either, disable Fetch.
+            if not getattr(self, "_request_mocks", None):
+                try:
+                    await self._send_command("Fetch.disable")
+                except Exception:
+                    pass
+                self._fetch_enabled = False
+            return {"status": "ok", "blocked": 0}
+        if not self._fetch_enabled:
+            try:
+                await self._send_command("Fetch.enable", {
+                    "patterns": [{"urlPattern": "*", "requestStage": "Request"}],
+                    "handleAuthRequests": False,
+                })
+                self._fetch_enabled = True
+            except Exception as exc:
+                logger.warning("Fetch.enable failed (block): %s", exc)
+                raise
+        return {"status": "ok", "blocked": len(self._block_patterns)}
+
+    def _match_block(self, url: str) -> bool:
+        """Return True when *url* matches any block pattern."""
+        import re
+
+        for pat in getattr(self, "_block_patterns", None) or []:
+            try:
+                if re.search(pat, url):
+                    return True
+            except re.error:
+                continue
+        return False
 
     # ─── NEW: Batch script execution ──────────────────────────────
 

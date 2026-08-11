@@ -54,6 +54,9 @@ _TOOL_CAPABILITY = {
     "fleet_run_batch": "workflow.local",
     # Download helper (v1.27.0, F5)
     "download": "browser.core",
+    # Network interception (v1.27.0, F6)
+    "network_block": "browser.core",
+    "network_mock": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -258,6 +261,29 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "timeout": {"type": "integer", "description": "Max seconds to wait for the file (default 30)"},
         },
         "required": ["url"],
+    },
+    # Network interception (v1.27.0, F6)
+    "network_block": {
+        "type": "object",
+        "properties": {
+            "patterns": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "URL regex patterns to block (empty list clears)",
+            },
+        },
+        "required": ["patterns"],
+    },
+    "network_mock": {
+        "type": "object",
+        "properties": {
+            "mocks": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": "Mock rules: {pattern, status, body, content_type} (empty list clears)",
+            },
+        },
+        "required": ["mocks"],
     },
 }
 

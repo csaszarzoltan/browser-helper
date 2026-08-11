@@ -832,6 +832,12 @@ class NetworkMockRequest(BaseModel):
     mocks: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class NetworkBlockRequest(BaseModel):
+    """Network block rules (fail requests matching URL regexes)."""
+
+    patterns: list[str] = Field(default_factory=list)
+
+
 class AgentFormFillRequest(BaseModel):
     form_ref: str
     data: dict[str, Any]
@@ -4685,6 +4691,22 @@ async def network_mock(body: NetworkMockRequest | None = None):
         return result
     except Exception as exc:
         return api_error("network_mock", "mock_failed", str(exc), 503)
+
+
+@app.post("/network/block")
+async def network_block(body: NetworkBlockRequest | None = None):
+    """Block network requests whose URL matches any regex pattern.
+
+    Body: ``{"patterns": ["regex", ...]}``.  Empty list → clear blocks.
+    Matching requests fail with a network error (analytics, trackers,
+    error-path testing).
+    """
+    try:
+        patterns = body.patterns if body else []
+        result = await run_op("network_block", client.set_network_block, patterns)
+        return result
+    except Exception as exc:
+        return api_error("network_block", "block_failed", str(exc), 503)
 
 
 @app.post("/agent/console")
