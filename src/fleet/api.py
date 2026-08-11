@@ -173,6 +173,23 @@ class FailoverRequest(BaseModel):
     session_id: str | None = None
 
 
+class BatchTask(BaseModel):
+    """One task in a run-batch: what to do in a fresh session tab."""
+
+    url: str = Field(..., description="URL to navigate to")
+    action: str = Field("navigate", description="navigate|title|screenshot|text")
+    assert_selector: str | None = Field(None, description="CSS selector to assert present")
+    assert_text: str | None = Field(None, description="Text substring to assert present")
+    timeout: int = Field(15, description="Per-task timeout in seconds")
+
+
+class RunBatchRequest(BaseModel):
+    """Payload for ``POST /fleet/run-batch`` (v1.27.0, F4)."""
+
+    tasks: list[BatchTask] = Field(..., min_length=1, max_length=50)
+    concurrency: int = Field(4, ge=1, le=8)
+
+
 # ---------------------------------------------------------------------------
 # Envelope helpers — reuse main.api_success / main.api_error lazily
 # ---------------------------------------------------------------------------
@@ -417,6 +434,79 @@ async def queue_sweep() -> Any:
     # the point-in-time prune (see SWEEP_GRACE_SECONDS).
     await asyncio.sleep(SWEEP_GRACE_SECONDS)
     return _success("fleet_queue_sweep", await coordinator.queue.sweep())
+
+
+@router.post("/run-batch")
+async def run_batch(body: RunBatchRequest) -> Any:
+    """Run N independent browsing tasks in parallel (``POST /fleet/run-batch``).
+
+    Each task gets its own isolated session tab (session_registry.create);
+    tasks run up to *concurrency* at a time.  A failing task does not affect
+    the others — every result carries its own status.  Returns one aggregated
+    report with per-task outcomes.
+    """
+    from main import _local_cdp_http, chrome_mgr, run_op, session_registry
+
+    tasks = body.tasks
+    sem = asyncio.Semaphore(body.concurrency)
+
+    async def _run_one(idx: int, task: BatchTask) -> dict:
+        async with sem:
+            sess = None
+            try:
+                await chrome_mgr.launch()
+                sess = await session_registry.create(_local_cdp_http(), url="about:blank")
+                client_ = sess.client
+                await run_op("batch_navigate", client_.navigate, task.url)
+                await run_op("batch_wait", client_.wait_for_ready, min(task.timeout, 20))
+                result: dict[str, Any] = {"status": "ok", "url": task.url}
+                if task.action == "title":
+                    t = await client_.get_title() if hasattr(client_, "get_title") else {"title": ""}
+                    if not (t or {}).get("title"):
+                        t = await client_.evaluate("document.title")
+                        result["title"] = str((t or {}).get("result", ""))
+                    else:
+                        result["title"] = t.get("title", "")
+                elif task.action == "text":
+                    txt = await client_.get_page_text() if hasattr(client_, "get_page_text") else {"text": ""}
+                    result["text_length"] = len((txt or {}).get("text", ""))
+                elif task.action == "screenshot":
+                    shot = await client_.screenshot()
+                    result["screenshot_bytes"] = len(str((shot or {}).get("data", "")))
+                if task.assert_selector:
+                    a = await client_.assert_elements("selector", task.assert_selector, "exists")
+                    passed = (a.get("result") or {}).get("passed")
+                    if not passed:
+                        result["status"] = "assert_failed"
+                        result["assert"] = {"selector": task.assert_selector, "passed": False}
+                if task.assert_text and result["status"] == "ok":
+                    a = await client_.assert_elements("text", task.assert_text, "exists")
+                    passed = (a.get("result") or {}).get("passed")
+                    if not passed:
+                        result["status"] = "assert_failed"
+                        result["assert"] = {"text": task.assert_text, "passed": False}
+                return {"index": idx, "task": task.url, **result}
+            except Exception as exc:  # noqa: BLE001 — per-task isolation
+                return {"index": idx, "task": task.url, "status": "error", "error": str(exc)[:300]}
+            finally:
+                if sess is not None:
+                    try:
+                        await session_registry.destroy(sess.session_id)
+                    except Exception:
+                        pass
+
+    results = await asyncio.gather(*(_run_one(i, t) for i, t in enumerate(tasks)))
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    return _success(
+        "fleet_run_batch",
+        {
+            "total": len(results),
+            "ok": ok_count,
+            "failed": len(results) - ok_count,
+            "concurrency": body.concurrency,
+            "results": results,
+        },
+    )
 
 
 @router.post("/failover")

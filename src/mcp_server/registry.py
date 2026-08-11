@@ -50,6 +50,8 @@ _TOOL_CAPABILITY = {
     # Form-intelligence (v1.27.0, F3)
     "form_fill": "browser.core",
     "form_extract": "browser.core",
+    # Fleet run-batch (v1.27.0, F4)
+    "fleet_run_batch": "workflow.local",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -237,6 +239,15 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {},
     },
+    # Fleet run-batch (v1.27.0, F4)
+    "fleet_run_batch": {
+        "type": "object",
+        "properties": {
+            "tasks": {"type": "array", "description": "List of {url, action?, assert_selector?, assert_text?, timeout?} — at least 1, max 50"},
+            "concurrency": {"type": "integer", "description": "Parallel tasks (default 4, max 8)"},
+        },
+        "required": ["tasks"],
+    },
 }
 
 
@@ -310,7 +321,7 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
     from .memory import tools as memory_tools  # memory handlers
 
     def _handler(name: str):
-        if name in ("fleet_nodes", "fleet_status", "fleet_queue"):
+        if name in ("fleet_nodes", "fleet_status", "fleet_queue", "fleet_run_batch"):
             return getattr(fleet_tools, name)
         if name.startswith("memory_"):
             return getattr(memory_tools, name)

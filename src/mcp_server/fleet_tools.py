@@ -88,3 +88,36 @@ async def fleet_queue(ctx: Context | None = None) -> str:
         )
     except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
         return tool_error("fleet_queue", "operation_failed", str(exc))
+
+
+async def fleet_run_batch(tasks: list[dict], concurrency: int = 4,
+                          ctx: Context | None = None) -> str:
+    """Run N independent browsing tasks in parallel (capability ``workflow.local``, READY).
+
+    Each task: {url, action?, assert_selector?, assert_text?, timeout?}.
+    Tasks run in isolated session tabs up to *concurrency* at a time; one
+    failing task does not affect the others.  Returns an aggregated report.
+    """
+    from main import run_op  # lazy import
+
+    if ctx is not None:
+        ctx.info(f"fleet_run_batch tasks={len(tasks or [])} concurrency={concurrency}")
+    if not tasks:
+        return tool_error("fleet_run_batch", "invalid_params", "tasks is required")
+    try:
+        # Route through the REST handler so the batch logic lives in one place.
+        from fastapi.testclient import TestClient
+
+        import main
+
+        with TestClient(main.app) as c:
+            resp = c.post("/fleet/run-batch", json={
+                "tasks": tasks, "concurrency": concurrency,
+            })
+            body = resp.json()
+            if resp.status_code != 200:
+                return tool_error("fleet_run_batch", "batch_failed",
+                                  body.get("error", {}).get("message", str(body))[:300])
+            return tool_result("fleet_run_batch", body.get("data", {}))
+    except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
+        return tool_error("fleet_run_batch", "operation_failed", str(exc))
