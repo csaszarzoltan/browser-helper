@@ -151,6 +151,13 @@ class SessionRegistry:
             # via the HTTP /json/new endpoint (needs no WebSocket yet).
             client.cdp_http_url = cdp_http_url.rstrip("/")
             tab_id = await self._open_tab_http(client, url, profile_dir=profile_dir)
+            # Fix-7 (2026-08-12): discover_tabs() caches up to 5s, so the
+            # freshly opened tab may be missing from the cached list — then
+            # connect_to_target would either fail ("Tab not found") or bind
+            # _ws_tab_id to a stale/other tab.  Drop the cache so the new
+            # session's WS binds to the tab we actually just created.
+            client._tabs_cache = []
+            client._tabs_cache_ts = 0
             await client.connect_to_target(tab_id)
             sess = Session(session_id=sid, client=client, tab_id=tab_id)
             sess.profile_dir = profile_dir

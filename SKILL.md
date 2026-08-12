@@ -3171,6 +3171,7 @@ High-level agent operations that combine multiple CDP steps into one call:
 - `GET /profile/{name}`, `POST /profile/{name}/fingerprint`, `POST /tools/fingerprint-test`
 - `POST /mouse/config` — behavioral mouse config.
 - `POST /session/new`, `POST /session/close`
+- `GET /mcp-status` — MCP-readiness + per-session tool visibility (agent/ops diagnostics) **v1.27.3**
 - `POST /api/v1/session`, `/api/v1/session/capture`, `/api/v1/session/restore`, `/api/v1/session/cleanup`, `/api/v1/session/{session_id}`
 
 ## Environment / enterprise / compose APIs (v1.19+)

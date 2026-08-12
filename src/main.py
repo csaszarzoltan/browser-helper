@@ -965,13 +965,40 @@ class DeleteBaselineRequest(BaseModel):
 async def auth_middleware(request: Request, call_next):
     """Require Bearer token on all non-public endpoints."""
     if API_TOKEN:
+        # Fix-5 (2026-08-12): reject known placeholder tokens so admins
+        # don't accidentally leave the API open with "changeme" etc.
+        PLACEHOLDER_TOKENS = {
+            "changeme",
+            "your-token",
+            "replace-me",
+            "placeholder",
+            "changethis",
+            "your_token_here",
+            "your_api_token_here",
+            "token_here",
+        }
+        if API_TOKEN.lower().strip() in PLACEHOLDER_TOKENS:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": (
+                        "API token is set to a placeholder value. "
+                        "Please set a real API_TOKEN in the environment, "
+                        "or unset it to disable auth (dev only)."
+                    )
+                },
+            )
         path = request.url.path
         # Skip auth for public paths and OpenAPI docs
-        if path not in PUBLIC_PATHS and not path.startswith(("/docs", "/openapi.json", "/redoc")):
+        if path not in PUBLIC_PATHS and not path.startswith(
+            ("/docs", "/openapi.json", "/redoc")
+        ):
             auth_header = request.headers.get("Authorization", "")
-            token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
+            token = auth_header[len("Bearer ") :] if auth_header.startswith("Bearer ") else ""
             if token != API_TOKEN:
-                return JSONResponse(status_code=401, content={"detail": "Invalid or missing API token"})
+                return JSONResponse(
+                    status_code=401, content={"detail": "Invalid or missing API token"}
+                )
     response = await call_next(request)
     return response
 
@@ -1483,10 +1510,38 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
         # dialog (seen as the "proxy password" popup on VNC).
         await chrome_mgr.await_chrome_ready()
         await _ensure_browser(sess)
+        # Fix-3 (2026-08-12): if the target still is not connected after
+        # ensure (launch + attach failed or the session's tab died), fail
+        # with 409 Conflict + a clear message instead of returning a
+        # misleading success envelope or a raw CDP error.
+        if not target.is_connected:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Browser not connected (CDP session lost). "
+                    "The browser-helper service is up, but no live Chrome/CDP "
+                    "session is attached to this session's tab. "
+                    "Call POST /connect to re-attach, then retry."
+                ),
+            )
         start = time.monotonic()
         try:
             result = await method(*args, **kwargs)
             elapsed = (time.monotonic() - start) * 1000
+            # Some CDP methods return a generator/iterator (e.g. streaming
+            # results). Consuming it twice (str() for the log, then JSON
+            # serialization in api_success) raised
+            # "Cannot reuse already used iterator". Materialize it once so
+            # both consumers see the same data.
+            if hasattr(result, "__anext__"):
+                # async generator
+                items = []
+                async for item in result:
+                    items.append(item)
+                result = items
+            elif hasattr(result, "__next__") and not isinstance(result, (str, bytes, dict, list, tuple, set)):
+                # sync iterator (map/filter/generator)
+                result = list(result)
             verification = infer_verification(result)
             entry = log_operation(
                 operation, "success", elapsed, str(result)[:200], verification=verification
@@ -1797,6 +1852,47 @@ async def sessions_list():
     })
 
 
+@app.get("/mcp-status")
+async def mcp_status():
+    """Report MCP-server readiness and per-session tool visibility.
+
+    Fix-6 (2026-08-12): agents (Hermes / other MCP clients) need a cheap,
+    SDK-free endpoint to learn whether the MCP surface is wired up and which
+    tools are exposed for each live session.  Returns:
+
+    ``{"status": "ok", "mcp_enabled": bool, "sessions": [{"id", "tab_id",
+    "mcp_connected": bool, "tools": [...]}]}``
+    """
+    mcp_enabled = False
+    tool_names: list[str] = []
+    try:
+        from mcp_server.config import load_mcp_settings
+
+        mcp_enabled = load_mcp_settings().enabled
+    except Exception:  # noqa: BLE001 — diagnostic endpoint must never 500
+        mcp_enabled = False
+    try:
+        from mcp_server.registry import build_tool_defs
+
+        tool_names = [t.name for t in build_tool_defs()]
+    except Exception:  # noqa: BLE001 — registry may be unavailable in tests
+        tool_names = []
+    sessions = [
+        {
+            "id": sess.session_id,
+            "tab_id": sess.tab_id,
+            "mcp_connected": bool(getattr(sess.client, "is_connected", False)),
+            "tools": tool_names,
+        }
+        for sess in session_registry._sessions.values()
+    ]
+    return api_success("mcp_status", {
+        "mcp_enabled": mcp_enabled,
+        "tool_count": len(tool_names),
+        "sessions": sessions,
+    })
+
+
 @app.post("/session/close")
 async def session_close(session_id: str = Query(..., description="Session id to close")):
     """Close a specific session (its tab + WebSocket)."""
@@ -2098,6 +2194,20 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
         # Refresh the client's tab cache so next discover_tabs picks up the new target
         sess.client._tabs_cache = []
         sess.client._tabs_cache_ts = 0
+    # Fix-2 (2026-08-12): auto-wait after navigate — guarantee the page is
+    # actually loaded (network idle + stable DOM) before returning, so the
+    # caller's next operation never races a half-loaded page and the session
+    # is guaranteed connected. Best-effort: never fail the navigate because
+    # the wait timed out (e.g. about:blank or data: URLs).
+    try:
+        wait_client = sess.client if sess is not None else client
+        ready = await wait_client.wait_for_ready(timeout=8, quiet_ms=400)
+        if isinstance(result, dict):
+            data = result.get("data")
+            if isinstance(data, dict):
+                data["ready"] = ready.get("ready", True)
+    except Exception as exc:
+        logger.debug("Auto-wait after navigate skipped: %s", exc)
     return result
 
 
