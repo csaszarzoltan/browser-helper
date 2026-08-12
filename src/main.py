@@ -2146,8 +2146,23 @@ async def click_coordinates(body: ClickCoordinatesRequest):
 
 @app.post("/type")
 async def type_text(body: TypeRequest):
-    """Type *text* into the element matching *selector*."""
-    return await run_op("type", client.type_text, body.selector, body.text)
+    """Type *text* into the element matching *selector*.
+
+    Returns 404 with a clear message when the selector matches nothing on the
+    current tab — same unwrap as ``POST /click`` (the CDP ``type_text`` returns
+    ``{status: "error"}`` INSIDE the run_op \"data\", which used to surface as a
+    misleading 200 OK).
+    """
+    result = await run_op("type", client.type_text, body.selector, body.text)
+    inner = result.get("data") if isinstance(result, dict) else None
+    if isinstance(inner, dict) and inner.get("status") == "error":
+        err = str(inner.get("error", ""))
+        if "not found" in err.lower() or "no element" in err.lower():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Element not found for selector {body.selector!r} on the current tab",
+            )
+    return result
 
 
 # ─── New: Smart interaction endpoints ────────────────────────────

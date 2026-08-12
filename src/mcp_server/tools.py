@@ -86,7 +86,16 @@ async def click(selector: str, ctx: Context | None = None) -> str:
     if ctx is not None:
         ctx.info(f"click -> {selector}")
     target, run_op = await _target()
-    return json_dumps(await run_op("click", target.click, selector))
+    result = await run_op("click", target.click, selector)
+    # Unwrap the run_op envelope: the inner data.status can be "error" even
+    # though the envelope is "ok" — turn "Element not found" into a useful
+    # tool result instead of a misleading success JSON.
+    inner = result.get("data") if isinstance(result, dict) else None
+    if isinstance(inner, dict) and inner.get("status") == "error":
+        err = str(inner.get("error", ""))
+        if "not found" in err.lower() or "no element" in err.lower():
+            return json_dumps({"status": "error", "error": f"Element not found for selector {selector!r} on the current tab"})
+    return json_dumps(result)
 
 
 async def type(selector: str, text: str, ctx: Context | None = None) -> str:
@@ -97,7 +106,13 @@ async def type(selector: str, text: str, ctx: Context | None = None) -> str:
     if ctx is not None:
         ctx.info(f"type {len(text)} chars into {selector}")
     target, run_op = await _target()
-    return json_dumps(await run_op("type", target.type_text, selector, text))
+    result = await run_op("type", target.type_text, selector, text)
+    inner = result.get("data") if isinstance(result, dict) else None
+    if isinstance(inner, dict) and inner.get("status") == "error":
+        err = str(inner.get("error", ""))
+        if "not found" in err.lower() or "no element" in err.lower():
+            return json_dumps({"status": "error", "error": f"Element not found for selector {selector!r} on the current tab"})
+    return json_dumps(result)
 
 
 async def screenshot(ctx: Context | None = None) -> str:
