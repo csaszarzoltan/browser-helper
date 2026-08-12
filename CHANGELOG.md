@@ -7,6 +7,10 @@ All notable changes to browser-helper will be documented in this file.
 ## [1.27.3] — 2026-08-12
 
 #### Fixed
+- **MCP live E2E now runs against a dedicated test Chrome** — the test fixture launches its own headless profile on its own port (passed via `CHROME_AUTO_PORT`), so the production Chrome (port 9555) is never touched by the test suite. No more flaky `PUT /json/new` HTTP 500 from tab accumulation on the live browser.
+- **MCP tool sessions route explicitly (`sess_override`/`session_hook`)** — tool calls ran on the global browser-level WebSocket because the `_current_session` contextvar doesn't survive FastMCP task isolation, so `Page.navigate` failed with "browser-level attach failed". `run_op` now accepts an explicit session override and the MCP layer caches the minted session.
+- **`CHROME_AUTO_PORT` env takes precedence** in both `_local_cdp_http()` and `chrome_manager.launch()` — a test-specified port previously never reached the MCP subprocess (it kept dialing the production 9555).
+- **`CDPClient.navigate` invalidates the tab cache before navigating** — the 5s `discover_tabs` cache returned stale tab lists for data:/same-origin navigations.
 - **`run_op` materializes results once** — async/sync generators, lists and dicts are converted before logging/serialization, eliminating the `"Cannot reuse already used iterator"` crash (the operation logger consumed a generator, then the response serializer tried to consume it again).
 - **`POST /navigate` auto-waits for network idle + DOM stability** (best-effort, 8s cap) so the response's `connected: true` is truthful.
 - **`409 Conflict` for existing-but-disconnected sessions** — a session whose CDP connection is lost now returns a clear 409 instead of a misleading success envelope (503 stays for real launch/connect infra failures).
