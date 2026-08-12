@@ -47,16 +47,15 @@ async def _mcp_session():
     sess = _MCP_SESSION["session"]
     if sess is not None and sess.session_id in session_registry._sessions:
         _set_current_session(sess)
-        return sess, run_op
-    # No session yet, or it was reaped — mint a fresh one.
-    try:
-        await chrome_mgr.launch()
-        sess = await session_registry.create(_local_cdp_http())
-        _MCP_SESSION["session"] = sess
-    except Exception:
-        sess = None  # fall back to default client (legacy)
-    _set_current_session(sess)
-    return sess, run_op
+        return sess, (lambda op, method, *a, **kw: run_op(op, method, *a, sess_override=sess, **kw))
+    # No session cached yet — let run_op mint it lazily on the first browser
+    # op (it launches Chrome and waits for the warm-up itself, avoiding the
+    # double-launch race). session_hook caches the minted session so every
+    # later tool call reuses the same tab instead of piling up new ones.
+    def _cache_sess(s):
+        _MCP_SESSION["session"] = s
+
+    return None, (lambda op, method, *a, **kw: run_op(op, method, *a, session_hook=_cache_sess, **kw))
 
 
 async def _target():

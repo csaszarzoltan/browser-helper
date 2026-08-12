@@ -674,6 +674,12 @@ class CDPClient:
         new target and update _ws_tab_id so the session follows the page.
         """
         await self._activate_current()
+        # Invalidate the tab cache BEFORE navigations that may change the URL
+        # of an existing tab (data:/same-origin navigations keep the same tab
+        # id, so discover_tabs()'s 5s cache would otherwise return the stale
+        # pre-navigation URL). Fix-7 track: get_tabs must reflect the live URL.
+        self._tabs_cache = []
+        self._tabs_cache_ts = 0
         result = await self._send_command("Page.navigate", {"url": url})
 
         # After navigation, discover tabs to see if a new target was created

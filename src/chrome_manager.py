@@ -196,7 +196,11 @@ class ChromeManager:
         """
         # Resolve parameters: use override or fall back to saved settings
         profile_dir = profile_dir or self.settings.get("chrome_profile_dir") or ""
-        port = port or self.settings.get("chrome_debug_port", 9555)
+        env_port = os.environ.get("CHROME_AUTO_PORT")
+        if env_port:
+            port = int(env_port)
+        else:
+            port = port or self.settings.get("chrome_debug_port", 9555)
         self._chrome_path = chrome_path or _find_chrome_path_from_settings(self.settings)
 
         if not profile_dir:

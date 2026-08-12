@@ -1171,7 +1171,15 @@ def ensure_connected():
 
 
 def _local_cdp_http() -> str:
-    """Return the local Chrome CDP HTTP base URL (saved launched port)."""
+    """Return the local Chrome CDP HTTP base URL (saved launched port).
+
+    ``CHROME_AUTO_PORT`` env wins when set (test suites launch a dedicated
+    Chrome and must not touch the production one); otherwise fall back to
+    the saved launched port, then the configured debug port.
+    """
+    env_port = os.environ.get("CHROME_AUTO_PORT")
+    if env_port:
+        return f"http://127.0.0.1:{env_port}"
     port = settings_mgr.get("chrome_launched_port") or settings_mgr.get("chrome_debug_port", 9557)
     return f"http://127.0.0.1:{port}"
 
@@ -1463,16 +1471,21 @@ def infer_verification(result: Any) -> str:
     return "unverified"
 
 
-async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
+async def run_op(operation: str, method, *args, sess_override: Session | None = None, session_hook=None, **kwargs) -> dict[str, Any]:
     """
     Execute a CDP client method, time it, log it, broadcast state,
     and return a standardised response dict.
 
     Runs on the caller's session tab when the session middleware attached a
-    session to this request (``_current_session`` contextvar); otherwise on
-    the shared default client (legacy behaviour).
+    session to this request (``_current_session`` contextvar), or when
+    *sess_override* is given (MCP tools mint their own session and pass it
+    explicitly — contextvars do not survive the FastMCP tool-task boundary);
+    otherwise on the shared default client (legacy behaviour).
+
+    *session_hook* (optional callable) is invoked with the resolved session
+    right after it is determined/minted, letting callers cache it.
     """
-    sess = _get_current_session()
+    sess = sess_override if sess_override is not None else _get_current_session()
     if sess is None:
         # No session yet — mint one lazily so this and all later calls from
         # this client run on their own dedicated tab.  If the browser is not
@@ -1492,6 +1505,11 @@ async def run_op(operation: str, method, *args, **kwargs) -> dict[str, Any]:
             except Exception as exc:
                 logger.warning("Session creation failed, falling back to default client: %s", exc)
                 sess = None
+    if sess is not None and session_hook is not None:
+        try:
+            session_hook(sess)
+        except Exception:
+            pass
     if sess is not None:
         # Route the operation onto the session's own client: the REST
         # endpoints pass a bound method of the *global* client; rebind the
