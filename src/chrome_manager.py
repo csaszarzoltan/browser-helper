@@ -309,6 +309,14 @@ class ChromeManager:
             # etc.) use to block headless/automated browsers.
             "--disable-blink-features=AutomationControlled",
             "--disable-infobars",
+            # Memory-friendly: keep the OOM killer away on small VPSes.
+            #  - --disable-dev-shm-usage: /dev/shm is tiny on containers; Chrome
+            #    spills shared memory into RAM and can balloon past 1GB.
+            #  - --renderer-process-limit: cap concurrent renderer processes
+            #    (each tab can spawn several). Combined with the 8GB swapfile
+            #    this keeps the service alive under memory pressure.
+            "--disable-dev-shm-usage",
+            "--renderer-process-limit=8",
         ]
 
         # Headless mode: --headless=new (Chrome 112+), fallback --headless for older
