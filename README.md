@@ -1,12 +1,19 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.27.1-blue)
+![Version](https://img.shields.io/badge/version-1.27.2-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-2559%20passed-brightgreen)
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
 ## Latest UX improvements
+
+### v1.27.2 — Type & MCP error honesty (2026-08-12)
+
+- **`POST /type` returns 404 "Element not found"** when the selector matches nothing — same honesty fix as `/click` in v1.27.1.
+- **Behavioral engine no longer types blindly into the void** — missing element = immediate error, no phantom keystrokes.
+- **MCP `click`/`type` unwrap inner errors** — agents see the real failure, not a success envelope.
+- **Service runs from the HOME clone** + **minute watchdog** — the workspace-clone deletion can no longer take the API down silently.
 
 ### v1.27.1 — Agent-incident fixes (2026-08-11)
 

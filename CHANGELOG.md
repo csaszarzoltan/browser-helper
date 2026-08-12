@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.2] — 2026-08-12
+
+#### Fixed
+- **`POST /type` returns 404 "Element not found"** when the selector matches nothing (was: misleading 200 OK — same envelope bug as `/click` in v1.27.1). The `/type` endpoint now unwraps the inner CDP status.
+- **Behavioral engine `type_text` no longer types blindly into the void** — when `document.querySelector` returns null, it returns `{status: "error", error: "Element not found: <selector>"}` immediately instead of typing into thin air (the non-behavioral path checked the element; the behavioral path did not).
+- **MCP `click`/`type` tools unwrap inner errors** — a missing element now surfaces as a clear tool error, not a misleading success envelope.
+- **systemd service now runs from the HOME clone** (`/home/zoltan/browser-helper`) — the kanban workspace clone was deleted by cleanup, which left the service stuck in "activating" with no API. The workspace clone is not a reliable base for systemd.
+- **Browser-helper watchdog cron** — `browser-helper-watchdog.sh` runs every minute (no_agent); silent when healthy, restarts the service and notifies if `/health` stops responding.
+
 ## [1.27.1] — 2026-08-11
 
 #### Fixed
