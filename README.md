@@ -1,12 +1,24 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.27.2-blue)
+![Version](https://img.shields.io/badge/version-1.27.3-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Tests](https://img.shields.io/badge/tests-2559%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2630%20passed-brightgreen)
 
 Remote Chrome control proxy — connects to your local Chrome via **Chrome DevTools Protocol (CDP)** and exposes a fast REST API + WebSocket GUI dashboard.
 
 ## Latest UX improvements
+
+### v1.27.3 — Agent-support hardening (2026-08-12)
+
+Seven fixes from real agent-incident analysis:
+
+- **Iterator-safe `run_op`** — results are materialized once (async/sync generators, lists, dicts), eliminating the `"Cannot reuse already used iterator"` crash where `log_operation` consumed a generator and the response serializer tried to consume it again.
+- **`POST /navigate` auto-waits** — after navigation the endpoint waits for network idle + DOM stability (best-effort, 8s cap) so the response's `connected: true` is truthful; no more "navigate said OK but the tab was still loading".
+- **409 on lost CDP session** — a session that exists but is disconnected now returns `409 Conflict` with a clear message instead of a misleading success envelope (the 503 contract stays for real infra failures).
+- **Placeholder tokens rejected with 401** — known placeholder `API_TOKEN` values (`changeme`, `your-token`, `replace-me`, …) are refused, closing the "I set a token but it was a placeholder and the API is open" hole.
+- **`GET /mcp-status`** — SDK-free MCP readiness + per-session tool visibility for agents/ops (`mcp_enabled`, `tool_count`, per-session `tools`).
+- **Session-create tab-cache fix** — `session_registry.create()` drops the client tab cache before `connect_to_target`, so the WebSocket binds to the freshly opened tab instead of a stale cached tab.
+- **MCP enabled by default in systemd** — `MCP_ENABLED=1` in the unit; `/mcp-status` now reports `mcp_enabled: true`.
 
 ### v1.27.2 — Type & MCP error honesty (2026-08-12)
 

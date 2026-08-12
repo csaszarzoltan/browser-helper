@@ -4,6 +4,21 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.3] — 2026-08-12
+
+#### Fixed
+- **`run_op` materializes results once** — async/sync generators, lists and dicts are converted before logging/serialization, eliminating the `"Cannot reuse already used iterator"` crash (the operation logger consumed a generator, then the response serializer tried to consume it again).
+- **`POST /navigate` auto-waits for network idle + DOM stability** (best-effort, 8s cap) so the response's `connected: true` is truthful.
+- **`409 Conflict` for existing-but-disconnected sessions** — a session whose CDP connection is lost now returns a clear 409 instead of a misleading success envelope (503 stays for real launch/connect infra failures).
+- **Placeholder API tokens rejected with 401** — `changeme`, `your-token`, `replace-me`, … no longer silently open the API.
+
+#### Added
+- **`GET /mcp-status`** — SDK-free MCP readiness + per-session tool visibility: `{"sessions": [{"id", "mcp_connected", "tools"}], "mcp_enabled", "tool_count"}`.
+- **`MCP_ENABLED=1` in the systemd unit** — MCP is now on by default; `/mcp-status` reports `mcp_enabled: true`.
+
+#### Changed
+- **`session_registry.create()` drops the client tab cache** before `connect_to_target`, so the WebSocket binds to the freshly opened tab (was: stale-cache tab mismatch after `discover_tabs`).
+
 ## [1.27.2] — 2026-08-12
 
 #### Fixed
