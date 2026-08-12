@@ -189,6 +189,12 @@ class BehavioralEngine:
             pos = elem["result"]
             if isinstance(pos, dict) and "x" in pos:
                 await self.click_at(pos["x"], pos["y"])
+        else:
+            # Nincs ilyen elem a DOM-ban — ne gépeljünk a levegőbe.
+            return {
+                "status": "error",
+                "error": f"Element not found: {selector}",
+            }
 
         # 2. Gépelés dwell/flight időzítéssel
         keystrokes = self._sim.keystroke_timing(
