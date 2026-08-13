@@ -32,10 +32,8 @@ mcp = [
 [tool.pytest.ini_options]
 markers = [
     "quick: fast unit tests (< 1s each) - run with 'pytest -m quick'",
-    "integration: integration tests (may need external services)",
+    "integration: integration tests (may need external services) or real API keys (skipped by default)",
     "slow: slow tests (> 5s each) - skipped in quick suite",
-    "integration: mark tests that require real API keys (skipped by default)",
-    "quick: fast unit tests with mocks",
 ]
 addopts = "-n auto -q"
 asyncio_mode = "auto"

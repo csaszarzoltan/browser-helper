@@ -262,7 +262,7 @@ bh mcp --http --host 0.0.0.0 --port 8765
 
 (Cursor: project/global `.cursor/mcp.json`; Windsurf: `~/.codeium/windsurf/mcp_config.json`. For a client on another machine, replace `localhost` with the server host.)
 
-#### Tool reference (19 tools)
+#### Tool reference (32 tools)
 
 All tools are backed by READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`); EXPERIMENTAL/UNAVAILABLE capabilities never surface. Every tool returns a JSON string with the REST envelope shape (`status`/`operation`/`data`/`error`/`meta`).
 

@@ -1,7 +1,7 @@
 # MCP Server Architecture & Tool-to-Capability Mapping
 
 **Task:** `t_fb1e9391` — Design the MCP (Model Context Protocol) server for browser-helper.
-**Repo:** `/home/zoltan/browser-helper` (v1.20.0, branch `main`)
+**Repo:** `/home/zoltan/browser-helper` (v1.27.3, branch `main`)
 **Date:** 2026-08-07
 **Root task:** `t_4e2ec7fa` — *BROWSER-HELPER: MCP Server for Browser Fleet Orchestration*
 **Inputs:** `analysis/mcp-reference-analysis.md` (parent `t_35b41891`, git `3861965`) — every FastMCP SDK claim below was verified against `mcp==1.28.1` in that analysis and re-verified live in this session (`inspect.signature` on the installed SDK, 2026-08-07).
@@ -173,7 +173,7 @@ class ToolDef:
 | `fleet_status()` | `workflow.local` (fleet capability) | READY | `get_fleet_coordinator().pool.list_sessions()` + `registry.snapshot()` — see §5.9 | `GET /fleet/sessions` (fleet/api.py:391) |
 | `fleet_queue()` | `workflow.local` (fleet capability) | READY | `get_fleet_coordinator().queue.peek()` + `queue.size()` — see §5.9 | (no dedicated REST read; mirrors the queue tier of `POST /fleet/session` 202-responses) |
 
-All 12 tools are READY-backed. No EXPERIMENTAL capability maps to a tool this cycle:
+All 32 tools are READY-backed (28 browser/fleet + 4 memory). No EXPERIMENTAL capability maps to a tool this cycle:
 `anti_detection.compositor` and `behavioral.scroll` are EXPERIMENTAL and must **not** be
 exposed (their modules contain explicit `NotImplementedError` paths — registry `reason`
 fields). If a later cycle ships them, adding a tool is a one-line registry extension.
@@ -429,7 +429,7 @@ usage: python -m browser_helper.mcp [--transport {stdio,sse,streamable-http}]
 ```
 
 Flow: parse args → `load_mcp_settings(overrides=...)` → print startup banner
-(`Browser Helper MCP server — transport=stdio · tools=12 · capabilities=READY:4/EXPERIMENTAL:2 …`)
+(`Browser Helper MCP server — transport=stdio · tools=32 · capabilities=READY:4/EXPERIMENTAL:2 …`)
 → `asyncio.run(MCPServer(settings).run(transport))`. `argparse` errors exit non-zero
 before any import of `mcp` or `main`.
 
@@ -468,7 +468,7 @@ The pre-tester builds `tests/test_mcp_server.py` against this spec. Mandatory as
 
 ### 8.1 Registry/derivation unit tests (no `mcp` SDK needed)
 
-- `build_tool_defs()` returns exactly the 12 tools of §4.3 (by name).
+- `build_tool_defs()` returns the full registry-derived surface (32 tools as of v1.27.3; the count grows as capabilities are added — §4.3 lists the v1.21.0 baseline).
 - Every tool's `capability_id` exists in `CapabilityRegistry.default()`; every backing
   capability is READY or EXPERIMENTAL; **no** UNAVAILABLE capability appears.
 - `ToolDefRegistry` rejects duplicate names and rejects a UNAVAILABLE `ToolDef`

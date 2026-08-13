@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **19 tools** derived from the capability registry (15 browser/fleet + 4 persistent memory).
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **32 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory).
 
 ---
 
@@ -26,7 +26,7 @@ bh mcp                                  # stdio (default)
 On startup you see:
 
 ```
-Browser Helper MCP server — transport=stdio tools=12 host=127.0.0.1 port=8765
+Browser Helper MCP server — transport=stdio tools=32 host=127.0.0.1 port=8765
 ```
 
 The server then speaks JSON-RPC over stdin/stdout. Stdio is the transport for local, single-process agents. **No port is bound** in stdio mode — the port/host settings are ignored.
@@ -131,9 +131,9 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ---
 
-## 3. Tool reference (15 tools)
+## 3. Tool reference (32 tools)
 
-All 15 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
+All 32 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 
 ### Browser tools — `src/mcp_server/tools.py`
 
@@ -274,9 +274,9 @@ All three tools are pure reads: they never register, unregister, allocate, relea
 
 Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`) require a live CDP connection. Without one, `run_op` raises `HTTPException` 400 *before* the engine call — the agent sees a tool-call error with that message rather than an envelope. Start Browser Helper (or launch Chrome with `--remote-debugging-port=9555` and connect) before calling them. `session_status` and the fleet tools work without a browser connection.
 
-### The agent sees only 15 tools
+### The agent sees only 32 tools
 
-12 is the correct count for v1.21.0. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
+32 is the correct count for v1.27.3 (28 browser/fleet + 4 persistent memory). The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
 
 ### stdio mode hangs / "port already in use"
 
