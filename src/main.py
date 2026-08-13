@@ -1549,13 +1549,13 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
             # Domain throttle: never hammer a site with rapid back-to-back
             # navigations (multiple systems share this service). Applies to
             # navigate-style ops that carry a URL; interval is configurable
-            # via settings.json ``domain_min_interval_sec`` (default 2.0s).
+            # via settings.json ``domain_min_interval_sec`` (default 4.0s).
             if operation == "navigate" and args and isinstance(args[0], str):
-                raw_interval = settings_mgr.get("domain_min_interval_sec", 2.0)
+                raw_interval = settings_mgr.get("domain_min_interval_sec", 4.0)
                 try:
-                    interval = float(raw_interval) if raw_interval is not None else 2.0
+                    interval = float(raw_interval) if raw_interval is not None else 4.0
                 except (TypeError, ValueError):
-                    interval = 2.0
+                    interval = 4.0
                 waited = await domain_throttle.wait(args[0], interval)
                 if waited > 0:
                     logger.info(

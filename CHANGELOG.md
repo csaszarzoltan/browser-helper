@@ -7,7 +7,7 @@ All notable changes to browser-helper will be documented in this file.
 ## [1.27.4] — 2026-08-13
 
 #### Added
-- **Domain-level navigation throttle** — a per-netloc rate limiter that prevents hammering external sites (Google, GitHub, …) when multiple systems share one browser-helper instance. Navigations to the same domain within `domain_min_interval_sec` (default **2.0s**, configurable via `settings.json` or `POST /settings`) are held back. Implemented in `src/domain_throttle.py`, enforced inside `run_op` so every entry point (REST `/navigate`, `/search`, `/download`, MCP `navigate`) is covered.
+- **Domain-level navigation throttle** — a per-netloc rate limiter that prevents hammering external sites (Google, GitHub, …) when multiple systems share one browser-helper instance. Navigations to the same domain within `domain_min_interval_sec` (default **4.0s**, configurable via `settings.json` or `POST /settings`) are held back. Implemented in `src/domain_throttle.py`, enforced inside `run_op` so every entry point (REST `/navigate`, `/search`, `/download`, MCP `navigate`) is covered.
 - **`scripts/release-validate.sh`** — single-source release validation: checks pyproject == `main.py` == README badge == CHANGELOG == Dockerfile label, and the MCP tool count (from `build_tool_defs()`) against the docs.
 
 #### Changed

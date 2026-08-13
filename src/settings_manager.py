@@ -43,7 +43,7 @@ DEFAULT_SETTINGS = {
     "chrome_pid": 0,
     "mcp_enabled": False,
     "mcp_port": 8765,
-    "domain_min_interval_sec": 2.0,
+    "domain_min_interval_sec": 4.0,
 }
 
 

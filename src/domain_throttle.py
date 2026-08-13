@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Default minimum gap between two navigations to the same domain (seconds).
 # Overridable via settings.json ``domain_min_interval_sec``.
-DEFAULT_MIN_INTERVAL_SEC = 2.0
+DEFAULT_MIN_INTERVAL_SEC = 4.0
 
 
 class DomainThrottle:
