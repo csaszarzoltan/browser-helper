@@ -65,6 +65,7 @@ from run_timeline import RunStore
 from run_recovery import RecoveryAdvisor
 from run_comparison import compare_runs
 from settings_manager import SettingsManager
+from domain_throttle import domain_throttle
 
 from proxy_manager import ProxyParseError, ProxyPool
 
@@ -243,7 +244,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.27.3",
+    version="1.27.4",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -410,6 +411,7 @@ class SettingsRequest(BaseModel):
     chrome_profile_dir: str | None = None
     chrome_debug_port: int | None = None
     chrome_path: str | None = None
+    domain_min_interval_sec: float | None = None
 
 
 class LaunchRequest(BaseModel):
@@ -1544,6 +1546,23 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
             )
         start = time.monotonic()
         try:
+            # Domain throttle: never hammer a site with rapid back-to-back
+            # navigations (multiple systems share this service). Applies to
+            # navigate-style ops that carry a URL; interval is configurable
+            # via settings.json ``domain_min_interval_sec`` (default 2.0s).
+            if operation == "navigate" and args and isinstance(args[0], str):
+                raw_interval = settings_mgr.get("domain_min_interval_sec", 2.0)
+                try:
+                    interval = float(raw_interval) if raw_interval is not None else 2.0
+                except (TypeError, ValueError):
+                    interval = 2.0
+                waited = await domain_throttle.wait(args[0], interval)
+                if waited > 0:
+                    logger.info(
+                        "Domain throttle: waited %.2fs before navigate to %s",
+                        waited,
+                        domain_throttle._domain_of(args[0]),
+                    )
             result = await method(*args, **kwargs)
             elapsed = (time.monotonic() - start) * 1000
             # Some CDP methods return a generator/iterator (e.g. streaming

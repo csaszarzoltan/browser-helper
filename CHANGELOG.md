@@ -4,6 +4,18 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.4] — 2026-08-13
+
+#### Added
+- **Domain-level navigation throttle** — a per-netloc rate limiter that prevents hammering external sites (Google, GitHub, …) when multiple systems share one browser-helper instance. Navigations to the same domain within `domain_min_interval_sec` (default **2.0s**, configurable via `settings.json` or `POST /settings`) are held back. Implemented in `src/domain_throttle.py`, enforced inside `run_op` so every entry point (REST `/navigate`, `/search`, `/download`, MCP `navigate`) is covered.
+- **`scripts/release-validate.sh`** — single-source release validation: checks pyproject == `main.py` == README badge == CHANGELOG == Dockerfile label, and the MCP tool count (from `build_tool_defs()`) against the docs.
+
+#### Changed
+- **Dockerfile image version label 1.20.0 → 1.27.3** — the label now matches the pyproject version (release-hygiene pitfall: the version lives in two places).
+- **Docs tool counts 12/15/19 → 32** — `README.md`, `docs/mcp-server.md`, `docs/mcp-memory.md`, `docs/architecture/mcp-server-design.md` now all agree on 32 tools (28 browser/fleet + 4 memory).
+- **pytest markers deduplicated** — `pyproject.toml` had two `quick` and two `integration` marker definitions; merged into one each.
+- **TEST_RESULTS.md refreshed** (2026-08-13) — 2636 passed, 1 skipped, 41 xfailed, 32 xpassed; MCP live E2E 4/4.
+
 ## [1.27.3] — 2026-08-12
 
 #### Fixed

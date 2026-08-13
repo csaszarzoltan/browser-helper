@@ -54,6 +54,14 @@ check_toolcount() {
 check_toolcount "docs/mcp-server.md"     docs/mcp-server.md  "(19|15|$TOOL_COUNT) tools?"
 check_toolcount "README.md"              README.md           "(15|19|$TOOL_COUNT) tools?"
 
+# ── 2b. Throttle settings kulcs a DEFAULT_SETTINGS-ben ──
+if grep -q '"domain_min_interval_sec"' src/settings_manager.py; then
+    echo "   ✅ settings: domain_min_interval_sec definiálva"
+else
+    echo "   ❌ settings: domain_min_interval_sec hiányzik a DEFAULT_SETTINGS-ből"
+    FAIL=1
+fi
+
 # ── 3. Git állapot ──
 AHEAD=$(git rev-list --left-right --count main...origin/main 2>/dev/null | awk '{print $2}')
 echo "📡 git ahead/behind: main..origin/main = $AHEAD"
