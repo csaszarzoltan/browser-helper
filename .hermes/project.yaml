@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Projekt runtime kontraktus — LAB-ORCH V2 P1
+# Kitöltési útmutató: docs/PROJECT-CONTRACT.md (micro-saas-lab)
+# Validátor: scripts/validate-project-contract.py (micro-saas-lab)
+# ─────────────────────────────────────────────────────────────────────────────
+
+project_id: browser-helper
+repo_url: https://github.com/csaszarzoltan/browser-helper
+default_branch: main
+
+commands:
+  # Nincs uv.lock → pip install -e ".[dev]" a setup (a repo .venv-jében).
+  setup: pip install -e ".[dev]"
+  # Van `quick` pytest marker (pyproject.toml) → quick_test = quick suite.
+  quick_test: pytest -m quick -q
+  full_test: pytest -q
+  lint: ruff check .
+  # Nincs mypy/pyright konfig a repóban.
+  typecheck: ""
+  # Nincs Playwright / e2e réteg a repóban.
+  e2e: ""
+
+limits:
+  max_active_features: 1
+  max_agents: 2
+  timeout_minutes: 45
+
+quality_profile: library
+agent_profile: python_web
