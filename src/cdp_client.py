@@ -2188,7 +2188,7 @@ class CDPClient:
             return {"status": "error", "error": f"File input not found: {selector}"}
 
         # Get backend node ID from the element
-        get_node_js = (
+        _get_node_js = (
             f"(function() {{"
             f"  const el = document.querySelector({json.dumps(selector)});"
             f"  const backend = window.__backendNodeId;"

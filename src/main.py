@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -556,8 +556,7 @@ class ClickLabelRequest(BaseModel):
     @classmethod
     def populate_text_from_label(cls, data):
         """Accept 'label' field as alias for 'text'."""
-        if isinstance(data, dict):
-            if "label" in data and "text" not in data:
+        if isinstance(data, dict) and "label" in data and "text" not in data:
                 data["text"] = data["label"]
         return data
 
@@ -1020,7 +1019,7 @@ async def auth_middleware(request: Request, call_next):
 # middleware.  ``set()`` on the contextvar is task-local, but the list object
 # is shared — run_op appends, the middleware reads after call_next.
 _current_session: ContextVar[list[Session | None]] = ContextVar(
-    "current_session", default=[]
+    "current_session", default=None
 )
 
 # Paths that operate on the shared default client / are session-agnostic.
@@ -1210,6 +1209,7 @@ def _reap_orphan_headless() -> int:
         out = subprocess.run(
             ["pgrep", "-af", "chrome.*--headless|chrome.*remote-debugging-port="],
             capture_output=True, text=True, timeout=10,
+            check=False,  # pgrep returns non-zero when no match
         )
     except Exception:
         return 0
@@ -1228,6 +1228,7 @@ def _reap_orphan_headless() -> int:
         out2 = subprocess.run(
             ["pgrep", "-af", f"remote-debugging-port={main_port}"],
             capture_output=True, text=True, timeout=5,
+            check=False,  # pgrep returns non-zero when no match
         )
         main_pids = {l.split()[0] for l in out2.stdout.strip().split("\n")
                      if l and l.split()[0].isdigit()}
@@ -1244,7 +1245,10 @@ def _reap_orphan_headless() -> int:
         if pid in live or pid in main_pids:
             continue  # owned by a live session or the main browser — leave it
         try:
-            subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
+            subprocess.run(
+                ["kill", "-9", pid], capture_output=True, timeout=5,
+                check=False,  # process may already be gone
+            )
             killed += 1
         except Exception:
             pass
@@ -2721,8 +2725,14 @@ async def page_download(body: DownloadRequest):
 
             mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
             suffix = Path(path).suffix or None
-            with open(path, "rb") as f:
-                binary = f.read()
+
+            import asyncio
+
+            def _read_download() -> bytes:
+                with open(path, "rb") as f:
+                    return f.read()
+
+            binary = await asyncio.to_thread(_read_download)
             record = artifact_store.put(binary, mime, suffix=suffix,
                                         metadata={"source_url": body.url, "name": data["name"]})
             return api_success("page_download", {
@@ -3106,10 +3116,9 @@ async def screenshot_compare(body: CompareRequest):
         )
 
     current_bytes = base64.b64decode(image_data)
-    current_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    current_tmp.write(current_bytes)
-    current_tmp.close()
-    current_path = current_tmp.name
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as current_tmp:
+        current_tmp.write(current_bytes)
+        current_path = current_tmp.name
 
     diff_output = os.path.join(
         os.path.dirname(current_path),
@@ -4543,7 +4552,7 @@ async def agent_run_flow(body: AgentFlowRequest):
                 step_report["result"] = r.get("status")
                 step_report["value"] = str(r.get("result", ""))[:300]
             elif step.action == "screenshot":
-                shot = await flow_client.screenshot()
+                await flow_client.screenshot()
                 step_report["result"] = "ok"
                 step_report["screenshot"] = True
             else:
@@ -4556,7 +4565,7 @@ async def agent_run_flow(body: AgentFlowRequest):
 
             # Per-step screenshot.
             if step.screenshot:
-                shot = await flow_client.screenshot()
+                await flow_client.screenshot()
                 step_report["screenshot"] = True
 
             step_report["ok"] = True
@@ -4717,10 +4726,16 @@ async def agent_diff(body: AgentDiffRequest):
             p_a = os.path.join(td, "a.jpg")
             p_b = os.path.join(td, "b.jpg")
             p_out = os.path.join(td, "diff.png")
-            with open(p_a, "wb") as f:
-                f.write(img_a)
-            with open(p_b, "wb") as f:
-                f.write(img_b)
+
+            import asyncio
+
+            def _write_images() -> None:
+                with open(p_a, "wb") as f:
+                    f.write(img_a)
+                with open(p_b, "wb") as f:
+                    f.write(img_b)
+
+            await asyncio.to_thread(_write_images)
             from screenshot_diff import ScreenshotDiffEngine
 
             result = ScreenshotDiffEngine.diff(
@@ -4814,8 +4829,14 @@ async def agent_visual_regression(body: VisualRegressionRequest):
                         with tempfile.TemporaryDirectory() as td:
                             cur_path = os.path.join(td, "current.jpg")
                             out_path = os.path.join(td, "diff.png")
-                            with open(cur_path, "wb") as f:
-                                f.write(img)
+
+                            import asyncio
+
+                            def _write_img(_p=cur_path, _i=img) -> None:
+                                with open(_p, "wb") as f:
+                                    f.write(_i)
+
+                            await asyncio.to_thread(_write_img)
                             from screenshot_diff import ScreenshotDiffEngine
 
                             diff = ScreenshotDiffEngine.diff(
@@ -5541,7 +5562,6 @@ async def post_scroll_config(req: ScrollConfigRequest):
     """Update the behavioral scroll configuration."""
     from fastapi.responses import JSONResponse
 
-    global _scroll_instance
     try:
         _scroll_instance.update_config(
             enabled=req.enabled,

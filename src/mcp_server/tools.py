@@ -159,11 +159,11 @@ async def observe(
         paginate_snapshot,
     )
     
-    sess, run_op = await _mcp_session()  # local function
-    _set_current_session(sess)
-    
+    _sess, _run_op = await _mcp_session()  # local function
+    _set_current_session(_sess)
+
     try:
-        target = sess.client if sess else None
+        target = _sess.client if _sess else None
         if mode.lower() in {"accessibility", "ax"}:
             snap = await _capture_accessibility_snapshot(
                 scope=("dialog" if True and scope == "page" else scope),
@@ -207,7 +207,7 @@ async def act(
 
     from mcp_server.tools import _MCP_SESSION
 
-    sess, run_op = await _mcp_session()
+    _sess, _run_op = await _mcp_session()
     target_dict = {
         "snapshot_id": snapshot_id,
         "ref": ref,
@@ -231,17 +231,23 @@ async def act(
     }
     # Route through the running service to get identical behaviour
     try:
+        import asyncio
+
         cookie = ""
         if _MCP_SESSION.get("session") is not None:
             cookie = _MCP_SESSION["session"].session_id
-        req = _ur.Request(
-            "http://127.0.0.1:8020/agent/act",
-            data=_json.dumps(body).encode(),
-            headers={"Content-Type": "application/json", "X-Session-ID": cookie},
-            method="POST",
-        )
-        with _ur.urlopen(req, timeout=60) as resp:
-            result = _json.loads(resp.read().decode())
+
+        def _blocking_act_request() -> dict:
+            req = _ur.Request(
+                "http://127.0.0.1:8020/agent/act",
+                data=_json.dumps(body).encode(),
+                headers={"Content-Type": "application/json", "X-Session-ID": cookie},
+                method="POST",
+            )
+            with _ur.urlopen(req, timeout=60) as resp:
+                return _json.loads(resp.read().decode())
+
+        result = await asyncio.to_thread(_blocking_act_request)
         return tool_result("act", result.get("data", {}))
     except Exception as exc:  # noqa: BLE001
         return tool_error("act", "operation_failed", str(exc))
@@ -469,8 +475,8 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
     if ctx is not None:
         ctx.info(f"clone_session source={session_id}")
     try:
-        source, src_sess = _resolve_cookie_target(session_id)
-        res = await source.get_cookies()
+        _source, _src_sess = _resolve_cookie_target(session_id)
+        res = await _source.get_cookies()
         cookies = (res or {}).get("cookies", [])
         from main import _local_cdp_http, chrome_mgr
         from main import session_registry as _sr
@@ -609,11 +615,16 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
                 return tool_error("download", "download_failed",
                                   str(res.get("error", res)))
             path = res["path"]
+            import asyncio
             import mimetypes
 
             mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
-            with open(path, "rb") as f:
-                binary = f.read()
+
+            def _read_file() -> bytes:
+                with open(path, "rb") as f:
+                    return f.read()
+
+            binary = await asyncio.to_thread(_read_file)
             from main import artifact_store
 
             record = artifact_store.put(binary, mime, suffix=Path(path).suffix or None,

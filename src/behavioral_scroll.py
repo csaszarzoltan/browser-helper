@@ -215,7 +215,7 @@ class BehavioralScroll:
             t = i / max(1, n_steps - 1)
             # ease-in-out: slow start, fast middle, slow end
             ease = 0.5 - 0.5 * __import__("math").cos(t * __import__("math").pi)
-            step = max(1, int(round(base * (0.5 + ease))))
+            step = max(1, round(base * (0.5 + ease)))
             step = min(step, remaining)
             if step <= 0:
                 continue

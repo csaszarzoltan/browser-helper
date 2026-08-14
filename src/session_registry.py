@@ -196,15 +196,19 @@ class SessionRegistry:
             try:
                 # If a Chrome already runs with THIS profile dir, reuse it.
                 import re as _re
-                import subprocess
 
                 existing = None
                 try:
-                    out = subprocess.run(
-                        ["pgrep", "-af", "user-data-dir=" + profile_dir],
-                        capture_output=True, text=True, timeout=5,
+                    pgrep = await asyncio.create_subprocess_exec(
+                        "pgrep", "-af", "user-data-dir=" + profile_dir,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
                     )
-                    m = _re.search(r"remote-debugging-port=(\d+)", out.stdout)
+                    stdout_data, _ = await asyncio.wait_for(
+                        pgrep.communicate(), timeout=5
+                    )
+                    out_text = stdout_data.decode() if stdout_data else ""
+                    m = _re.search(r"remote-debugging-port=(\d+)", out_text)
                     if m:
                         existing = int(m.group(1))
                 except Exception:
@@ -214,20 +218,18 @@ class SessionRegistry:
                     port = existing
                     proc = None
                 else:
-                    proc = subprocess.Popen(
-                        [
-                            "/usr/bin/google-chrome",
-                            f"--remote-debugging-port={port}",
-                            "--headless=new",
-                            "--no-first-run",
-                            "--no-default-browser-check",
-                            "--disable-gpu",
-                            "--no-sandbox",
-                            f"--user-data-dir={profile_dir}",
-                            "about:blank",
-                        ],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                    proc = await asyncio.create_subprocess_exec(
+                        "/usr/bin/google-chrome",
+                        f"--remote-debugging-port={port}",
+                        "--headless=new",
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                        "--disable-gpu",
+                        "--no-sandbox",
+                        f"--user-data-dir={profile_dir}",
+                        "about:blank",
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
                     )
                 # Wait for CDP to come up.
                 import time as _time

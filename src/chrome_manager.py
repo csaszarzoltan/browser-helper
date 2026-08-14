@@ -57,6 +57,7 @@ def _find_chrome_with_profile(profile_dir: str) -> int | None:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,  # pgrep may find 0 matches; exit code ≠ 0 is fine
         ).stdout
     except Exception:
         return None
@@ -102,6 +103,7 @@ def _kill_process(pid: int) -> None:
                 ["taskkill", "/PID", str(pid), "/F"],
                 capture_output=True,
                 timeout=5,
+                check=False,  # process may already be gone; non-zero exit is expected
             )
         else:
             os.kill(pid, signal.SIGTERM)

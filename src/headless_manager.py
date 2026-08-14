@@ -545,26 +545,24 @@ class HeadlessManager:
         scripts: list[str] = []
         vendor = config.get("webgl_vendor") or "Google Inc. (NVIDIA)"
         renderer = config.get("webgl_renderer") or "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060)"
-        tz = config.get("timezone") or "America/New_York"
+        _tz = config.get("timezone") or "America/New_York"
         platform = config.get("platform") or "Win32"
 
         if config.get("screen_width") and config.get("screen_height"):
             scripts.append(
-                "Object.defineProperty(screen, 'width', {get: () => %d});"
-                "Object.defineProperty(screen, 'height', {get: () => %d});"
-                % (config["screen_width"], config["screen_height"])
+                f"Object.defineProperty(screen, 'width', {{get: () => {config['screen_width']}}});"
+                f"Object.defineProperty(screen, 'height', {{get: () => {config['screen_height']}}});"
             )
         scripts.append(
-            "Object.defineProperty(navigator, 'platform', {get: () => %r});" % platform
+            f"Object.defineProperty(navigator, 'platform', {{get: () => '{platform}'}});"
         )
         scripts.append(
-            "(() => {"
-            "var op = WebGLRenderingContext.prototype.getParameter;"
-            "WebGLRenderingContext.prototype.getParameter = function(p) {"
-            "if (p === 37445) return %r;"
-            "if (p === 37446) return %r;"
-            "return op.call(this, p);};})()"
-            % (vendor, renderer)
+            f"(() => {{"
+            f"var op = WebGLRenderingContext.prototype.getParameter;"
+            f"WebGLRenderingContext.prototype.getParameter = function(p) {{"
+            f"if (p === 37445) return '{vendor}';"
+            f"if (p === 37446) return '{renderer}';"
+            f"return op.call(this, p);}};}})()"
         )
         return await self._inject_fingerprint_scripts(session_id, scripts)
 
