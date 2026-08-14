@@ -341,11 +341,11 @@ class ProxyPool:
                         ) as client:
                             resp = await client.get("https://httpbin.org/ip")
                             return resp.status_code == 200
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — health probe failure = unhealthy
                         return False
 
                 healthy = asyncio.run(_check())
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — async health check failure
                 error = str(exc)
                 healthy = False
 

@@ -438,7 +438,7 @@ async def export_cookies(session_id: str, ctx: Context | None = None) -> str:
         return tool_result("export_cookies", res)
     except KeyError as exc:
         return tool_error("export_cookies", "session_not_found", str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("export_cookies", "cookie_export_failed", str(exc))
 
 
@@ -459,7 +459,7 @@ async def import_cookies(cookies: list[dict], session_id: str | None = None,
         return tool_result("import_cookies", res)
     except KeyError as exc:
         return tool_error("import_cookies", "session_not_found", str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("import_cookies", "cookie_import_failed", str(exc))
 
 
@@ -490,7 +490,7 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
         })
     except KeyError as exc:
         return tool_error("clone_session", "session_not_found", str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("clone_session", "clone_failed", str(exc))
 
 
@@ -515,7 +515,7 @@ async def wait_for(value: str, kind: str = "selector", condition: str = "present
                               kind, value, condition, timeout)
         return json_dumps({"status": "ok", "operation": "wait_for",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("wait_for", "wait_failed", str(exc))
 
 
@@ -541,7 +541,7 @@ async def assert_(value: str, kind: str = "selector", condition: str = "exists",
                               f"Assertion failed: {condition} {kind}={value} (found={result.get('found')}, count={result.get('count')})")
         return json_dumps({"status": "ok", "operation": "assert",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("assert", "assertion_failed", str(exc))
 
 
@@ -565,7 +565,7 @@ async def form_fill(fields: list[dict], timeout: int = 5, ctx: Context | None = 
         res = await run_op_fn("form_fill", target.smart_form_fill, fields or [], timeout)
         return json_dumps({"status": "ok", "operation": "form_fill",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("form_fill", "form_fill_failed", str(exc))
 
 
@@ -585,7 +585,7 @@ async def form_extract(ctx: Context | None = None) -> str:
         res = await run_op_fn("form_extract", target.form_extract)
         return json_dumps({"status": "ok", "operation": "form_extract",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("form_extract", "form_extract_failed", str(exc))
 
 
@@ -633,7 +633,7 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
                                "data": {"artifact": record, "file_name": res["name"],
                                         "size_bytes": res["size_bytes"]},
                                "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("download", "download_failed", str(exc))
 
 
@@ -659,7 +659,7 @@ async def network_block(patterns: list[str], ctx: Context | None = None) -> str:
         return json_dumps({"status": "ok", "operation": "network_block",
                            "data": {"blocked": result.get("blocked", len(patterns))},
                            "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("network_block", "block_failed", str(exc))
 
 
@@ -681,5 +681,5 @@ async def network_mock(mocks: list[dict], ctx: Context | None = None) -> str:
         return json_dumps({"status": "ok", "operation": "network_mock",
                            "data": {"mocks": result.get("mocks", len(mocks))},
                            "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("network_mock", "mock_failed", str(exc))

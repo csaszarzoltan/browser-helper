@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import random
 from dataclasses import dataclass
 from typing import Any
 
 from behavioral_scroll import BehavioralScroll
 from behavioral_sim import BehavioralSimulator, MouseMovementResult
+
+logger = logging.getLogger("browser-helper.behavioral")
 
 # ── Session Profiles ──────────────────────────────────────────────────────
 
@@ -165,8 +168,8 @@ class BehavioralEngine:
                 await self._client._ws.send(_json.dumps(payload))
                 # Nem várunk választ (fire-and-forget) — az Input események
                 # nem adnak vissza értéket.
-            except Exception:
-                pass  # ha a kapcsolat megszakadt, csendben tovább
+            except Exception as exc:  # noqa: BLE001 — WS send is fire-and-forget
+                logger.debug("CDP mouse event send failed: %s", exc)
 
     # ── Keyboard ─────────────────────────────────────────────────────
 
@@ -238,8 +241,8 @@ class BehavioralEngine:
                 "params": params,
             }
             await self._client._ws.send(_json.dumps(payload))
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — WS send is fire-and-forget
+            logger.debug("CDP key event send failed: %s", exc)
 
     # ── Scroll ───────────────────────────────────────────────────────
 
@@ -278,8 +281,8 @@ class BehavioralEngine:
                         },
                     }
                     await self._client._ws.send(_json.dumps(payload))
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 — WS send is fire-and-forget
+                    logger.debug("CDP scroll event send failed: %s", exc)
 
             await asyncio.sleep((delay + pause) / 1000.0)
 

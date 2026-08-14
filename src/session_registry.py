@@ -105,7 +105,7 @@ class SessionRegistry:
                 resp = await http.get(f"{cdp_http_url.rstrip('/')}/json")
                 resp.raise_for_status()
                 tabs = resp.json()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.debug("orphan-tab scan failed: %s", exc)
             return 0
         owned = {s.tab_id for s in self._sessions.values()}
@@ -116,8 +116,8 @@ class SessionRegistry:
                 async with httpx.AsyncClient(timeout=3.0) as http:
                     await http.get(f"{cdp_http_url.rstrip('/')}/json/close/{tid}")
                 reaped += 1
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("close orphan tab %s failed: %s", tid, exc)
         if reaped:
             logger.info("Reaped %d orphan tab(s) not owned by live sessions", reaped)
         return reaped
@@ -141,8 +141,8 @@ class SessionRegistry:
             # so the physical tab count stays bounded even under churn.
             try:
                 await self._reap_orphan_tabs(cdp_http_url)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("reap orphan tabs failed: %s", exc)
             # Enforce the cap: evict LRU before minting a new one.
             await self._evict_lru()
             sid = uuid.uuid4().hex
@@ -169,8 +169,8 @@ class SessionRegistry:
                 from behavioral_engine import HumanProfile
 
                 client.enable_behavioral(HumanProfile.from_session(sid))
-            except Exception:
-                pass  # non-critical: degrade gracefully to raw CDP
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("behavioral engine init failed: %s", exc)
             logger.info("Session %s created (tab %s, total %d)", sid[:8], tab_id, len(self._sessions))
             return sess
 
@@ -211,8 +211,8 @@ class SessionRegistry:
                     m = _re.search(r"remote-debugging-port=(\d+)", out_text)
                     if m:
                         existing = int(m.group(1))
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("pgrep for existing Chrome failed: %s", exc)
 
                 if existing is not None:
                     port = existing
@@ -241,13 +241,13 @@ class SessionRegistry:
                             r = await h.get(f"http://127.0.0.1:{port}/json/version")
                             if r.status_code == 200:
                                 break
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("CDP readiness probe failed: %s", exc)
                     await asyncio.sleep(0.3)
                 client.cdp_http_url = f"http://127.0.0.1:{port}"
                 client._profile_proc = proc
                 client._profile_port = port
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Profile launch failed, falling back to default tab: %s", exc)
         async with httpx.AsyncClient(timeout=10.0) as http:
             resp = await http.put(
@@ -268,19 +268,19 @@ class SessionRegistry:
             return False
         try:
             await sess.client.close_tab(sess.tab_id)
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.debug("close_tab failed for session %s", session_id[:8])
         # If this session ran on a dedicated profile Chrome, shut it down too.
         profile_proc = getattr(sess.client, "_profile_proc", None)
         if profile_proc is not None:
             try:
                 profile_proc.terminate()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("terminate profile proc failed: %s", exc)
         try:
             await sess.client.close()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("close client failed: %s", exc)
         logger.info("Session %s destroyed", session_id[:8])
         return True
 

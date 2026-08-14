@@ -59,7 +59,7 @@ def _find_chrome_with_profile(profile_dir: str) -> int | None:
             timeout=5,
             check=False,  # pgrep may find 0 matches; exit code ≠ 0 is fine
         ).stdout
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
     import re as _re
 
@@ -368,7 +368,7 @@ class ChromeManager:
                 "status": "error",
                 "error": f"Chrome executable not found: {self._chrome_path}",
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — Chrome launch catch-all
             self._launch_in_progress = False
             return {"status": "error", "error": str(exc)}
 

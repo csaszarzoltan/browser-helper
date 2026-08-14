@@ -272,8 +272,8 @@ class HeadlessManager:
                     if parsed.username or parsed.password:
                         netloc = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname or ""
                         val = f"{parsed.scheme}://***:***@{netloc}"
-                except Exception:
-                    pass  # fall through with original val if parsing fails
+                except (ValueError, TypeError, AttributeError):  # fall through with original val if parsing fails
+                    pass
                 _safe_cmd.append(f"--proxy-server={val}")
             else:
                 _safe_cmd.append(arg)

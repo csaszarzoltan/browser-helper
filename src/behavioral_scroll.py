@@ -29,8 +29,11 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import random
 from typing import Any
+
+logger = logging.getLogger("browser-helper.behavioral_scroll")
 
 
 class InvalidModeError(ValueError):
@@ -106,8 +109,8 @@ class BehavioralScroll:
                     self._mode = saved.get("mode", self._mode)
                     self._step_min = int(saved.get("step_min", self._step_min))
                     self._step_max = int(saved.get("step_max", self._step_max))
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — settings load is best-effort
+                logger.debug("Failed to load scroll config: %s", exc)
 
     # ── Config management ────────────────────────────────────────
 
@@ -156,8 +159,8 @@ class BehavioralScroll:
         if self._settings is not None:
             try:
                 self._settings.set(behavioral_scroll=self.config)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — settings persist is best-effort
+                logger.debug("Failed to persist scroll config: %s", exc)
         return self.config
 
     # ── Scroll execution ─────────────────────────────────────────

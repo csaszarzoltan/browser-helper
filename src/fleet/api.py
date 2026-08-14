@@ -492,8 +492,8 @@ async def run_batch(body: RunBatchRequest) -> Any:
                 if sess is not None:
                     try:
                         await session_registry.destroy(sess.session_id)
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+                        logger.debug("Batch cleanup destroy failed: %s", exc)
 
     results = await asyncio.gather(*(_run_one(i, t) for i, t in enumerate(tasks)))
     ok_count = sum(1 for r in results if r.get("status") == "ok")
