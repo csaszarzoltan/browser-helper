@@ -18,13 +18,11 @@ import json
 import os
 import sys
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
-
 
 # ===================================================================
 # Fixtures
@@ -209,7 +207,6 @@ class TestProxyPoolCRUD:
 
     def test_import(self):
         """ProxyPool should be importable from proxy_manager."""
-        from proxy_manager import ProxyPool
 
     def test_init_with_storage_path(self, storage_path):
         """ProxyPool should accept an optional storage_path."""
@@ -287,7 +284,7 @@ class TestProxyPoolCRUD:
 
     def test_get_pool_entries_have_all_fields(self, pool):
         """Each entry in get_pool() should contain all ProxyEntry fields."""
-        pid = pool.add_proxy("socks5://user:pass@host:1080", tags=["test"])
+        pool.add_proxy("socks5://user:pass@host:1080", tags=["test"])
         proxies = pool.get_pool()
         entry = proxies[0]
         for key in ("id", "url", "type", "tags", "enabled", "healthy",
@@ -323,7 +320,6 @@ class TestProxyPoolCRUD:
 
     def test_add_invalid_url(self, pool):
         """add_proxy() with malformed URL should raise or return error."""
-        from proxy_manager import ProxyEntry
 
         with pytest.raises((ValueError, Exception)):
             pool.add_proxy("not-a-url")
@@ -464,14 +460,14 @@ class TestRotationStrategies:
 
     def test_by_tag_group_residential(self, populated_pool):
         """By-tag strategy should filter to matching tag group."""
-        pool, ids = populated_pool
+        pool, _ = populated_pool
         residential = pool.get_proxy(strategy="by-tag", group="residential")
         assert residential is not None
         assert "residential" in residential["tags"]
 
     def test_by_tag_group_datacenter(self, populated_pool):
         """By-tag strategy should filter to datacenter proxies."""
-        pool, ids = populated_pool
+        pool, _ = populated_pool
         dc = pool.get_proxy(strategy="by-tag", group="datacenter")
         assert dc is not None
         assert "datacenter" in dc["tags"]
@@ -585,7 +581,7 @@ class TestHealthCheck:
     def test_health_check_updates_latency(self, pool):
         """health_check() should update latency_ms."""
         pid = pool.add_proxy("socks5://host:1080")
-        result = pool.health_check(pid)
+        pool.health_check(pid)
         entry = pool.get_proxy(proxy_id=pid)
         # Latency should be a non-negative number
         assert entry["latency_ms"] >= 0
@@ -724,7 +720,7 @@ class TestStats:
 
     def test_stats_by_tag(self, populated_pool):
         """get_stats() should include breakdown by tag."""
-        pool, ids = populated_pool
+        pool, _ = populated_pool
         stats = pool.get_stats()
         assert "by_tag" in stats
         assert "datacenter" in stats["by_tag"]
@@ -751,6 +747,7 @@ class TestR3HealthCheckAsync:
         import time as _time
 
         import httpx as _httpx
+
         from proxy_manager import ProxyPool as _ProxyPool
 
         pool = _ProxyPool()

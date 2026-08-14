@@ -93,10 +93,12 @@ class TestPostBaseline:
     @pytest.mark.asyncio
     async def test_baseline_response_shape(self):
         """On success, should return status + baseline with url/path/size/timestamp."""
-        from unittest.mock import AsyncMock, PropertyMock, patch
-        from io import BytesIO
         import base64 as b64
+        from io import BytesIO
+        from unittest.mock import AsyncMock, PropertyMock, patch
+
         from PIL import Image
+
         from baseline_manager import BaselineManager
 
         # Create a mock CDP client
@@ -208,12 +210,14 @@ class TestPostCompare:
     @pytest.mark.asyncio
     async def test_compare_response_shape(self):
         """On success, comparison response should match the spec shape."""
-        from unittest.mock import AsyncMock, PropertyMock, patch
-        from io import BytesIO
         import base64 as b64
-        from PIL import Image
-        from baseline_manager import BaselineManager
         import tempfile
+        from io import BytesIO
+        from unittest.mock import AsyncMock, PropertyMock, patch
+
+        from PIL import Image
+
+        from baseline_manager import BaselineManager
 
         # Create a mock CDP client
         mock = AsyncMock()
@@ -451,12 +455,14 @@ class TestCIOutputFormat:
     @pytest.mark.asyncio
     async def test_compare_output_has_cicd_fields(self):
         """Comparison response should include passed, pixel_delta, threshold."""
-        from unittest.mock import AsyncMock, PropertyMock, patch
-        from io import BytesIO
         import base64 as b64
-        from PIL import Image
-        from baseline_manager import BaselineManager
         import tempfile
+        from io import BytesIO
+        from unittest.mock import AsyncMock, PropertyMock, patch
+
+        from PIL import Image
+
+        from baseline_manager import BaselineManager
 
         mock = AsyncMock()
         type(mock).is_connected = PropertyMock(return_value=True)
@@ -503,8 +509,9 @@ class TestMockCDPIntegration:
     @pytest.fixture
     def sample_png_b64(self):
         """Return a base64-encoded 100x100 red PNG."""
-        from io import BytesIO
         import base64 as b64
+        from io import BytesIO
+
         from PIL import Image
 
         img = Image.new("RGBA", (100, 100), (255, 0, 0, 255))
@@ -515,8 +522,9 @@ class TestMockCDPIntegration:
     @pytest.fixture
     def diff_png_b64(self):
         """Return a base64-encoded 100x100 blue PNG (different from red)."""
-        from io import BytesIO
         import base64 as b64
+        from io import BytesIO
+
         from PIL import Image
 
         img = Image.new("RGBA", (100, 100), (0, 0, 255, 255))  # blue

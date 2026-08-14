@@ -29,7 +29,6 @@ from httpx import ASGITransport, AsyncClient
 
 from main import app, headless_mgr, proxy_pool
 
-
 # ===================================================================
 # Fixtures
 # ===================================================================

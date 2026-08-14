@@ -98,7 +98,6 @@ async def fleet_run_batch(tasks: list[dict], concurrency: int = 4,
     Tasks run in isolated session tabs up to *concurrency* at a time; one
     failing task does not affect the others.  Returns an aggregated report.
     """
-    from main import run_op  # lazy import
 
     if ctx is not None:
         ctx.info(f"fleet_run_batch tasks={len(tasks or [])} concurrency={concurrency}")

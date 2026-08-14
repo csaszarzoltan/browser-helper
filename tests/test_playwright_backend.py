@@ -29,10 +29,9 @@ Acceptance criteria (10) from analysis-brief.md Section P1-1:
   10. Version reporting in status endpoint
 """
 
-import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -48,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # The playwright_backend module doesn't exist yet — import will fail
 # until the analyst builds src/playwright_backend.py.  We use a helper
 # so tests can cleanly detect the missing module.
-from main import app  # noqa: E402
+from main import app
 
 
 def _try_import_playwright_backend():
@@ -58,7 +57,7 @@ def _try_import_playwright_backend():
     Until the module exists this returns (None, "ImportError: …").
     """
     try:
-        import playwright_backend  # type: ignore[import-untyped]  # noqa: F811
+        import playwright_backend  # type: ignore[import-untyped]
         return playwright_backend, None
     except ImportError as exc:
         return None, str(exc)
@@ -142,7 +141,6 @@ class TestPlaywrightBackendInterface:
         """A Pydantic model for the switch request must exist in main.py."""
         # The model should accept {"backend": "cdp" | "playwright"}
         # We look for it by checking app's type annotations or imported symbols
-        from pydantic import BaseModel
         # The developer must define e.g. class BackendSwitchRequest(BaseModel)
         # in main.py.  Until then this test fails cleanly.
         try:
@@ -853,11 +851,11 @@ class TestCLIArgumentParsing:
         if run_spec is None:
             pytest.skip("No run.py found; --backend CLI arg not testable here")
 
-        import run
-
         # run.py builds its parser inside main(); replicate the check by
         # verifying the --backend option is wired into the parser setup.
         import inspect
+
+        import run
 
         src = inspect.getsource(run.main)
         assert '"--backend"' in src or "'--backend'" in src, (

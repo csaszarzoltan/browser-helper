@@ -23,11 +23,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
-from session_manager import SessionManager, SessionState
-
 import pytest
 
-
+from session_manager import SessionManager, SessionState
 
 # ─── Helpers ───────────────────────────────────────────────────────────
 

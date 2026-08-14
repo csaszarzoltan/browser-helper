@@ -56,7 +56,6 @@ class TestNavigateBodyUrl:
 
     def test_navigate_missing_url_clear_422(self, app_client):
         """No url anywhere → 422 with an actionable message (was bare 422)."""
-        import main
 
         c = app_client
         r = c.post("/navigate", json={})

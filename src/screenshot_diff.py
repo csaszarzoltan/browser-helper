@@ -85,7 +85,7 @@ class ScreenshotDiffEngine:
         try:
             baseline = Image.open(baseline_path)
             current = Image.open(current_path)
-        except Exception as exc:
+        except (OSError, SyntaxError) as exc:
             return DiffResult(
                 passed=False,
                 pixel_delta=0.0,
@@ -108,7 +108,7 @@ class ScreenshotDiffEngine:
                 ScreenshotDiffEngine._create_diff_image_safe(
                     baseline, current, output_path
                 )
-            except Exception:
+            except (OSError, ValueError):  # best-effort: dimension-mismatch overlay may fail
                 pass
 
             diff_b64 = ""
@@ -117,7 +117,7 @@ class ScreenshotDiffEngine:
                     buf = BytesIO()
                     blank.save(buf, format="PNG")
                     diff_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            except Exception:
+            except OSError:  # best-effort: blank diff fallback
                 pass
 
             return DiffResult(
@@ -169,7 +169,7 @@ class ScreenshotDiffEngine:
         try:
             img1 = Image.open(img1_path)
             img2 = Image.open(img2_path)
-        except Exception:
+        except (OSError, SyntaxError):
             return 1.0
 
         return ScreenshotDiffEngine._compute_delta(img1, img2)
@@ -210,7 +210,7 @@ class ScreenshotDiffEngine:
 
         try:
             diff = ImageChops.difference(img1, img2)
-        except Exception:
+        except (OSError, ValueError):
             return 1.0
 
         # Count non-black pixels in the grayscale difference

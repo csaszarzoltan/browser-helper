@@ -8,14 +8,13 @@ Interface tests:  check the contract exists (will fail with AttributeError until
 Behavioral tests: check expected behavior (will fail with NotImplementedError or other errors
                   until the implementation is wired).
 """
+import asyncio
 import inspect
 import json
 import sys
 from pathlib import Path
 
-import asyncio
 import pytest
-
 
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick

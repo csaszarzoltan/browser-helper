@@ -1,7 +1,6 @@
 """Unit tests for the orphan-headless reaper (_reap_orphan_headless)."""
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from main import _reap_orphan_headless
 

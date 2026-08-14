@@ -57,8 +57,9 @@ def _find_chrome_with_profile(profile_dir: str) -> int | None:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,  # pgrep may find 0 matches; exit code ≠ 0 is fine
         ).stdout
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
     import re as _re
 
@@ -102,6 +103,7 @@ def _kill_process(pid: int) -> None:
                 ["taskkill", "/PID", str(pid), "/F"],
                 capture_output=True,
                 timeout=5,
+                check=False,  # process may already be gone; non-zero exit is expected
             )
         else:
             os.kill(pid, signal.SIGTERM)
@@ -366,7 +368,7 @@ class ChromeManager:
                 "status": "error",
                 "error": f"Chrome executable not found: {self._chrome_path}",
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — Chrome launch catch-all
             self._launch_in_progress = False
             return {"status": "error", "error": str(exc)}
 

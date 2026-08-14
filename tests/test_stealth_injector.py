@@ -33,7 +33,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick
 
@@ -296,7 +295,7 @@ class TestStealthInjectorLevelSwitchingRED:
         injector = StealthInjector()
         client = _mock_cdp_client()
         try:
-            result_low = injector.apply(client, level="low")
+            injector.apply(client, level="low")
             result_med = injector.apply(client, level="medium")
             assert "navigator.plugins" in result_med["applied"]
         except NotImplementedError:

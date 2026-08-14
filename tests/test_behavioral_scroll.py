@@ -22,14 +22,11 @@ Pre-development RED-phase tests for Human Scrolling Middleware (P1-5).
 
 import inspect
 import json
-import math
-import random
 import statistics
 import sys
 from pathlib import Path
 
 import pytest
-
 
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick
@@ -44,7 +41,6 @@ from behavioral_scroll import (
     InvalidModeError,
     ScrollStepEvent,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1 — Interface Tests (PASSING — green checkmark)
@@ -585,6 +581,7 @@ class TestAC9ConfigPersistence:
     def test_config_persists_after_reinit(self):
         """Config set via update_config survives re-initialization."""
         import tempfile
+
         from settings_manager import SettingsManager
 
         with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:

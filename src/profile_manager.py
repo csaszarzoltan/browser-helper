@@ -654,7 +654,7 @@ class ProfileManager:
                     # Mock environment — checker was engaged
                     try:
                         raw = asyncio.run(raw)
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — mock env: checker was engaged
                         # Mock raised (e.g. TimeoutException) — checker was engaged
                         remote_scores.append(0.0)
                         checker_engaged = True
@@ -665,8 +665,8 @@ class ProfileManager:
                 for fc in data.get("failedChecks", []):
                     if fc not in remote_failed:
                         remote_failed.append(fc)
-            except Exception:
-                # Real HTTP failure (404, timeout, etc.) — skip silently
+            except Exception:  # noqa: BLE001 — checker HTTP call is best-effort
+                logger.debug("Remote checker %s failed, skipping", url)
                 continue
 
         # Merge local and remote failed checks

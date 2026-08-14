@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick
 

@@ -10,11 +10,11 @@ autouse ``_no_real_chrome`` fixture so the real service paths (per-client
 session minting, ``_ws_tab_id`` tracking, tab isolation) are exercised
 end-to-end.  Skips when the service is not reachable.
 """
+import http.cookiejar
 import json
 import time
 import urllib.parse
 import urllib.request
-import http.cookiejar
 
 import pytest
 
@@ -68,7 +68,7 @@ def _bh_service_ready():
         with urllib.request.urlopen(f"{BH}/status", timeout=5) as resp:
             st = json.loads(resp.read().decode())
         assert st.get("browser_available"), "service has no Chrome available"
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover  # noqa: BLE001 - skip when service is down
         pytest.skip(f"browser-helper service not reachable: {exc}")
     return True
 
@@ -113,8 +113,8 @@ def test_parallel_search_overwrites_no_one(_bh_service_ready):
 
     qa = "parallel search marker alpha q1x"
     qb = "parallel search marker beta q2y"
-    ra = a.post("/agent/search", {"query": qa, "engine": "google", "timeout": 25})
-    rb = b.post("/agent/search", {"query": qb, "engine": "google", "timeout": 25})
+    a.post("/agent/search", {"query": qa, "engine": "google", "timeout": 25})
+    b.post("/agent/search", {"query": qb, "engine": "google", "timeout": 25})
 
     # Each search returns some answer text; more importantly each landed on
     # its own tab. Verify via the returned query marker in title.

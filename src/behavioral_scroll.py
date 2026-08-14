@@ -29,9 +29,11 @@ Usage:
 
 from __future__ import annotations
 
-import math
+import logging
 import random
 from typing import Any
+
+logger = logging.getLogger("browser-helper.behavioral_scroll")
 
 
 class InvalidModeError(ValueError):
@@ -107,8 +109,8 @@ class BehavioralScroll:
                     self._mode = saved.get("mode", self._mode)
                     self._step_min = int(saved.get("step_min", self._step_min))
                     self._step_max = int(saved.get("step_max", self._step_max))
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — settings load is best-effort
+                logger.debug("Failed to load scroll config: %s", exc)
 
     # ── Config management ────────────────────────────────────────
 
@@ -157,8 +159,8 @@ class BehavioralScroll:
         if self._settings is not None:
             try:
                 self._settings.set(behavioral_scroll=self.config)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — settings persist is best-effort
+                logger.debug("Failed to persist scroll config: %s", exc)
         return self.config
 
     # ── Scroll execution ─────────────────────────────────────────
@@ -216,7 +218,7 @@ class BehavioralScroll:
             t = i / max(1, n_steps - 1)
             # ease-in-out: slow start, fast middle, slow end
             ease = 0.5 - 0.5 * __import__("math").cos(t * __import__("math").pi)
-            step = max(1, int(round(base * (0.5 + ease))))
+            step = max(1, round(base * (0.5 + ease)))
             step = min(step, remaining)
             if step <= 0:
                 continue
@@ -274,7 +276,6 @@ class BehavioralScroll:
         if distance < 500:
             return BehavioralScroll._jagged_scroll(distance, step_min, step_max)
         # 500-1000: weighted random
-        import random
 
         if random.random() < 0.5:
             return BehavioralScroll._jagged_scroll(distance, step_min, step_max)
@@ -290,14 +291,12 @@ class BehavioralScroll:
         the range 150-1200ms with a right-skewed distribution, simulating
         reading time between scroll steps.
         """
-        import random
 
         return max(50.0, round(random.lognormvariate(mu, sigma), 1))
 
     @staticmethod
     def _random_step(min_px: int = DEFAULT_STEP_MIN, max_px: int = DEFAULT_STEP_MAX) -> int:
         """Return a random step size within [min_px, max_px]."""
-        import random
 
         return random.randint(min_px, max_px)
 

@@ -34,7 +34,7 @@ async def _mcp_session():
     Falls back to (None, run_op) — the shared default client — when the
     browser is unavailable (legacy behaviour).
     """
-    from main import _set_current_session, chrome_mgr, _local_cdp_http, run_op, session_registry
+    from main import _set_current_session, run_op, session_registry
 
     # Test isolation: BH_TEST_NO_CHROME=1 (set by the MCP integration test
     # harness) forbids launching a real browser from the server subprocess.
@@ -152,13 +152,18 @@ async def observe(
     if ctx is not None:
         ctx.info(f"observe mode={mode} scope={scope}")
     # Use internal snapshot functions directly (same as REST endpoint)
-    from main import _capture_accessibility_snapshot, _capture_agent_snapshot, _set_current_session, paginate_snapshot
+    from main import (
+        _capture_accessibility_snapshot,
+        _capture_agent_snapshot,
+        _set_current_session,
+        paginate_snapshot,
+    )
     
-    sess, run_op = await _mcp_session()  # local function
-    _set_current_session(sess)
-    
+    _sess, _run_op = await _mcp_session()  # local function
+    _set_current_session(_sess)
+
     try:
-        target = sess.client if sess else None
+        target = _sess.client if _sess else None
         if mode.lower() in {"accessibility", "ax"}:
             snap = await _capture_accessibility_snapshot(
                 scope=("dialog" if True and scope == "page" else scope),
@@ -199,9 +204,10 @@ async def act(
         ctx.info(f"act -> {action}")
     import json as _json
     import urllib.request as _ur
+
     from mcp_server.tools import _MCP_SESSION
 
-    sess, run_op = await _mcp_session()
+    _sess, _run_op = await _mcp_session()
     target_dict = {
         "snapshot_id": snapshot_id,
         "ref": ref,
@@ -225,17 +231,23 @@ async def act(
     }
     # Route through the running service to get identical behaviour
     try:
+        import asyncio
+
         cookie = ""
         if _MCP_SESSION.get("session") is not None:
             cookie = _MCP_SESSION["session"].session_id
-        req = _ur.Request(
-            f"http://127.0.0.1:8020/agent/act",
-            data=_json.dumps(body).encode(),
-            headers={"Content-Type": "application/json", "X-Session-ID": cookie},
-            method="POST",
-        )
-        with _ur.urlopen(req, timeout=60) as resp:
-            result = _json.loads(resp.read().decode())
+
+        def _blocking_act_request() -> dict:
+            req = _ur.Request(
+                "http://127.0.0.1:8020/agent/act",
+                data=_json.dumps(body).encode(),
+                headers={"Content-Type": "application/json", "X-Session-ID": cookie},
+                method="POST",
+            )
+            with _ur.urlopen(req, timeout=60) as resp:
+                return _json.loads(resp.read().decode())
+
+        result = await asyncio.to_thread(_blocking_act_request)
         return tool_result("act", result.get("data", {}))
     except Exception as exc:  # noqa: BLE001
         return tool_error("act", "operation_failed", str(exc))
@@ -327,7 +339,7 @@ async def search(query: str, engine: str = "google", timeout: int = 45,
     Engines: ``google`` (default, fastest — works since stealth v1.24),
     ``perplexity`` (AI answer, slower ~45s), ``ddg``, ``bing``.
     """
-    from main import agent_search, AgentSearchRequest  # lazy import
+    from main import AgentSearchRequest, agent_search  # lazy import
 
     if ctx is not None:
         ctx.info(f"search {engine}: {query[:60]}")
@@ -342,7 +354,7 @@ async def get_content(url: str | None = None, wait_ready: bool = True,
 
     Filters nav/sidebar/footer noise — cleaner context for LLMs.
     """
-    from main import client, run_op  # lazy import
+    from main import client  # lazy import
 
     if ctx is not None:
         ctx.info(f"get_content url={url}")
@@ -426,7 +438,7 @@ async def export_cookies(session_id: str, ctx: Context | None = None) -> str:
         return tool_result("export_cookies", res)
     except KeyError as exc:
         return tool_error("export_cookies", "session_not_found", str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("export_cookies", "cookie_export_failed", str(exc))
 
 
@@ -447,7 +459,7 @@ async def import_cookies(cookies: list[dict], session_id: str | None = None,
         return tool_result("import_cookies", res)
     except KeyError as exc:
         return tool_error("import_cookies", "session_not_found", str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("import_cookies", "cookie_import_failed", str(exc))
 
 
@@ -463,10 +475,11 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
     if ctx is not None:
         ctx.info(f"clone_session source={session_id}")
     try:
-        source, src_sess = _resolve_cookie_target(session_id)
-        res = await source.get_cookies()
+        _source, _src_sess = _resolve_cookie_target(session_id)
+        res = await _source.get_cookies()
         cookies = (res or {}).get("cookies", [])
-        from main import _local_cdp_http, chrome_mgr, session_registry as _sr
+        from main import _local_cdp_http, chrome_mgr
+        from main import session_registry as _sr
 
         await chrome_mgr.launch()
         new_sess = await _sr.create(_local_cdp_http())
@@ -477,7 +490,7 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
         })
     except KeyError as exc:
         return tool_error("clone_session", "session_not_found", str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("clone_session", "clone_failed", str(exc))
 
 
@@ -491,7 +504,7 @@ async def wait_for(value: str, kind: str = "selector", condition: str = "present
     kind=selector|text|url, condition=present|gone|visible.  Deterministic —
     no guessy sleeps; returns ok once the condition holds, error on timeout.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"wait_for kind={kind} value={value} condition={condition} timeout={timeout}")
@@ -502,7 +515,7 @@ async def wait_for(value: str, kind: str = "selector", condition: str = "present
                               kind, value, condition, timeout)
         return json_dumps({"status": "ok", "operation": "wait_for",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("wait_for", "wait_failed", str(exc))
 
 
@@ -513,7 +526,7 @@ async def assert_(value: str, kind: str = "selector", condition: str = "exists",
     Returns a structured pass/fail; a failed assertion is reported as an
     error so the agent's test fails deterministically.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"assert kind={kind} value={value} condition={condition} expected={expected}")
@@ -528,7 +541,7 @@ async def assert_(value: str, kind: str = "selector", condition: str = "exists",
                               f"Assertion failed: {condition} {kind}={value} (found={result.get('found')}, count={result.get('count')})")
         return json_dumps({"status": "ok", "operation": "assert",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("assert", "assertion_failed", str(exc))
 
 
@@ -542,7 +555,7 @@ async def form_fill(fields: list[dict], timeout: int = 5, ctx: Context | None = 
     value-setter technique (native setter + input/change/blur events) so
     React/Angular controlled inputs register the change.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"form_fill fields={len(fields or [])}")
@@ -552,7 +565,7 @@ async def form_fill(fields: list[dict], timeout: int = 5, ctx: Context | None = 
         res = await run_op_fn("form_fill", target.smart_form_fill, fields or [], timeout)
         return json_dumps({"status": "ok", "operation": "form_fill",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("form_fill", "form_fill_failed", str(exc))
 
 
@@ -562,7 +575,7 @@ async def form_extract(ctx: Context | None = None) -> str:
     Returns each form's fields: tag, type, name, label, placeholder,
     required, visible — feed the labels into form_fill.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info("form_extract")
@@ -572,7 +585,7 @@ async def form_extract(ctx: Context | None = None) -> str:
         res = await run_op_fn("form_extract", target.form_extract)
         return json_dumps({"status": "ok", "operation": "form_extract",
                            "data": res, "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("form_extract", "form_extract_failed", str(exc))
 
 
@@ -586,7 +599,7 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
     Returns the artifact record — fetch the file at
     ``GET /artifacts/{artifact_id}``.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"download url={url}")
@@ -602,11 +615,16 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
                 return tool_error("download", "download_failed",
                                   str(res.get("error", res)))
             path = res["path"]
+            import asyncio
             import mimetypes
 
             mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
-            with open(path, "rb") as f:
-                binary = f.read()
+
+            def _read_file() -> bytes:
+                with open(path, "rb") as f:
+                    return f.read()
+
+            binary = await asyncio.to_thread(_read_file)
             from main import artifact_store
 
             record = artifact_store.put(binary, mime, suffix=Path(path).suffix or None,
@@ -615,7 +633,7 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
                                "data": {"artifact": record, "file_name": res["name"],
                                         "size_bytes": res["size_bytes"]},
                                "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("download", "download_failed", str(exc))
 
 
@@ -641,7 +659,7 @@ async def network_block(patterns: list[str], ctx: Context | None = None) -> str:
         return json_dumps({"status": "ok", "operation": "network_block",
                            "data": {"blocked": result.get("blocked", len(patterns))},
                            "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("network_block", "block_failed", str(exc))
 
 
@@ -663,5 +681,5 @@ async def network_mock(mocks: list[dict], ctx: Context | None = None) -> str:
         return json_dumps({"status": "ok", "operation": "network_mock",
                            "data": {"mocks": result.get("mocks", len(mocks))},
                            "error": None, "meta": {}})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("network_mock", "mock_failed", str(exc))

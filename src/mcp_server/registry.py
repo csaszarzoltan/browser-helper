@@ -41,7 +41,6 @@ _TOOL_CAPABILITY = {
     "memory_forget": "memory.persistent",
     "memory_list": "memory.persistent",
     # Auth-session clone / cookie porting (v1.27.0, F1)
-    "export_cookies": "diagnostics.cookies",
     "import_cookies": "diagnostics.cookies",
     "clone_session": "diagnostics.cookies",
     # Wait-for / assertion engine (v1.27.0, F2)
@@ -125,11 +124,6 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["id"],
     },
     "session_status": {"type": "object", "properties": {}},
-    "export_cookies": {
-        "type": "object",
-        "properties": {"session_id": {"type": "string", "description": "Session id to export cookies for"}},
-        "required": ["session_id"],
-    },
     "search": {
         "type": "object",
         "properties": {
@@ -364,7 +358,7 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
         if name.startswith("memory_"):
             return getattr(memory_tools, name)
         if name == "assert":
-            return getattr(tools, "assert_")  # Python keyword — module uses assert_
+            return tools.assert_  # Python keyword — module uses assert_
         return getattr(tools, name)
 
     defs: list[ToolDef] = []

@@ -11,6 +11,12 @@ from __future__ import annotations
 import pytest
 
 
+def _write_csv(path: str) -> None:
+    """Write a tiny CSV fixture (used via executor to avoid blocking I/O in async tests)."""
+    with open(path, "wb") as f:
+        f.write(b"a,b,c\n1,2,3\n")
+
+
 @pytest.fixture
 def app_client(monkeypatch):
     from fastapi.testclient import TestClient
@@ -105,12 +111,13 @@ class TestDownloadRest:
         c = app_client
         # Fake download_file writes a file and returns ok
         async def fake_download(url, dl_dir, timeout):
+            import asyncio
             import os
 
             os.makedirs(dl_dir, exist_ok=True)
             p = os.path.join(dl_dir, "data.csv")
-            with open(p, "wb") as f:
-                f.write(b"a,b,c\n1,2,3\n")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _write_csv, p)
             return {"status": "ok", "path": p, "name": "data.csv", "size_bytes": 10}
 
         monkeypatch.setattr(main.client, "download_file", fake_download)

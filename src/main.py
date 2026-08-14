@@ -13,8 +13,8 @@ import logging
 import os
 import tempfile
 import time
-import zipfile
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -38,10 +38,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
 from playwright_backend import BackendManager as _BackendManager
+
 backend_manager = _BackendManager()
 
-from artifact_store import ArtifactStore
-from agent_runtime import (ElementNotFoundError, SnapshotStore, StaleSnapshotError, diff_snapshots, paginate_snapshot)
 from agent_navigation import (
     AccessibilitySnapshot,
     AccessibilityTreeBuilder,
@@ -50,32 +49,39 @@ from agent_navigation import (
     extract_by_schema,
     validate_expectations,
 )
+from agent_runtime import (
+    ElementNotFoundError,
+    SnapshotStore,
+    StaleSnapshotError,
+    diff_snapshots,
+    paginate_snapshot,
+)
+from anti_detection.compositor import AntiDetectCompositor, AntiDetectProfileBundle
+from anti_detection.fingerprint_database import FingerprintDatabase
+from artifact_store import ArtifactStore
 from baseline_manager import BaselineManager
 from capability_registry import CapabilityRegistry
-from environment_store import EnvironmentStore
-from daily_launchpad import build_daily_launchpad
-from workflow_catalog import WorkflowCatalog
 from cdp_client import CDPClient, RateLimitConfig
 from chrome_manager import ChromeManager
-from session_registry import Session, SessionRegistry
+from daily_launchpad import build_daily_launchpad
+from detection_tester import DetectionTester
+from domain_throttle import domain_throttle
+from environment_store import EnvironmentStore
 from headless_manager import HeadlessManager
 from profile_manager import Profile, ProfileManager
-from screenshot_diff import ScreenshotDiffEngine
-from run_timeline import RunStore
-from run_recovery import RecoveryAdvisor
-from run_comparison import compare_runs
-from settings_manager import SettingsManager
-from domain_throttle import domain_throttle
-
 from proxy_manager import ProxyParseError, ProxyPool
 
 # ── Anti-detection v1.8.0 modules ──────────────────────────────────
 from proxy_rotation_manager import ProxyRotationManager
-from anti_detection.fingerprint_database import FingerprintDatabase
+from run_comparison import compare_runs
+from run_recovery import RecoveryAdvisor
+from run_timeline import RunStore
+from screenshot_diff import ScreenshotDiffEngine
 from session_manager import SessionManager
+from session_registry import Session, SessionRegistry
+from settings_manager import SettingsManager
 from stealth_injector import StealthInjector
-from anti_detection.compositor import AntiDetectCompositor, AntiDetectProfileBundle
-from detection_tester import DetectionTester
+from workflow_catalog import WorkflowCatalog
 
 # Global singleton instances for v1.8.0 API endpoints
 _fingerprint_db = FingerprintDatabase()
@@ -160,7 +166,7 @@ async def lifespan(application: FastAPI):
             else:
                 raise ConnectionError(f"HTTP {resp.status_code}")
     except Exception as exc:
-        logger.warning("Auto-connect to CDP failed (server will start anyway): %s", exc)
+        logger.warning("Auto-connect to CDP failed (server will start anyway): %s", exc, exc_info=True)
     # ── Auto-launch Chrome (if --launch-chrome was passed to run.py) ──
     if os.environ.get("CHROME_AUTO_LAUNCH") == "1":
         launch_kwargs = {}
@@ -189,11 +195,11 @@ async def lifespan(application: FastAPI):
                         client.cdp_http_url = cdp_url.rstrip("/")
                         await _ensure_global_client_attached()
                     except Exception as exc2:
-                        logger.warning("Auto-connect to launched Chrome failed: %s", exc2)
+                        logger.warning("Auto-connect to launched Chrome failed: %s", exc2, exc_info=True)
             else:
                 logger.warning("Chrome auto-launch failed: %s", result.get("error", "unknown"))
         except Exception as exc3:
-            logger.warning("Chrome auto-launch exception: %s", exc3)
+            logger.warning("Chrome auto-launch exception: %s", exc3, exc_info=True)
     # ── Fleet orchestration (v1.18.0): start the health poller ──
     try:
         from fleet.api import get_fleet_coordinator
@@ -232,13 +238,13 @@ async def lifespan(application: FastAPI):
     if client.is_connected:
         try:
             await client.disconnect()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("cleanup: client disconnect failed: %s", exc, exc_info=True)
     for ws in ws_clients.copy():
         try:
             await ws.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("cleanup: websocket close failed: %s", exc, exc_info=True)
     ws_clients.clear()
 
 
@@ -550,8 +556,7 @@ class ClickLabelRequest(BaseModel):
     @classmethod
     def populate_text_from_label(cls, data):
         """Accept 'label' field as alias for 'text'."""
-        if isinstance(data, dict):
-            if "label" in data and "text" not in data:
+        if isinstance(data, dict) and "label" in data and "text" not in data:
                 data["text"] = data["label"]
         return data
 
@@ -1014,7 +1019,7 @@ async def auth_middleware(request: Request, call_next):
 # middleware.  ``set()`` on the contextvar is task-local, but the list object
 # is shared — run_op appends, the middleware reads after call_next.
 _current_session: ContextVar[list[Session | None]] = ContextVar(
-    "current_session", default=[]
+    "current_session", default=None
 )
 
 # Paths that operate on the shared default client / are session-agnostic.
@@ -1110,8 +1115,8 @@ def _get_memory_mb() -> float:
                     parts = line.split()
                     if len(parts) >= 2:
                         return int(parts[1]) / 1024
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("read /proc/self/status failed: %s", exc, exc_info=True)
     return 0.0
 
 
@@ -1160,7 +1165,8 @@ async def broadcast_state():
     for ws in ws_clients:
         try:
             await ws.send_json(payload)
-        except Exception:
+        except Exception as exc:
+            logger.debug("ws broadcast failed: %s", exc, exc_info=True)
             stale.add(ws)
     if stale:
         ws_clients.difference_update(stale)
@@ -1204,8 +1210,10 @@ def _reap_orphan_headless() -> int:
         out = subprocess.run(
             ["pgrep", "-af", "chrome.*--headless|chrome.*remote-debugging-port="],
             capture_output=True, text=True, timeout=10,
+            check=False,  # pgrep returns non-zero when no match
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug("pgrep chrome scan failed: %s", exc, exc_info=True)
         return 0
     lines = out.stdout.strip().split("\n")
     pids = [l.split()[0] for l in lines if l and l.split()[0].isdigit()]
@@ -1222,15 +1230,18 @@ def _reap_orphan_headless() -> int:
         out2 = subprocess.run(
             ["pgrep", "-af", f"remote-debugging-port={main_port}"],
             capture_output=True, text=True, timeout=5,
+            check=False,  # pgrep returns non-zero when no match
         )
         main_pids = {l.split()[0] for l in out2.stdout.strip().split("\n")
                      if l and l.split()[0].isdigit()}
-    except Exception:
+    except Exception as exc:
+        logger.debug("pgrep main-port scan failed: %s", exc, exc_info=True)
         main_pids = set()
 
     try:
         live = {str(h.chrome_pid) for h in headless_mgr.pool.all_sessions()}
-    except Exception:
+    except Exception as exc:
+        logger.debug("headless session pool query failed: %s", exc, exc_info=True)
         live = set()
 
     killed = 0
@@ -1238,10 +1249,13 @@ def _reap_orphan_headless() -> int:
         if pid in live or pid in main_pids:
             continue  # owned by a live session or the main browser — leave it
         try:
-            subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
+            subprocess.run(
+                ["kill", "-9", pid], capture_output=True, timeout=5,
+                check=False,  # process may already be gone
+            )
             killed += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("best-effort kill of orphan chrome failed: %s, %s", pid, exc, exc_info=True)
     if killed:
         logger.warning("Reaped %d orphaned Chrome PID(s)", killed)
     return killed
@@ -1283,7 +1297,7 @@ async def _ensure_global_client_attached() -> None:
         state["cdp_url"] = ws_url
         logger.info("Global client attached to browser-level CDP: %s", ws_url)
     except Exception as exc:
-        logger.debug("Global client browser-level attach failed: %s", exc)
+        logger.debug("Global client browser-level attach failed: %s", exc, exc_info=True)
 
 
 async def _chrome_health_watchdog() -> None:
@@ -1328,6 +1342,7 @@ async def _chrome_health_watchdog() -> None:
                         continue  # all good — Chrome is alive
                     raise ConnectionError("Chrome not responding")
             except Exception as exc:
+                logger.debug("chrome health check failed: %s", exc, exc_info=True)
                 # Chrome not running at all — launch a new one.  But if a
                 # launch is ALREADY in progress (run_op triggered it and the
                 # warm-up window is still open), do NOT spawn a second
@@ -1343,9 +1358,9 @@ async def _chrome_health_watchdog() -> None:
                     await chrome_mgr.launch()
                     await _ensure_global_client_attached()
                 except Exception as exc2:
-                    logger.warning("Watchdog: auto-launch failed: %s", exc2)
+                    logger.warning("Watchdog: auto-launch failed: %s", exc2, exc_info=True)
         except Exception as exc:
-            logger.debug("Chrome health watchdog iteration failed: %s", exc)
+            logger.debug("Chrome health watchdog iteration failed: %s", exc, exc_info=True)
 
 
 def _resolve_session(request: Request) -> Session | None:
@@ -1396,7 +1411,7 @@ async def _ensure_browser(sess: Session | None = None) -> None:
                 launch_result.get("error", "unknown"),
             )
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Auto-launch exception (continuing): %s", exc)
+        logger.warning("Auto-launch exception (continuing): %s", exc, exc_info=True)
 
     # Connect to the local Chrome on the saved launched port (NOT the 9555 default)
     target.cdp_http_url = cdp_http
@@ -1406,7 +1421,8 @@ async def _ensure_browser(sess: Session | None = None) -> None:
             # recreating it via the HTTP endpoint — no WS needed yet).
             try:
                 await target.connect_to_target(sess.tab_id)
-            except Exception:
+            except Exception as exc:
+                logger.debug("tab reconnect failed (recreating tab): %s", exc, exc_info=True)
                 # Tab gone — recreate it and update the session.
                 new_tab = await session_registry._open_tab_http(target)
                 sess.tab_id = new_tab
@@ -1421,6 +1437,7 @@ async def _ensure_browser(sess: Session | None = None) -> None:
                 raise ConnectionError("browser-level attach failed")
         logger.info("Auto-connected to local Chrome at %s", state["cdp_url"])
     except Exception as exc:
+        logger.warning("auto-connect to local chrome failed: %s", exc, exc_info=True)
         state["connected"] = False
         raise HTTPException(
             status_code=503,
@@ -1445,7 +1462,7 @@ async def _resolve_session_client() -> tuple[CDPClient, Session | None]:
             sess = await session_registry.create(_local_cdp_http())
             _set_current_session(sess)
         except Exception as exc:
-            logger.warning("Session creation failed, falling back to default client: %s", exc)
+            logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
             sess = None
     if sess is not None:
         await _ensure_browser(sess)
@@ -1505,13 +1522,13 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
                 # Advertise the fresh session to the middleware (Set-Cookie).
                 _set_current_session(sess)
             except Exception as exc:
-                logger.warning("Session creation failed, falling back to default client: %s", exc)
+                logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
                 sess = None
     if sess is not None and session_hook is not None:
         try:
             session_hook(sess)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("session hook failed: %s", exc, exc_info=True)
     if sess is not None:
         # Route the operation onto the session's own client: the REST
         # endpoints pass a bound method of the *global* client; rebind the
@@ -1965,6 +1982,7 @@ async def session_export_cookies(session_id: str):
     try:
         res = await sess.client.get_cookies()
     except Exception as exc:
+        logger.warning("cookie export failed: %s", exc, exc_info=True)
         return api_error("auth_clone", "cookie_export_failed", str(exc), 502)
     return api_success("auth_clone", {
         "session_id": session_id,
@@ -1989,6 +2007,7 @@ async def session_import_cookies(session_id: str, payload: dict):
     try:
         res = await sess.client.set_cookies(cookies)
     except Exception as exc:
+        logger.warning("cookie import failed: %s", exc, exc_info=True)
         return api_error("auth_clone", "cookie_import_failed", str(exc), 502)
     return api_success("auth_clone", {
         "session_id": session_id,
@@ -2016,6 +2035,7 @@ async def session_clone(session_id: str):
         imp = await new_sess.client.set_cookies(cookies)
         imported = imp.get("imported", 0)
     except Exception as exc:
+        logger.warning("session clone failed: %s", exc, exc_info=True)
         return api_error("auth_clone", "clone_failed", str(exc), 502)
     return api_success("auth_clone", {
         "session_id": new_sess.session_id,
@@ -2048,7 +2068,6 @@ async def post_stealth_config(body: StealthConfigRequest | None = None):
     is required; ``level`` is optional (keeps the current level). Patches
     apply to the next page load (they run on every new document).
     """
-    from stealth_injector import StealthInjector
 
     if body is not None:
         state["stealth_enabled"] = body.enabled
@@ -2058,6 +2077,7 @@ async def post_stealth_config(body: StealthConfigRequest | None = None):
         try:
             client._apply_stealth_patches()
         except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("stealth patch apply failed: %s", exc, exc_info=True)
             return {"status": "error", "error": str(exc)}
     return await get_stealth_config()
 
@@ -2098,8 +2118,8 @@ async def connect_remote(body: ConnectRemoteRequest):
         if old is not None and old is not remote_client:
             try:
                 await old.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("cleanup: disconnect old client failed: %s", exc, exc_info=True)
         elapsed = (time.monotonic() - start) * 1000
         log_operation("connect_remote", "success", elapsed, body.ws_endpoint[:120])
         await broadcast_state()
@@ -2114,7 +2134,7 @@ async def connect_remote(body: ConnectRemoteRequest):
         }
     except Exception as exc:
         elapsed = (time.monotonic() - start) * 1000
-        logger.warning("connect_remote failed: %s", exc)
+        logger.warning("connect_remote failed: %s", exc, exc_info=True)
         log_operation("connect_remote", "error", elapsed, str(exc)[:200])
         return api_error("connect_remote", "CONNECT_FAILED", str(exc), 400)
 
@@ -2136,6 +2156,7 @@ async def post_rate_config(body: RateConfigRequest) -> dict:
     try:
         RateLimitConfig(**{**client.get_rate_config(), **payload})
     except Exception as exc:  # pydantic ValidationError, ValueError, AssertionError
+        logger.warning("invalid rate config: %s", exc, exc_info=True)
         raise HTTPException(status_code=422, detail=str(exc))
     return client.set_rate_config(payload)
 
@@ -2158,7 +2179,7 @@ async def connect(body: ConnectRequest | None = None):
             if launch_result.get("status") != "ok":
                 logger.warning("Chrome launch with proxy returned: %s", launch_result.get("error"))
         except Exception as exc:
-            logger.warning("Chrome launch with proxy failed: %s", exc)
+            logger.warning("Chrome launch with proxy failed: %s", exc, exc_info=True)
     # If a CDP HTTP URL is provided (not a tab URL), update the client base URL
     if cdp_url and ("/json" not in cdp_url) and ("/devtools" not in cdp_url):
         # Treat as CDP HTTP base URL (e.g. "http://127.0.0.1:9556")
@@ -2226,8 +2247,8 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
             )
             try:
                 await sess.client.close_tab(old_tab)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("cleanup: close old tab failed: %s", exc, exc_info=True)
         # Refresh the client's tab cache so next discover_tabs picks up the new target
         sess.client._tabs_cache = []
         sess.client._tabs_cache_ts = 0
@@ -2244,7 +2265,7 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
             if isinstance(data, dict):
                 data["ready"] = ready.get("ready", True)
     except Exception as exc:
-        logger.debug("Auto-wait after navigate skipped: %s", exc)
+        logger.debug("Auto-wait after navigate skipped: %s", exc, exc_info=True)
     return result
 
 
@@ -2380,7 +2401,8 @@ async def click_by_text(body: ClickTextRequest, confirm: str | None = Query(None
         try:
             before = await target.analyze_page()
             target._before_visual_state = before.get("page", {}).get("visual_state", {})
-        except Exception:
+        except Exception as exc:
+            logger.debug("before-state capture failed: %s", exc, exc_info=True)
             target._before_visual_state = {}
     result = await run_op("click_text", client.click_by_text,
                           body.text, body.timeout, body.container_selector, body.nth)
@@ -2400,8 +2422,8 @@ async def click_by_text(body: ClickTextRequest, confirm: str | None = Query(None
                 conf = None
             if conf:
                 result["confirmation"] = conf
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("post-click confirmation skipped: %s", exc, exc_info=True)
     return result
 
 
@@ -2422,7 +2444,8 @@ async def click_label(body: ClickLabelRequest, confirm: str | None = Query(None,
         try:
             before = await target.analyze_page()
             target._before_visual_state = before.get("page", {}).get("visual_state", {})
-        except Exception:
+        except Exception as exc:
+            logger.debug("before-state capture failed: %s", exc, exc_info=True)
             target._before_visual_state = {}
     result = await run_op("click_label", client.click_label,
                           body.text, body.timeout)
@@ -2440,8 +2463,8 @@ async def click_label(body: ClickLabelRequest, confirm: str | None = Query(None,
                 conf = None
             if conf:
                 result["confirmation"] = conf
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("post-click confirmation skipped: %s", exc, exc_info=True)
     return result
 
 
@@ -2472,7 +2495,8 @@ async def checkbox_select(body: CheckboxRequest | CheckboxBatchRequest, confirm:
         try:
             before = await target.analyze_page()
             target._before_visual_state = before.get("page", {}).get("visual_state", {})
-        except Exception:
+        except Exception as exc:
+            logger.debug("before-state capture failed: %s", exc, exc_info=True)
             target._before_visual_state = {}
     if isinstance(body, CheckboxBatchRequest):
         result = await run_op("checkbox_select_batch",
@@ -2496,8 +2520,8 @@ async def checkbox_select(body: CheckboxRequest | CheckboxBatchRequest, confirm:
                 conf = None
             if conf:
                 result["confirmation"] = conf
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("post-click confirmation skipped: %s", exc, exc_info=True)
     return result
 
 
@@ -2516,7 +2540,8 @@ async def checkbox_deselect(body: CheckboxRequest | CheckboxBatchRequest, confir
         try:
             before = await target.analyze_page()
             target._before_visual_state = before.get("page", {}).get("visual_state", {})
-        except Exception:
+        except Exception as exc:
+            logger.debug("before-state capture failed: %s", exc, exc_info=True)
             target._before_visual_state = {}
     if isinstance(body, CheckboxBatchRequest):
         result = await run_op("checkbox_deselect_batch",
@@ -2540,8 +2565,8 @@ async def checkbox_deselect(body: CheckboxRequest | CheckboxBatchRequest, confir
                 conf = None
             if conf:
                 result["confirmation"] = conf
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("post-click confirmation skipped: %s", exc, exc_info=True)
     return result
 
 
@@ -2575,6 +2600,7 @@ async def page_analyze(condensed: bool = Query(False, description="Enable conden
                 page["elements"] = snap.elements
         return api_success("page_analyze_condensed" if condensed else "page_analyze", raw)
     except Exception as exc:
+        logger.warning("page analyze failed: %s", exc, exc_info=True)
         return api_error("page_analyze", "operation_failed", str(exc), 400)
 
 
@@ -2716,8 +2742,14 @@ async def page_download(body: DownloadRequest):
 
             mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
             suffix = Path(path).suffix or None
-            with open(path, "rb") as f:
-                binary = f.read()
+
+            import asyncio
+
+            def _read_download() -> bytes:
+                with open(path, "rb") as f:
+                    return f.read()
+
+            binary = await asyncio.to_thread(_read_download)
             record = artifact_store.put(binary, mime, suffix=suffix,
                                         metadata={"source_url": body.url, "name": data["name"]})
             return api_success("page_download", {
@@ -2727,6 +2759,7 @@ async def page_download(body: DownloadRequest):
                 "size_bytes": data["size_bytes"],
             })
     except Exception as exc:
+        logger.warning("page download failed: %s", exc, exc_info=True)
         return api_error("page_download", "download_failed", str(exc), 502)
 
 
@@ -2967,7 +3000,7 @@ async def browser_launch(body: LaunchRequest | None = None):
                 result["_auto_connected"] = True
                 logger.info("Auto-connected to launched Chrome at %s", cdp_url)
             except Exception as exc:
-                logger.warning("Auto-connect after launch failed: %s", exc)
+                logger.warning("Auto-connect after launch failed: %s", exc, exc_info=True)
     return {"status": "ok" if result.get("status") == "ok" else "error",
             "operation": "browser_launch",
             "result": result}
@@ -3027,6 +3060,7 @@ async def screenshot_baseline(body: BaselineRequest):
         # Take screenshot via CDP
         screenshot_result = await target.screenshot()
     except Exception as exc:
+        logger.warning("screenshot failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=400,
             detail=f"Screenshot failed: {exc}",
@@ -3088,6 +3122,7 @@ async def screenshot_compare(body: CompareRequest):
     try:
         screenshot_result = await target.screenshot()
     except Exception as exc:
+        logger.warning("screenshot failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=400,
             detail=f"Screenshot failed: {exc}",
@@ -3101,10 +3136,9 @@ async def screenshot_compare(body: CompareRequest):
         )
 
     current_bytes = base64.b64decode(image_data)
-    current_tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    current_tmp.write(current_bytes)
-    current_tmp.close()
-    current_path = current_tmp.name
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as current_tmp:
+        current_tmp.write(current_bytes)
+        current_path = current_tmp.name
 
     diff_output = os.path.join(
         os.path.dirname(current_path),
@@ -3121,8 +3155,8 @@ async def screenshot_compare(body: CompareRequest):
     # Clean up temp current screenshot
     try:
         os.unlink(current_path)
-    except Exception:
-        pass
+    except OSError as exc:
+        logger.debug("cleanup: unlink temp screenshot failed: %s", exc)
 
     baseline_stat = os.stat(baseline_path)
 
@@ -3346,8 +3380,7 @@ async def handle_export_cookies(request: Request, sid: str):
     if not sid:
         return api_error("export_cookies", "invalid_session_id", "sid must be a non-empty string", 400)
     try:
-        from services.cookie_service import export_cookies
-        from services.cookie_service import SessionNotFoundError
+        from services.cookie_service import SessionNotFoundError, export_cookies
 
         data = await export_cookies(sid)
     except SessionNotFoundError:
@@ -3570,6 +3603,7 @@ async def confirm_action(confirm: str = Query("analyze", description="Confirmati
             result = await target._confirm_with_analyze()
         return {"status": "ok", "operation": "confirm_action", "result": result}
     except Exception as exc:
+        logger.warning("confirm_action failed: %s", exc, exc_info=True)
         return {"status": "error", "operation": "confirm_action", "error": str(exc)}
 
 
@@ -3618,7 +3652,8 @@ async def websocket_endpoint(ws: WebSocket):
             "state": dict(state),
             "recent_log": operation_log[-10:],
         })
-    except Exception:
+    except Exception as exc:
+        logger.debug("websocket hello send failed: %s", exc, exc_info=True)
         ws_clients.discard(ws)
         return
 
@@ -3777,6 +3812,7 @@ async def websocket_endpoint(ws: WebSocket):
                                 r = {"status": "error", "error": f"Unknown action: {step_action}"}
                             results.append({"step": i, "action": step_action, "result": r, "status": "ok"})
                         except Exception as e:
+                            logger.debug("ws batch step failed: %s", e, exc_info=True)
                             results.append({"step": i, "action": step_action, "result": str(e), "status": "error"})
                     elapsed = (time.monotonic() - start) * 1000
                     await ws.send_json({
@@ -3797,6 +3833,7 @@ async def websocket_endpoint(ws: WebSocket):
                 log_operation(f"ws:{action}", "success", elapsed, "")
 
             except Exception as e:
+                logger.debug("ws action failed: %s", e, exc_info=True)
                 elapsed = (time.monotonic() - start) * 1000
                 log_operation(f"ws:{action}", "error", elapsed, str(e))
                 await ws.send_json({
@@ -3945,6 +3982,7 @@ async def agent_observe(body: AgentObserveRequest):
     except ValueError as exc:
         return api_error("agent_observe", "invalid_observation", str(exc), 422)
     except Exception as exc:
+        logger.warning("agent_observe failed: %s", exc, exc_info=True)
         return api_error("agent_observe", "observation_failed", str(exc), 503)
 
 
@@ -4166,6 +4204,7 @@ async def agent_act(body: AgentActionRequest):
     except ValueError as exc:
         return api_error("agent_act", "invalid_request", str(exc), 422)
     except Exception as exc:
+        logger.warning("agent_act failed: %s", exc, exc_info=True)
         return api_error("agent_act", "action_failed", str(exc), 503)
     finally:
         if pinned_id and pinned_kind == "ax":
@@ -4249,6 +4288,7 @@ async def agent_forms_discover(body: AgentFormDiscoverRequest | None = None):
             "history_load": history,
         })
     except Exception as exc:
+        logger.warning("agent_forms_discover failed: %s", exc, exc_info=True)
         return api_error("agent_forms_discover", "discovery_failed", str(exc), 503)
 
 
@@ -4311,6 +4351,7 @@ async def agent_forms_fill(body: AgentFormFillRequest):
     except ValueError as exc:
         return api_error("agent_forms_fill", "invalid_form", str(exc), 422)
     except Exception as exc:
+        logger.warning("agent_forms_fill failed: %s", exc, exc_info=True)
         return api_error("agent_forms_fill", "fill_failed", str(exc), 503)
 
 
@@ -4334,6 +4375,7 @@ async def agent_extract(body: AgentExtractRequest):
     except ValueError as exc:
         return api_error("agent_extract", "invalid_schema", str(exc), 422)
     except Exception as exc:
+        logger.warning("agent_extract failed: %s", exc, exc_info=True)
         return api_error("agent_extract", "extraction_failed", str(exc), 503)
 
 
@@ -4347,6 +4389,7 @@ async def agent_available_actions():
         result["snapshot_id"] = snap.snapshot_id
         return api_success("agent_available_actions", result)
     except Exception as exc:
+        logger.warning("agent_available_actions failed: %s", exc, exc_info=True)
         return api_error("agent_available_actions", "observation_failed", str(exc), 503)
 
 
@@ -4392,6 +4435,7 @@ async def agent_execute_task(body: AgentExecuteTaskRequest):
             data["final_observation"] = snap.as_dict(max_nodes=100)
         return api_success("agent_execute_task", data)
     except Exception as exc:
+        logger.warning("agent_execute_task failed: %s", exc, exc_info=True)
         return api_error("agent_execute_task", "task_failed", str(exc), 503)
 
 
@@ -4465,7 +4509,8 @@ async def agent_search(body: AgentSearchRequest):
                     }})()"""
                 )
                 answer = result.get("result", "") or ""
-            except Exception:
+            except Exception as exc:
+                logger.debug("answer extraction failed: %s", exc, exc_info=True)
                 answer = ""
             # Perplexity first shows "Searching the web..." then the answer;
             # wait until the answer is *substantive* (has sources / real text)
@@ -4539,7 +4584,7 @@ async def agent_run_flow(body: AgentFlowRequest):
                 step_report["result"] = r.get("status")
                 step_report["value"] = str(r.get("result", ""))[:300]
             elif step.action == "screenshot":
-                shot = await flow_client.screenshot()
+                await flow_client.screenshot()
                 step_report["result"] = "ok"
                 step_report["screenshot"] = True
             else:
@@ -4552,12 +4597,13 @@ async def agent_run_flow(body: AgentFlowRequest):
 
             # Per-step screenshot.
             if step.screenshot:
-                shot = await flow_client.screenshot()
+                await flow_client.screenshot()
                 step_report["screenshot"] = True
 
             step_report["ok"] = True
             step_report["elapsed_ms"] = round((time.monotonic() - step_start) * 1000)
         except Exception as exc:
+            logger.debug("flow step failed: %s", exc, exc_info=True)
             step_report["ok"] = False
             step_report["error"] = str(exc)
             step_report["elapsed_ms"] = round((time.monotonic() - step_start) * 1000)
@@ -4713,10 +4759,16 @@ async def agent_diff(body: AgentDiffRequest):
             p_a = os.path.join(td, "a.jpg")
             p_b = os.path.join(td, "b.jpg")
             p_out = os.path.join(td, "diff.png")
-            with open(p_a, "wb") as f:
-                f.write(img_a)
-            with open(p_b, "wb") as f:
-                f.write(img_b)
+
+            import asyncio
+
+            def _write_images() -> None:
+                with open(p_a, "wb") as f:
+                    f.write(img_a)
+                with open(p_b, "wb") as f:
+                    f.write(img_b)
+
+            await asyncio.to_thread(_write_images)
             from screenshot_diff import ScreenshotDiffEngine
 
             result = ScreenshotDiffEngine.diff(
@@ -4750,7 +4802,7 @@ async def agent_diff(body: AgentDiffRequest):
                     "Írd le röviden, mit ábrázol az oldal (fő tartalom, layout, színek).",
                 )
         except Exception as exc:
-            logger.debug("diff VLM assessment failed: %s", exc)
+            logger.debug("diff VLM assessment failed: %s", exc, exc_info=True)
             vlm_assessment = None
         return api_success("agent_diff", {
             "url_a": body.url_a,
@@ -4810,8 +4862,14 @@ async def agent_visual_regression(body: VisualRegressionRequest):
                         with tempfile.TemporaryDirectory() as td:
                             cur_path = os.path.join(td, "current.jpg")
                             out_path = os.path.join(td, "diff.png")
-                            with open(cur_path, "wb") as f:
-                                f.write(img)
+
+                            import asyncio
+
+                            def _write_img(_p=cur_path, _i=img) -> None:
+                                with open(_p, "wb") as f:
+                                    f.write(_i)
+
+                            await asyncio.to_thread(_write_img)
                             from screenshot_diff import ScreenshotDiffEngine
 
                             diff = ScreenshotDiffEngine.diff(
@@ -4826,6 +4884,7 @@ async def agent_visual_regression(body: VisualRegressionRequest):
                 item["elapsed_ms"] = 0
                 results.append(item)
             except Exception as exc:
+                logger.debug("visual regression item failed: %s", exc, exc_info=True)
                 item["ok"] = False
                 item["error"] = str(exc)
                 ok_all = False
@@ -4853,6 +4912,7 @@ async def recording_start(quality: int = Query(70, description="JPEG quality 1-1
         result = await run_op("recording_start", client.start_recording, quality)
         return result
     except Exception as exc:
+        logger.warning("recording start failed: %s", exc, exc_info=True)
         return api_error("recording_start", "recording_failed", str(exc), 503)
 
 
@@ -4863,6 +4923,7 @@ async def recording_stop():
         result = await run_op("recording_stop", client.stop_recording)
         return result
     except Exception as exc:
+        logger.warning("recording stop failed: %s", exc, exc_info=True)
         return api_error("recording_stop", "recording_failed", str(exc), 503)
 
 
@@ -4888,6 +4949,7 @@ async def network_mock(body: NetworkMockRequest | None = None):
         result = await run_op("network_mock", client.set_request_mocks, mocks)
         return result
     except Exception as exc:
+        logger.warning("network mock failed: %s", exc, exc_info=True)
         return api_error("network_mock", "mock_failed", str(exc), 503)
 
 
@@ -4904,6 +4966,7 @@ async def network_block(body: NetworkBlockRequest | None = None):
         result = await run_op("network_block", client.set_network_block, patterns)
         return result
     except Exception as exc:
+        logger.warning("network block failed: %s", exc, exc_info=True)
         return api_error("network_block", "block_failed", str(exc), 503)
 
 
@@ -4923,8 +4986,8 @@ async def agent_console(body: AgentConsoleRequest | None = None):
     target, _sess = await _resolve_session_client()
     try:
         await target.start_console_monitoring()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("console monitoring start failed: %s", exc, exc_info=True)
     if body.clear_first:
         target.clear_console_entries()
         return api_success("agent_console", {"cleared": True, "entries": []})
@@ -4963,6 +5026,7 @@ async def agent_flow_vlm(body: AgentFlowRequest, llm_prompt: str = Query(
         flow_result["data"]["vlm"] = assessment
         return flow_result
     except Exception as exc:
+        logger.warning("VLM assessment failed: %s", exc, exc_info=True)
         flow_result["data"]["vlm"] = {"status": "error", "error": str(exc)}
         return flow_result
 
@@ -5491,7 +5555,8 @@ async def backend_status():
 
 
 from behavioral_mouse import MouseConfig as _MouseConfig
-from behavioral_scroll import BehavioralScroll as _BehavioralScroll, InvalidModeError
+from behavioral_scroll import BehavioralScroll as _BehavioralScroll
+from behavioral_scroll import InvalidModeError
 
 _mouse_config_instance = _MouseConfig()
 _scroll_instance = _BehavioralScroll()
@@ -5536,7 +5601,6 @@ async def post_scroll_config(req: ScrollConfigRequest):
     """Update the behavioral scroll configuration."""
     from fastapi.responses import JSONResponse
 
-    global _scroll_instance
     try:
         _scroll_instance.update_config(
             enabled=req.enabled,
@@ -5604,6 +5668,7 @@ if __name__ == "__main__":
 
 # Enterprise browser-agent operations (additive v1 API)
 from enterprise_workspace import EnterpriseWorkspace, render_console
+
 _enterprise = EnterpriseWorkspace(Path(os.getenv("ENTERPRISE_DB", "/tmp/browser-helper-enterprise.db")))
 
 @app.get("/enterprise/{page}", include_in_schema=False)

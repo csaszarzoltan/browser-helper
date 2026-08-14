@@ -866,7 +866,7 @@ class TestCorruptStore:
         """Write garbage bytes to the store path; recall must return a clean
         error envelope (status=error, operation_failed) with no traceback.
         """
-        from mcp_server.memory.tools import memory_recall, memory_remember
+        from mcp_server.memory.tools import memory_recall
 
         db = tmp_path / "corrupt.db"
         db.write_bytes(b"this is not a sqlite database at all, just garbage bytes" * 10)

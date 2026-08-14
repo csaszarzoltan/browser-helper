@@ -25,20 +25,17 @@ from __future__ import annotations
 
 import inspect
 import sys
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import is_dataclass
 from pathlib import Path
-from typing import get_type_hints
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 
-
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick
 
 from fingerprint_engine import FingerprintConfig, FingerprintEngine
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -252,8 +249,18 @@ class TestFingerprintEngineInterface:
 
     def test_wind_mouse_bezier_signature_defaults(self):
         """Verify default parameter values on wind_mouse_bezier."""
-        sig = inspect.signature(FingerprintEngine.get_default_config)
-        # No required params for get_default_config
+        from behavioral_sim import BehavioralSimulator
+
+        sig = inspect.signature(BehavioralSimulator.wind_mouse_bezier)
+        # Static method with 4 required + 4 optional params
+        assert "start_x" in sig.parameters
+        assert "start_y" in sig.parameters
+        assert "dest_x" in sig.parameters
+        assert "dest_y" in sig.parameters
+        assert sig.parameters["gravity"].default == 9.0
+        assert sig.parameters["wind"].default == 3.0
+        assert sig.parameters["max_step"].default == 15.0
+        assert sig.parameters["target_threshold"].default == 12.0
 
     def test_generate_all_scripts_signature(self):
         """generate_all_scripts(self) -> list[str]."""
@@ -264,7 +271,8 @@ class TestFingerprintEngineInterface:
     def test_get_plausible_gpu_pool_signature(self):
         """get_plausible_gpu_pool() -> dict[str, list[str]]."""
         sig = inspect.signature(FingerprintEngine.get_plausible_gpu_pool)
-        # No required parameters
+        # Static method — no required parameters (not even self)
+        assert not sig.parameters
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -572,7 +580,7 @@ class TestGetPlausibleGpuPoolRED:
                 f"Values for {vendor!r} should be list"
             )
             assert len(renderers) >= 1, (
-                f"Each vendor should have at least one renderer"
+                "Each vendor should have at least one renderer"
             )
             for r in renderers:
                 assert isinstance(r, str) and len(r) > 0, (

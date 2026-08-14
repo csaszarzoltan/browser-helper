@@ -5,3 +5,4 @@ __pycache__/
 .env
 settings.json
 src/browser_helper.egg-info/
+.testmondata

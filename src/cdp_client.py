@@ -348,7 +348,7 @@ class CDPClient:
                 logger.info(
                     "Stealth patches applied: %s", ", ".join(result.get("applied", []))
                 )
-        except Exception as exc:  # pragma: no cover - defensive
+        except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:  # pragma: no cover - defensive
             logger.warning("Stealth patch injection failed: %s", exc)
 
     async def _listener(self):
@@ -404,8 +404,8 @@ class CDPClient:
                             self._console_entries.append(entry)
                             if len(self._console_entries) > 500:
                                 self._console_entries = self._console_entries[-500:]
-                    except Exception:
-                        pass  # console collection is best-effort
+                    except (KeyError, TypeError, ValueError) as exc:
+                        logger.debug("console collection: %s", exc)
 
                 # Dispatch registered event callbacks
                 ev_method = msg.get("method", "")
@@ -454,8 +454,8 @@ class CDPClient:
                                 "Page.screencastFrameAck",
                                 {"sessionId": params.get("sessionId", 0)},
                             )
-                        except Exception:
-                            pass
+                        except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                            logger.debug("screencastFrameAck: %s", exc)
 
                 # Fetch interception (mock API)
                 if ev_method == "Fetch.requestPaused" and self._request_mocks:
@@ -481,8 +481,8 @@ class CDPClient:
                 if not fut.done():
                     fut.set_exception(exc)
             self._pending.clear()
-        except Exception as e:
-            logger.warning(f"CDP listener error: {e}")
+        except (websockets.exceptions.WebSocketException, OSError) as e:
+            logger.warning("CDP listener error: %s", e)
         finally:
             self._connected = False
 
@@ -537,7 +537,7 @@ class CDPClient:
             self._console_monitoring = True
             self._console_entries = []
             return {"status": "ok", "console_monitoring": True}
-        except Exception as exc:
+        except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
     def get_console_entries(self, since: float = 0.0, level: str | None = None) -> list[dict]:
@@ -653,8 +653,8 @@ class CDPClient:
                     {"requestId": req_id, "response": "Cancel"},
                 )
                 logger.info("Proxy auth challenge auto-cancelled (%s)", req_id[:16])
-            except Exception:
-                pass
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("proxy auth cancel: %s", exc)
 
         self.add_event_listener("Network.authRequired", _cancel_auth)
         self._auth_cancel_registered = True
@@ -708,7 +708,7 @@ class CDPClient:
             if target and target["id"] != self._ws_tab_id:
                 logger.info("Navigate cross-origin: roaming %s -> %s", self._ws_tab_id[:8], target["id"][:8])
                 await self.connect_to_target(target["id"])
-        except Exception as exc:
+        except (CDPError, OSError) as exc:
             logger.debug("Navigate tab sync skipped: %s", exc)
 
         return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url}
@@ -756,8 +756,8 @@ class CDPClient:
                 await self._send_command("Target.activateTarget",
                                          {"targetId": tab_id})
                 await asyncio.sleep(0.1)
-            except Exception:
-                pass  # Best-effort — tab might already be active
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("activateCurrent: %s", exc)
 
     async def _activate_tab_by_id(self, tab_id: str) -> dict:
         """Activate a specific tab by target ID (brings it to foreground)."""
@@ -765,7 +765,7 @@ class CDPClient:
             await self._send_command("Target.activateTarget",
                                      {"targetId": tab_id})
             return {"status": "ok", "tab_id": tab_id}
-        except Exception as exc:
+        except (CDPError, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
     # ─── Smart form fill ──────────────────────────────────────────
@@ -1839,8 +1839,8 @@ class CDPClient:
             while time.monotonic() < deadline:
                 try:
                     await self.wait_for_network_idle(timeout=3, quiet_ms=quiet_ms)
-                except Exception:
-                    pass  # network idle is best-effort
+                except (CDPError, websockets.exceptions.WebSocketException, OSError, TimeoutError) as exc:
+                    logger.debug("network idle: %s", exc)
                 res = await self.evaluate(
                     "document.body ? document.body.innerText.substring(0, 2000) : ''"
                 )
@@ -1853,8 +1853,8 @@ class CDPClient:
                     stable_for = 0.0
                     last_text = text
                 await asyncio.sleep(0.5)
-        except Exception:
-            pass
+        except (CDPError, websockets.exceptions.WebSocketException, OSError, TimeoutError) as exc:
+            logger.debug("waitForStableContent: %s", exc)
         # Final read
         res = await self.evaluate(
             "document.body ? document.body.innerText.substring(0, 10000) : ''"
@@ -1907,7 +1907,7 @@ class CDPClient:
 
             try:
                 data = _json.loads(data)
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 data = {"found": False, "text": data}
         text = data.get("text", "") if isinstance(data, dict) else ""
         return {
@@ -1959,7 +1959,7 @@ class CDPClient:
 
             try:
                 links = _json.loads(links)
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 links = []
         return {"status": "ok", "count": len(links), "links": links}
 
@@ -1993,7 +1993,7 @@ class CDPClient:
 
             try:
                 fields = _json.loads(fields)
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 fields = []
         return {"status": "ok", "count": len(fields), "fields": fields}
 
@@ -2025,7 +2025,7 @@ class CDPClient:
 
             try:
                 data = _json.loads(data)
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 data = {"found": False, "rows": []}
         return {
             "status": "ok",
@@ -2188,7 +2188,7 @@ class CDPClient:
             return {"status": "error", "error": f"File input not found: {selector}"}
 
         # Get backend node ID from the element
-        get_node_js = (
+        _get_node_js = (
             f"(function() {{"
             f"  const el = document.querySelector({json.dumps(selector)});"
             f"  const backend = window.__backendNodeId;"
@@ -2387,7 +2387,7 @@ class CDPClient:
             return {"status": "ok", "value": ""}
         try:
             result = await self.form_select("label", label, value)
-        except Exception as exc:
+        except (CDPError, OSError):
             return {"status": "ok", "value": str(value)}
         if isinstance(result, dict):
             selected = (result.get("selected_value") or
@@ -2614,7 +2614,7 @@ class CDPClient:
                 "downloadPath": download_dir,
                 "eventsEnabled": True,
             })
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any CDP failure means we can't configure downloads
             return {"status": "error", "error": f"setDownloadBehavior failed: {exc}"}
         os.makedirs(download_dir, exist_ok=True)
         before = set(Path(download_dir).iterdir()) if Path(download_dir).is_dir() else set()
@@ -2706,8 +2706,8 @@ class CDPClient:
         if not self._request_mocks:
             try:
                 await self._send_command("Fetch.disable")
-            except Exception:
-                pass
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("cleanup Fetch.disable: %s", exc)
             return {"status": "ok", "mocks": 0}
         if not self._fetch_enabled:
             try:
@@ -2746,8 +2746,8 @@ class CDPClient:
             # A fő navigációt mindig átengedjük.
             try:
                 await self._send_command("Fetch.continueRequest", {"requestId": rid})
-            except Exception:
-                pass
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("continueRequest: %s", exc)
             return
         if self._match_block(url) and rid:
             # Blocked pattern → fail the request (network error path).
@@ -2756,8 +2756,8 @@ class CDPClient:
                     "requestId": rid,
                     "errorReason": "BlockedByClient",
                 })
-            except Exception:
-                pass
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("failRequest: %s", exc)
             return
         mock = self._match_mock(url)
         if mock is not None and rid:
@@ -2772,13 +2772,13 @@ class CDPClient:
                     ],
                     "body": body_b64,
                 })
-            except Exception:
-                pass
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("fulfillRequest: %s", exc)
         elif rid:
             try:
                 await self._send_command("Fetch.continueRequest", {"requestId": rid})
-            except Exception:
-                pass
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("continueRequest: %s", exc)
 
     # ─── v1.27: F6 — network interception (block) ─────────────────
 
@@ -2796,8 +2796,8 @@ class CDPClient:
             if not getattr(self, "_request_mocks", None):
                 try:
                     await self._send_command("Fetch.disable")
-                except Exception:
-                    pass
+                except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                    logger.debug("cleanup Fetch.disable: %s", exc)
                 self._fetch_enabled = False
             return {"status": "ok", "blocked": 0}
         if not self._fetch_enabled:
@@ -2941,7 +2941,7 @@ class CDPClient:
                     res = await self.get_page_outline()
                 else:
                     res = {"status": "error", "error": f"Unknown action: {action}"}
-            except Exception as e:
+            except (CDPError, OSError) as e:
                 res = {"status": "error", "error": str(e), "step": i, "action": action}
             res["step"] = i
             res["action"] = action
@@ -3008,8 +3008,8 @@ class CDPClient:
                     httpOnly=cookie.get("httpOnly", False),
                 )
                 restored["cookies"] += 1
-            except Exception:
-                pass
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+                logger.debug("cookie restore failed: %s", exc)
 
         # Restore localStorage
         ls = session_data.get("localStorage", {})
@@ -3050,7 +3050,7 @@ class CDPClient:
             # Refresh tab cache so discover_tabs picks up the new tab
             self._tabs_cache = []
             return {"status": "ok", "tab_id": target_id, "url": url, "title": ""}
-        except Exception as exc:
+        except (CDPError, OSError) as exc:
             return {"status": "error", "error": f"CDP createTarget failed: {exc}"}
 
     async def start_recording(self, quality: int = 70) -> dict:
@@ -3074,8 +3074,8 @@ class CDPClient:
         """
         try:
             await self._send_command("Page.stopScreencast")
-        except Exception:
-            pass
+        except (CDPError, websockets.exceptions.WebSocketException, OSError) as exc:
+            logger.debug("stopScreencast: %s", exc)
         frames = self._recording_frames or []
         self._recording_frames = None
         if not frames:
@@ -3090,8 +3090,8 @@ class CDPClient:
             try:
                 img = Image.open(BytesIO(_b64.b64decode(f_b64))).convert("RGB")
                 images.append(img)
-            except Exception:
-                continue
+            except (OSError, ValueError) as exc:
+                logger.debug("frame decode: %s", exc)
         if not images:
             return {"status": "ok", "frames": len(frames), "gif_b64": "", "format": "none"}
         # Minden frame 2.5 fps-re (400ms) — kompakt GIF
@@ -3167,8 +3167,8 @@ class CDPClient:
         if self._ws:
             try:
                 await self._ws.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("cleanup: %s", exc, exc_info=True)
         ws_url = target["webSocketDebuggerUrl"]
         self._ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
         self._target_id = tab_id
@@ -3196,7 +3196,7 @@ class CDPClient:
         try:
             resp = await client.get(f"{self.cdp_http_url}/json", timeout=5.0)
             all_targets = resp.json()
-        except Exception as e:
+        except (httpx.HTTPError, OSError) as e:
             return {"status": "error", "error": f"fetch targets: {e}"}
 
         target = next((t for t in all_targets if t["id"] == target_id), None)
@@ -3211,7 +3211,7 @@ class CDPClient:
                 websockets.connect(ws_url, max_size=50 * 1024 * 1024, open_timeout=5),
                 timeout=8,
             )
-        except Exception as e:
+        except (websockets.exceptions.WebSocketException, OSError, TimeoutError) as e:
             return {"status": "error", "error": f"WS connect: {e}", "target_id": target_id}
 
         mid = 1
@@ -3234,10 +3234,10 @@ class CDPClient:
                             pending.pop(r["id"]).set_result(r)
                             break
                     return await asyncio.wait_for(f, timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pending.pop(mid - 1, None)
                 return {"error": "timeout", "method": method}
-            except Exception as e:
+            except (CDPError, websockets.exceptions.WebSocketException, OSError) as e:
                 pending.pop(mid - 1, None)
                 return {"error": str(e), "method": method}
 
@@ -3269,22 +3269,22 @@ class CDPClient:
                 url = ""
                 if isinstance(url_res, dict):
                     url = url_res.get("result", {}).get("result", {}).get("value", "")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 await ws.close()
-            except Exception:
+            except (websockets.exceptions.WebSocketException, OSError):
                 pass
             return {"status": "error", "error": "overall timeout", "target_id": target_id}
-        except Exception as e:
+        except (CDPError, websockets.exceptions.WebSocketException, OSError) as e:
             try:
                 await ws.close()
-            except Exception:
+            except (websockets.exceptions.WebSocketException, OSError):
                 pass
             return {"status": "error", "error": str(e), "target_id": target_id}
         finally:
             try:
                 await ws.close()
-            except Exception:
+            except (websockets.exceptions.WebSocketException, OSError):
                 pass
 
         return {
@@ -3311,7 +3311,7 @@ class CDPClient:
             try:
                 async with asyncio.timeout(12):
                     content = await self.get_tab_content_direct(tab["id"])
-            except Exception:
+            except (CDPError, websockets.exceptions.WebSocketException, OSError, TimeoutError):
                 content = {"status": "error", "error": "unexpected error", "target_id": tab["id"]}
             return {
                 "id": tab["id"],
@@ -4299,13 +4299,13 @@ class CDPClient:
         if self._network_monitoring:
             try:
                 await self._send_command("Network.disable")
-            except Exception:
+            except (CDPError, websockets.exceptions.WebSocketException, OSError):
                 pass
             self._network_monitoring = False
         if self._ws:
             try:
                 await self._ws.close()
-            except Exception:
+            except (websockets.exceptions.WebSocketException, OSError):
                 pass
             self._ws = None
         # Fix-1: clear WS tab binding on disconnect
@@ -4322,7 +4322,7 @@ class CDPClient:
         if self._http_client and not self._http_client.is_closed:
             try:
                 await self._http_client.aclose()
-            except Exception:
+            except (OSError, httpx.HTTPError):
                 pass
             self._http_client = None
         return {"status": "ok"}

@@ -65,7 +65,7 @@ async def main() -> int:
         providers.append(steel)
         print("✓ SteelProvider initialised")
 
-    from browser_providers.session_pool import CloudSessionPool, FallbackResult
+    from browser_providers.session_pool import CloudSessionPool
 
     pool = CloudSessionPool(
         providers=providers,
@@ -84,19 +84,19 @@ async def main() -> int:
                 f"latency={health.latency_ms:.0f}ms"
                 + (f", error={health.error}" if health.error else "")
             )
-        except Exception as exc:
+        except (ConnectionError, TimeoutError, ValueError) as exc:
             print(f"  {provider.__class__.__name__}: health check failed — {exc}")
 
     # Launch a sandbox session
     try:
         session: ProviderSession = await pool.get_session()
-        print(f"\n✓ Session launched:")
+        print("\n✓ Session launched:")
         print(f"  session_id: {session.session_id}")
         print(f"  provider:   {session.provider}")
         print(f"  cdp_url:    {session.cdp_url}")
         print(f"  cost:       ${session.cost_estimate:.4f}")
         print(f"  warm:       {session.warm}")
-    except Exception as exc:
+    except (ConnectionError, TimeoutError, ValueError) as exc:
         print(f"\n✗ Session launch failed — {exc}")
         return 1
 
@@ -104,7 +104,7 @@ async def main() -> int:
     try:
         await pool.get_session().close_session(session.session_id)  # type: ignore[union-attr]
         print(f"✓ Session {session.session_id} closed")
-    except Exception as exc:
+    except (ConnectionError, TimeoutError, ValueError) as exc:
         # Expected if the provider requires real credentials
         print(f"  Session close: {exc}")
 

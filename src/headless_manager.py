@@ -272,8 +272,8 @@ class HeadlessManager:
                     if parsed.username or parsed.password:
                         netloc = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname or ""
                         val = f"{parsed.scheme}://***:***@{netloc}"
-                except Exception:
-                    pass  # fall through with original val if parsing fails
+                except (ValueError, TypeError, AttributeError):  # fall through with original val if parsing fails
+                    pass
                 _safe_cmd.append(f"--proxy-server={val}")
             else:
                 _safe_cmd.append(arg)
@@ -332,8 +332,8 @@ class HeadlessManager:
         # session's page so every navigation carries the profile's fingerprint.
         if resolved_profile_name:
             try:
-                from profile_manager import ProfileManager
                 from fingerprint_engine import FingerprintEngine
+                from profile_manager import ProfileManager
 
                 _pm = ProfileManager()
                 _fp_cfg = _pm.get_fingerprint_config(resolved_profile_name)
@@ -545,26 +545,24 @@ class HeadlessManager:
         scripts: list[str] = []
         vendor = config.get("webgl_vendor") or "Google Inc. (NVIDIA)"
         renderer = config.get("webgl_renderer") or "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060)"
-        tz = config.get("timezone") or "America/New_York"
+        _tz = config.get("timezone") or "America/New_York"
         platform = config.get("platform") or "Win32"
 
         if config.get("screen_width") and config.get("screen_height"):
             scripts.append(
-                "Object.defineProperty(screen, 'width', {get: () => %d});"
-                "Object.defineProperty(screen, 'height', {get: () => %d});"
-                % (config["screen_width"], config["screen_height"])
+                f"Object.defineProperty(screen, 'width', {{get: () => {config['screen_width']}}});"
+                f"Object.defineProperty(screen, 'height', {{get: () => {config['screen_height']}}});"
             )
         scripts.append(
-            "Object.defineProperty(navigator, 'platform', {get: () => %r});" % platform
+            f"Object.defineProperty(navigator, 'platform', {{get: () => '{platform}'}});"
         )
         scripts.append(
-            "(() => {"
-            "var op = WebGLRenderingContext.prototype.getParameter;"
-            "WebGLRenderingContext.prototype.getParameter = function(p) {"
-            "if (p === 37445) return %r;"
-            "if (p === 37446) return %r;"
-            "return op.call(this, p);};})()"
-            % (vendor, renderer)
+            f"(() => {{"
+            f"var op = WebGLRenderingContext.prototype.getParameter;"
+            f"WebGLRenderingContext.prototype.getParameter = function(p) {{"
+            f"if (p === 37445) return '{vendor}';"
+            f"if (p === 37446) return '{renderer}';"
+            f"return op.call(this, p);}};}})()"
         )
         return await self._inject_fingerprint_scripts(session_id, scripts)
 
