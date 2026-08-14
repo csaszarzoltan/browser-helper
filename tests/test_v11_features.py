@@ -6,12 +6,12 @@ Tests for v1.1 features:
 - smart_form_fill: contenteditable support
 """
 import json
+
 import pytest
 
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick
 
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,6 @@ class TestSmartFormFillJSLogic:
 
     def test_fields_serialized_in_js(self):
         """Verify field descriptors appear in generated JS."""
-        from src.main import FormFillField
         fields = [
             {"selector": "#email", "value": "test@test.com"},
             {"placeholder": "Enter title", "value": "My Title"},
@@ -199,8 +198,9 @@ class TestContenteditableSupport:
     def test_contenteditable_in_js(self):
         """The JS code should check for contenteditable attribute."""
         # Read the smart_form_fill JS source
-        from src.cdp_client import CDPClient
         import inspect
+
+        from src.cdp_client import CDPClient
         source = inspect.getsource(CDPClient.smart_form_fill)
         assert "contenteditable" in source
         assert "textContent" in source

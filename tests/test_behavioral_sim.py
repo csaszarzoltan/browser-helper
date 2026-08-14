@@ -28,18 +28,15 @@ import inspect
 import sys
 from dataclasses import is_dataclass
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 
-
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick
 
 from behavioral_sim import BehavioralSimulator, MouseMovementResult
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1 — Interface Tests (PASSING — green checkmark)
@@ -296,7 +293,7 @@ class TestWindMouseBezierRED:
             dy = result.points[i][1] - result.points[i - 1][1]
             step_distances.append((dx ** 2 + dy ** 2) ** 0.5)
 
-        unique_distances = len(set(round(d, 1) for d in step_distances))
+        unique_distances = len({round(d, 1) for d in step_distances})
         assert unique_distances >= 2, (
             "Step distances should vary (got all same)"
         )
@@ -400,7 +397,7 @@ class TestKeystrokeTimingRED:
             pytest.skip("Not implemented yet — RED phase")
 
         dwells = [e["dwell_ms"] for e in result]
-        unique_dwells = len(set(round(d) for d in dwells))
+        unique_dwells = len({round(d) for d in dwells})
         assert unique_dwells >= 2, "Timing should vary between keystrokes"
 
     def test_wpm_range_affects_speed(self):
@@ -504,7 +501,7 @@ class TestScrollSequenceRED:
             pytest.skip("Not implemented yet — RED phase")
 
         deltas = [e["delta_y"] for e in result]
-        unique_deltas = len(set(round(d, -1) for d in deltas))
+        unique_deltas = len({round(d, -1) for d in deltas})
         assert unique_deltas >= 2, "Scroll deltas should vary"
 
     def test_power_law_decay(self):
@@ -667,7 +664,7 @@ class TestClickPositionRED:
         except NotImplementedError:
             pytest.skip("Not implemented yet — RED phase")
 
-        unique_delays = len(set(round(d) for d in delays))
+        unique_delays = len({round(d) for d in delays})
         assert unique_delays >= 2, "Delay should vary between calls"
 
     def test_jitter_ms_range_affects_delay(self):

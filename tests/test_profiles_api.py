@@ -16,6 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 
+
+def _load_json(path: str):
+    """Read a JSON file (used via executor to avoid blocking I/O in async tests)."""
+    with open(path) as f:
+        return json.load(f)
+
 # Mark as integration (uses TestClient)
 pytestmark = pytest.mark.integration
 
@@ -381,9 +387,11 @@ class TestImportProfile:
     @pytest.mark.asyncio
     async def test_import_corrupt_file(self, tmp_path):
         """Should return 400 for corrupt ZIP."""
+        import asyncio
+
         corrupt = tmp_path / "corrupt.zip"
-        with open(corrupt, "wb") as f:
-            f.write(b"not a zip file")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, corrupt.write_bytes, b"not a zip file")
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -502,16 +510,17 @@ class TestProfilePersistence:
     @pytest.mark.asyncio
     async def test_persistence_round_trip(self, populated_mgr):
         """Profiles should persist in profiles.json and be reloadable."""
+        import asyncio
         import os
 
         # Check that profiles.json exists with data
         from main import profile_mgr
 
         profiles_file = os.path.join(profile_mgr._storage_dir, "profiles.json")
-        assert os.path.isfile(profiles_file)
+        loop = asyncio.get_running_loop()
+        assert await loop.run_in_executor(None, os.path.isfile, profiles_file)
 
-        with open(profiles_file) as f:
-            data = json.load(f)
+        data = await loop.run_in_executor(None, _load_json, profiles_file)
         assert "work" in data
         assert "personal" in data
         assert "testing" in data

@@ -9,17 +9,15 @@ from __future__ import annotations
 import asyncio
 import sys
 import types
-from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, "src")
 
-from cdp_client import CDPClient  # noqa: E402
-from mcp_server.registry import ToolDef  # noqa: E402
-from session_registry import Session, SessionRegistry  # noqa: E402
-
+from cdp_client import CDPClient
+from mcp_server.registry import ToolDef
+from session_registry import Session, SessionRegistry
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -61,7 +59,6 @@ def _mock_tool_defs(*names: str) -> list[ToolDef]:
 @pytest.mark.asyncio
 async def test_mcp_status_reports_sessions_and_tools():
     """GET /mcp-status returns mcp_enabled + per-session mcp_connected + tools."""
-    from main import app
 
     sess = Session(
         session_id="sess-1",

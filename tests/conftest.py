@@ -18,12 +18,15 @@ client exactly like they did before per-client sessions existed.
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(autouse=True)
@@ -60,8 +63,8 @@ def _reset_module_fingerprint_db(tmp_path, monkeypatch):
         monkeypatch.setattr(
             main, "baseline_mgr", BaselineManager(base_dir=str(fresh))
         )
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - optional baseline manager, tests pass without it
+        logger.debug("baseline_manager setup failed (optional): %s", exc)
     yield
 
 

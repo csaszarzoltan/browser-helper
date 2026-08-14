@@ -1,6 +1,7 @@
 """Unit tests for the per-client SessionRegistry (tab isolation)."""
 
 import asyncio
+
 import pytest
 
 from session_registry import SessionRegistry

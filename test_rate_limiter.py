@@ -9,8 +9,6 @@ Expected failure modes:
   - AssertionError: stub returns wrong default
 """
 
-import math
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -20,7 +18,6 @@ pytestmark = pytest.mark.quick
 from fastapi.testclient import TestClient
 
 import main
-
 
 # ═══════════════════════════════════════════════════════════════════
 # Interface tests — verify expected types exist
@@ -242,7 +239,6 @@ class TestRateLimiterBehavior:
 
     def test_uniform_distribution_ks_test(self):
         """Uniform delays pass KS test (p > 0.05) over 1000 samples."""
-        import random
         from cdp_client import RateLimitConfig, RateLimiter
         cfg = RateLimitConfig(enabled=True, min_delay_ms=500, max_delay_ms=3000, distribution="uniform")
         rl = RateLimiter(config=cfg)
@@ -252,12 +248,13 @@ class TestRateLimiterBehavior:
         scaled = [(d - 500.0) / 2500.0 for d in delays]
         scaled.sort()
         from scipy.stats import kstest
-        stat, p = kstest(scaled, "uniform")
+        _, p = kstest(scaled, "uniform")
         assert p > 0.05, f"KS p={p} < 0.05 — not uniform?"
 
     def test_log_normal_distribution_ks_test(self):
         """Log-normal delays pass KS test (p > 0.05) over 1000 samples."""
         import numpy as np
+
         from cdp_client import RateLimitConfig, RateLimiter
         cfg = RateLimitConfig(enabled=True, min_delay_ms=500, max_delay_ms=3000, distribution="log-normal")
         rl = RateLimiter(config=cfg)
@@ -266,8 +263,8 @@ class TestRateLimiterBehavior:
         log_delays = np.log(delays)
         mean = np.mean(log_delays)
         std = np.std(log_delays)
-        from scipy.stats import kstest, norm
-        stat, p = kstest(log_delays, "norm", args=(mean, std))
+        from scipy.stats import kstest
+        _, p = kstest(log_delays, "norm", args=(mean, std))
         assert p > 0.05, f"KS p={p} < 0.05 — log-normal check failed?"
 
     def test_wide_bounds_still_respected(self):

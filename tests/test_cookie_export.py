@@ -132,7 +132,6 @@ async def test_export_cookies_missing_cookie_keys_defaulted(fake_session, monkey
 
 def test_export_cookies_endpoint_ok(app_client, fake_session, monkeypatch):
     """Existing session → 200 with ``{"cookies": [...]}``."""
-    import main
 
     async def fake_get_cookies():
         return {"status": "ok", "count": len(RAW_COOKIES), "cookies": RAW_COOKIES}

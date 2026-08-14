@@ -2614,7 +2614,7 @@ class CDPClient:
                 "downloadPath": download_dir,
                 "eventsEnabled": True,
             })
-        except (CDPError, OSError) as exc:
+        except Exception as exc:  # noqa: BLE001 - any CDP failure means we can't configure downloads
             return {"status": "error", "error": f"setDownloadBehavior failed: {exc}"}
         os.makedirs(download_dir, exist_ok=True)
         before = set(Path(download_dir).iterdir()) if Path(download_dir).is_dir() else set()
@@ -3167,8 +3167,8 @@ class CDPClient:
         if self._ws:
             try:
                 await self._ws.close()
-            except (websockets.exceptions.WebSocketException, OSError) as exc:
-                logger.debug("cleanup: %s", exc)
+            except Exception as exc:
+                logger.debug("cleanup: %s", exc, exc_info=True)
         ws_url = target["webSocketDebuggerUrl"]
         self._ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
         self._target_id = tab_id

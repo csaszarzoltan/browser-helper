@@ -19,7 +19,6 @@ from agent_navigation import (
 )
 
 
-
 def ax_value(value):
     return {"type": "string", "value": value}
 

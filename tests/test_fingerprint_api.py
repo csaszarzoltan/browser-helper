@@ -158,8 +158,6 @@ class TestPostFingerprint:
         """POSTing twice should update the fingerprint."""
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp1 = await client.post("/profile/fingerprint-probe/fingerprint")
-            fp1 = resp1.json()["fingerprint"]
             resp2 = await client.post(
                 "/profile/fingerprint-probe/fingerprint",
                 json={"overrides": {"canvas_offset_x": 99}},

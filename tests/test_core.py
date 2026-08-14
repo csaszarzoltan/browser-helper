@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import httpx
 import pytest
 
-
 # Mark as quick (unit tests with mocks)
 pytestmark = pytest.mark.quick
 
@@ -23,7 +22,7 @@ def _chrome_is_running() -> bool:
     try:
         httpx.get("http://127.0.0.1:9555/json", timeout=2)
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - probe failure means Chrome is not running
         return False
 
 
@@ -274,7 +273,6 @@ class TestEdgeCases:
 # [ ] Hidden/display:none checkboxes are excluded
 # [ ] Existing analyze_page fields remain unchanged
 
-import json
 from unittest.mock import patch
 
 
@@ -792,8 +790,7 @@ class TestCondensedSnapshotInterface:
         return_ann = inspect.signature(client.analyze_page_condensed).return_annotation
         if return_ann is not inspect.Parameter.empty and return_ann is not None:
             # Accept dict, Dict, or dict[str, Any]
-            import typing
-            valid = (dict, typing.Dict)
+            valid = (dict, dict)
             assert return_ann in valid or (
                 hasattr(return_ann, "__origin__") and return_ann.__origin__ is dict
             ), f"Expected dict return annotation, got {return_ann}"
@@ -900,7 +897,7 @@ class TestCondensedRouteContract:
 
         We import the app and check the route's endpoint signature.
         """
-        from main import app  # noqa: F811
+        from main import app
         # Find the /page/analyze route
         route = None
         for r in app.routes:
@@ -1315,7 +1312,7 @@ class TestTabActivationRED:
 
         Uses httpx (not _send_command). Will raise connection error.
         """
-        with pytest.raises(Exception):
+        with pytest.raises((httpx.ConnectError, httpx.HTTPError)):
             await client.close_tab("tab-123")
         assert len(activation_spy) > 0, (
             "RED: close_tab() does not call _activate_current()."

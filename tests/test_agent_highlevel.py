@@ -1,13 +1,14 @@
 """Unit tests for the high-level agent endpoints (search, flow, extractors)."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from main import (
+    _SEARCH_ENGINES,
     AgentFlowRequest,
     AgentFlowStep,
     AgentSearchRequest,
-    _SEARCH_ENGINES,
     agent_run_flow,
     agent_search,
 )

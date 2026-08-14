@@ -51,11 +51,11 @@ def _live_service_available() -> bool:
     import urllib.request
 
     try:
-        with urllib.request.urlopen(  # noqa: S310 — localhost only
+        with urllib.request.urlopen(
             f"http://127.0.0.1:{_local_cdp_port()}/json/version", timeout=2
         ) as resp:
             return resp.status == 200
-    except Exception:
+    except (OSError, ValueError):
         return False
 
 
@@ -111,13 +111,13 @@ def live_stdio_server():
     ready = False
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(  # noqa: S310 — localhost only
+            with urllib.request.urlopen(
                 f"http://127.0.0.1:{test_port}/json/version", timeout=2
             ) as resp:
                 if resp.status == 200:
                     ready = True
                     break
-        except Exception:
+        except OSError:
             pass
         time.sleep(0.3)
     if not ready:
@@ -138,7 +138,7 @@ def live_stdio_server():
         chrome.terminate()
         try:
             chrome.wait(timeout=5)
-        except Exception:
+        except (OSError, subprocess.TimeoutExpired):
             chrome.kill()
         shutil.rmtree(profile_dir, ignore_errors=True)
 

@@ -1,7 +1,8 @@
 """Unit tests for the visual regression endpoint."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from main import VisualRegressionRequest, agent_visual_regression
 
@@ -32,7 +33,7 @@ async def test_vr_record_saves_baselines(fake_client):
     req = VisualRegressionRequest(urls=["https://a.com", "https://b.com"], record=True, wait_timeout=5)
     with patch("main.client", fake_client), \
          patch("main._get_current_session", return_value=None), \
-         patch("main.run_op", new=AsyncMock(return_value={"status": "ok"})) as rop, \
+         patch("main.run_op", new=AsyncMock(return_value={"status": "ok"})), \
          patch("main.baseline_mgr.save_baseline", return_value="/tmp/bl.png") as save:
         resp = await agent_visual_regression(req)
     assert resp["status"] == "ok"

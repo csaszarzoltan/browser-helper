@@ -22,7 +22,6 @@ Coverage (10 acceptance criteria):
 """
 
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -30,7 +29,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
-
 
 # ===================================================================
 # Fixtures
@@ -303,9 +301,9 @@ class TestConcurrentHealthCheck:
         If each health_check takes ~0.15s, 3 sequential checks take ~0.45s.
         Concurrent checks should complete in ~0.15-0.20s (near the max of individual).
         """
-        pid1 = pool.add_proxy("socks5://host1:1080")
-        pid2 = pool.add_proxy("socks5://host2:1080")
-        pid3 = pool.add_proxy("socks5://host3:1080")
+        pool.add_proxy("socks5://host1:1080")
+        pool.add_proxy("socks5://host2:1080")
+        pool.add_proxy("socks5://host3:1080")
 
         # Patch health_check to simulate a slow check (0.15s each)
         original_check = pool.health_check
@@ -454,7 +452,6 @@ class TestCircuitBreaker:
 
     def test_cooling_with_interleaved_success(self, pool):
         """A success between failures should reset consecutive_failures."""
-        from proxy_manager import ProxyPool
 
         pid = pool.add_proxy("socks5://host:1080")
 
