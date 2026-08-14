@@ -34,7 +34,7 @@ async def _mcp_session():
     Falls back to (None, run_op) — the shared default client — when the
     browser is unavailable (legacy behaviour).
     """
-    from main import _set_current_session, chrome_mgr, _local_cdp_http, run_op, session_registry
+    from main import _set_current_session, run_op, session_registry
 
     # Test isolation: BH_TEST_NO_CHROME=1 (set by the MCP integration test
     # harness) forbids launching a real browser from the server subprocess.
@@ -152,7 +152,12 @@ async def observe(
     if ctx is not None:
         ctx.info(f"observe mode={mode} scope={scope}")
     # Use internal snapshot functions directly (same as REST endpoint)
-    from main import _capture_accessibility_snapshot, _capture_agent_snapshot, _set_current_session, paginate_snapshot
+    from main import (
+        _capture_accessibility_snapshot,
+        _capture_agent_snapshot,
+        _set_current_session,
+        paginate_snapshot,
+    )
     
     sess, run_op = await _mcp_session()  # local function
     _set_current_session(sess)
@@ -199,6 +204,7 @@ async def act(
         ctx.info(f"act -> {action}")
     import json as _json
     import urllib.request as _ur
+
     from mcp_server.tools import _MCP_SESSION
 
     sess, run_op = await _mcp_session()
@@ -229,7 +235,7 @@ async def act(
         if _MCP_SESSION.get("session") is not None:
             cookie = _MCP_SESSION["session"].session_id
         req = _ur.Request(
-            f"http://127.0.0.1:8020/agent/act",
+            "http://127.0.0.1:8020/agent/act",
             data=_json.dumps(body).encode(),
             headers={"Content-Type": "application/json", "X-Session-ID": cookie},
             method="POST",
@@ -327,7 +333,7 @@ async def search(query: str, engine: str = "google", timeout: int = 45,
     Engines: ``google`` (default, fastest — works since stealth v1.24),
     ``perplexity`` (AI answer, slower ~45s), ``ddg``, ``bing``.
     """
-    from main import agent_search, AgentSearchRequest  # lazy import
+    from main import AgentSearchRequest, agent_search  # lazy import
 
     if ctx is not None:
         ctx.info(f"search {engine}: {query[:60]}")
@@ -342,7 +348,7 @@ async def get_content(url: str | None = None, wait_ready: bool = True,
 
     Filters nav/sidebar/footer noise — cleaner context for LLMs.
     """
-    from main import client, run_op  # lazy import
+    from main import client  # lazy import
 
     if ctx is not None:
         ctx.info(f"get_content url={url}")
@@ -466,7 +472,8 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
         source, src_sess = _resolve_cookie_target(session_id)
         res = await source.get_cookies()
         cookies = (res or {}).get("cookies", [])
-        from main import _local_cdp_http, chrome_mgr, session_registry as _sr
+        from main import _local_cdp_http, chrome_mgr
+        from main import session_registry as _sr
 
         await chrome_mgr.launch()
         new_sess = await _sr.create(_local_cdp_http())
@@ -491,7 +498,7 @@ async def wait_for(value: str, kind: str = "selector", condition: str = "present
     kind=selector|text|url, condition=present|gone|visible.  Deterministic —
     no guessy sleeps; returns ok once the condition holds, error on timeout.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"wait_for kind={kind} value={value} condition={condition} timeout={timeout}")
@@ -513,7 +520,7 @@ async def assert_(value: str, kind: str = "selector", condition: str = "exists",
     Returns a structured pass/fail; a failed assertion is reported as an
     error so the agent's test fails deterministically.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"assert kind={kind} value={value} condition={condition} expected={expected}")
@@ -542,7 +549,7 @@ async def form_fill(fields: list[dict], timeout: int = 5, ctx: Context | None = 
     value-setter technique (native setter + input/change/blur events) so
     React/Angular controlled inputs register the change.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"form_fill fields={len(fields or [])}")
@@ -562,7 +569,7 @@ async def form_extract(ctx: Context | None = None) -> str:
     Returns each form's fields: tag, type, name, label, placeholder,
     required, visible — feed the labels into form_fill.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info("form_extract")
@@ -586,7 +593,7 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
     Returns the artifact record — fetch the file at
     ``GET /artifacts/{artifact_id}``.
     """
-    from main import client, run_op
+    from main import client
 
     if ctx is not None:
         ctx.info(f"download url={url}")

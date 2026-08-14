@@ -14,15 +14,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import random
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any
 
-from behavioral_sim import BehavioralSimulator, MouseMovementResult
 from behavioral_scroll import BehavioralScroll
-
-if TYPE_CHECKING:
-    pass  # avoid circular import of CDPClient
-
+from behavioral_sim import BehavioralSimulator, MouseMovementResult
 
 # ── Session Profiles ──────────────────────────────────────────────────────
 
@@ -48,7 +44,7 @@ class HumanProfile:
     enabled: bool = True
 
     @classmethod
-    def from_session(cls, session_id: str | None) -> "HumanProfile":
+    def from_session(cls, session_id: str | None) -> HumanProfile:
         """Egyedi profilt generál a session azonosítóból (seedelten)."""
         if not session_id:
             return cls()

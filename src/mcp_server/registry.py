@@ -364,7 +364,7 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
         if name.startswith("memory_"):
             return getattr(memory_tools, name)
         if name == "assert":
-            return getattr(tools, "assert_")  # Python keyword — module uses assert_
+            return tools.assert_  # Python keyword — module uses assert_
         return getattr(tools, name)
 
     defs: list[ToolDef] = []

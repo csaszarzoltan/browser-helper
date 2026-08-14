@@ -13,8 +13,8 @@ import logging
 import os
 import tempfile
 import time
-import zipfile
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -38,10 +38,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # Auth / rate limiting
 # ---------------------------------------------------------------------------
 from playwright_backend import BackendManager as _BackendManager
+
 backend_manager = _BackendManager()
 
-from artifact_store import ArtifactStore
-from agent_runtime import (ElementNotFoundError, SnapshotStore, StaleSnapshotError, diff_snapshots, paginate_snapshot)
 from agent_navigation import (
     AccessibilitySnapshot,
     AccessibilityTreeBuilder,
@@ -50,32 +49,39 @@ from agent_navigation import (
     extract_by_schema,
     validate_expectations,
 )
+from agent_runtime import (
+    ElementNotFoundError,
+    SnapshotStore,
+    StaleSnapshotError,
+    diff_snapshots,
+    paginate_snapshot,
+)
+from anti_detection.compositor import AntiDetectCompositor, AntiDetectProfileBundle
+from anti_detection.fingerprint_database import FingerprintDatabase
+from artifact_store import ArtifactStore
 from baseline_manager import BaselineManager
 from capability_registry import CapabilityRegistry
-from environment_store import EnvironmentStore
-from daily_launchpad import build_daily_launchpad
-from workflow_catalog import WorkflowCatalog
 from cdp_client import CDPClient, RateLimitConfig
 from chrome_manager import ChromeManager
-from session_registry import Session, SessionRegistry
+from daily_launchpad import build_daily_launchpad
+from detection_tester import DetectionTester
+from domain_throttle import domain_throttle
+from environment_store import EnvironmentStore
 from headless_manager import HeadlessManager
 from profile_manager import Profile, ProfileManager
-from screenshot_diff import ScreenshotDiffEngine
-from run_timeline import RunStore
-from run_recovery import RecoveryAdvisor
-from run_comparison import compare_runs
-from settings_manager import SettingsManager
-from domain_throttle import domain_throttle
-
 from proxy_manager import ProxyParseError, ProxyPool
 
 # ── Anti-detection v1.8.0 modules ──────────────────────────────────
 from proxy_rotation_manager import ProxyRotationManager
-from anti_detection.fingerprint_database import FingerprintDatabase
+from run_comparison import compare_runs
+from run_recovery import RecoveryAdvisor
+from run_timeline import RunStore
+from screenshot_diff import ScreenshotDiffEngine
 from session_manager import SessionManager
+from session_registry import Session, SessionRegistry
+from settings_manager import SettingsManager
 from stealth_injector import StealthInjector
-from anti_detection.compositor import AntiDetectCompositor, AntiDetectProfileBundle
-from detection_tester import DetectionTester
+from workflow_catalog import WorkflowCatalog
 
 # Global singleton instances for v1.8.0 API endpoints
 _fingerprint_db = FingerprintDatabase()
@@ -2048,7 +2054,6 @@ async def post_stealth_config(body: StealthConfigRequest | None = None):
     is required; ``level`` is optional (keeps the current level). Patches
     apply to the next page load (they run on every new document).
     """
-    from stealth_injector import StealthInjector
 
     if body is not None:
         state["stealth_enabled"] = body.enabled
@@ -3346,8 +3351,7 @@ async def handle_export_cookies(request: Request, sid: str):
     if not sid:
         return api_error("export_cookies", "invalid_session_id", "sid must be a non-empty string", 400)
     try:
-        from services.cookie_service import export_cookies
-        from services.cookie_service import SessionNotFoundError
+        from services.cookie_service import SessionNotFoundError, export_cookies
 
         data = await export_cookies(sid)
     except SessionNotFoundError:
@@ -5491,7 +5495,8 @@ async def backend_status():
 
 
 from behavioral_mouse import MouseConfig as _MouseConfig
-from behavioral_scroll import BehavioralScroll as _BehavioralScroll, InvalidModeError
+from behavioral_scroll import BehavioralScroll as _BehavioralScroll
+from behavioral_scroll import InvalidModeError
 
 _mouse_config_instance = _MouseConfig()
 _scroll_instance = _BehavioralScroll()
@@ -5604,6 +5609,7 @@ if __name__ == "__main__":
 
 # Enterprise browser-agent operations (additive v1 API)
 from enterprise_workspace import EnterpriseWorkspace, render_console
+
 _enterprise = EnterpriseWorkspace(Path(os.getenv("ENTERPRISE_DB", "/tmp/browser-helper-enterprise.db")))
 
 @app.get("/enterprise/{page}", include_in_schema=False)

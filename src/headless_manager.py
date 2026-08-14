@@ -332,8 +332,8 @@ class HeadlessManager:
         # session's page so every navigation carries the profile's fingerprint.
         if resolved_profile_name:
             try:
-                from profile_manager import ProfileManager
                 from fingerprint_engine import FingerprintEngine
+                from profile_manager import ProfileManager
 
                 _pm = ProfileManager()
                 _fp_cfg = _pm.get_fingerprint_config(resolved_profile_name)

@@ -194,10 +194,9 @@ class SessionRegistry:
 
             port = _find_free_port()
             try:
-                import subprocess
-
                 # If a Chrome already runs with THIS profile dir, reuse it.
                 import re as _re
+                import subprocess
 
                 existing = None
                 try:

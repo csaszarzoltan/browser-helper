@@ -29,7 +29,6 @@ Usage:
 
 from __future__ import annotations
 
-import math
 import random
 from typing import Any
 
@@ -274,7 +273,6 @@ class BehavioralScroll:
         if distance < 500:
             return BehavioralScroll._jagged_scroll(distance, step_min, step_max)
         # 500-1000: weighted random
-        import random
 
         if random.random() < 0.5:
             return BehavioralScroll._jagged_scroll(distance, step_min, step_max)
@@ -290,14 +288,12 @@ class BehavioralScroll:
         the range 150-1200ms with a right-skewed distribution, simulating
         reading time between scroll steps.
         """
-        import random
 
         return max(50.0, round(random.lognormvariate(mu, sigma), 1))
 
     @staticmethod
     def _random_step(min_px: int = DEFAULT_STEP_MIN, max_px: int = DEFAULT_STEP_MAX) -> int:
         """Return a random step size within [min_px, max_px]."""
-        import random
 
         return random.randint(min_px, max_px)
 

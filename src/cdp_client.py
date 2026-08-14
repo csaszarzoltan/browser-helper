@@ -2387,7 +2387,7 @@ class CDPClient:
             return {"status": "ok", "value": ""}
         try:
             result = await self.form_select("label", label, value)
-        except Exception as exc:
+        except Exception:
             return {"status": "ok", "value": str(value)}
         if isinstance(result, dict):
             selected = (result.get("selected_value") or
@@ -3234,7 +3234,7 @@ class CDPClient:
                             pending.pop(r["id"]).set_result(r)
                             break
                     return await asyncio.wait_for(f, timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pending.pop(mid - 1, None)
                 return {"error": "timeout", "method": method}
             except Exception as e:
@@ -3269,7 +3269,7 @@ class CDPClient:
                 url = ""
                 if isinstance(url_res, dict):
                     url = url_res.get("result", {}).get("result", {}).get("value", "")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 await ws.close()
             except Exception:
