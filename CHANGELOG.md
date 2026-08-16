@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.5] — 2026-08-16
+
+#### Fixed
+- **CDP event callback dispatch now awaits async callbacks** (`src/cdp_client.py`) — callbacks registered via `add_event_listener()` (e.g. `wait_for_network_idle`'s `on_request`/`on_response`/`on_loading`, proxy-auth auto-cancel) were invoked with a bare `cb(msg)` call, so coroutines were never awaited (RuntimeWarning spam in logs) and network-idle tracking silently did nothing. The dispatcher now awaits coroutine results, so post-click AJAX idle waits actually work.
+- **`navigate()` no longer performs HTTP tab discovery on remote connections** — the post-navigation cross-origin tab-roam called `discover_tabs()`, which hits the local `cdp_http_url` `/json` endpoint. Remote (`connect_remote`) clients have no local endpoint, so every remote `navigate()` raised `httpx.ConnectError`. Tab sync is now skipped for `connection_type == "remote"`.
+
+#### Changed
+- **Session TTL lowered 1800s → 900s** and default `max_sessions` raised 15 → 20 (still overridable via `BH_MAX_SESSIONS`) — reduces tab churn when several apps share the instance while freeing idle tabs faster.
+
 ## [1.27.4] — 2026-08-13
 
 #### Added

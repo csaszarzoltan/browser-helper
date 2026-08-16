@@ -412,7 +412,9 @@ class CDPClient:
                 if ev_method in self._event_callbacks:
                     for cb in self._event_callbacks[ev_method]:
                         try:
-                            cb(msg)
+                            result = cb(msg)
+                            if asyncio.iscoroutine(result):
+                                await result
                         except Exception:  # noqa: BLE001
                             logger.warning("Event callback error for %s", ev_method)
 
@@ -684,32 +686,35 @@ class CDPClient:
 
         # After navigation, discover tabs to see if a new target was created
         # for this frame. If so, roam the session's WS to the new target.
-        try:
-            tabs = await self.discover_tabs()
-            pages = [t for t in tabs if t.get("type") == "page"]
-            # Find the page target matching our frame (by URL or newest)
-            frame_id = result.get("frameId", "")
-            target = None
-            if frame_id:
-                for t in pages:
-                    if t.get("id") == frame_id or frame_id in t.get("id", ""):
-                        target = t
-                        break
-            if not target and pages:
-                # Fallback: the active target is likely the new one
-                for t in pages:
-                    if t.get("url", "").startswith("http") and url.split("/")[2] in t.get("url", ""):
-                        target = t
-                        break
-            if not target and pages:
-                # Last resort: newest page target
-                target = pages[-1]
+        # Remote connections have no local HTTP tab-discovery endpoint —
+        # skip tab sync entirely (the remote WS stays bound to its target).
+        if self._connection_type != "remote":
+            try:
+                tabs = await self.discover_tabs()
+                pages = [t for t in tabs if t.get("type") == "page"]
+                # Find the page target matching our frame (by URL or newest)
+                frame_id = result.get("frameId", "")
+                target = None
+                if frame_id:
+                    for t in pages:
+                        if t.get("id") == frame_id or frame_id in t.get("id", ""):
+                            target = t
+                            break
+                if not target and pages:
+                    # Fallback: the active target is likely the new one
+                    for t in pages:
+                        if t.get("url", "").startswith("http") and url.split("/")[2] in t.get("url", ""):
+                            target = t
+                            break
+                if not target and pages:
+                    # Last resort: newest page target
+                    target = pages[-1]
 
-            if target and target["id"] != self._ws_tab_id:
-                logger.info("Navigate cross-origin: roaming %s -> %s", self._ws_tab_id[:8], target["id"][:8])
-                await self.connect_to_target(target["id"])
-        except (CDPError, OSError) as exc:
-            logger.debug("Navigate tab sync skipped: %s", exc)
+                if target and target["id"] != self._ws_tab_id:
+                    logger.info("Navigate cross-origin: roaming %s -> %s", self._ws_tab_id[:8], target["id"][:8])
+                    await self.connect_to_target(target["id"])
+            except (CDPError, OSError) as exc:
+                logger.debug("Navigate tab sync skipped: %s", exc)
 
         return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url}
 

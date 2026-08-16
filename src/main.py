@@ -250,7 +250,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.27.4",
+    version="1.27.5",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -280,7 +280,7 @@ chrome_mgr = ChromeManager(settings_mgr)
 # Per-client session registry (each session owns its own tab + CDP client)
 # max_sessions: hard cap — LRU eviction closes the least-recently-used
 # session's tab when the cap is reached (client auto-heals on next call).
-session_registry = SessionRegistry(ttl=1800.0, max_sessions=int(os.environ.get("BH_MAX_SESSIONS", "15")))
+session_registry = SessionRegistry(ttl=900.0, max_sessions=int(os.environ.get("BH_MAX_SESSIONS", "20")))
 
 # Headless session manager
 headless_mgr = HeadlessManager()
