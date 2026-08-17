@@ -293,6 +293,7 @@ class ToolDef:
     capability_id: str
     status: CapabilityStatus
     handler: Callable[..., Awaitable[str]]
+    premium: bool = False
 
 
 class ToolDefRegistry:
@@ -328,7 +329,10 @@ class ToolDefRegistry:
         return len(self._defs)
 
 
-def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegistry:
+def build_tool_defs(
+    registry: CapabilityRegistry | None = None,
+    premium_only: bool = False,
+) -> ToolDefRegistry:
     """Derive the MCP tool surface from the capability registry (spec §4.2).
 
     Keeps READY + EXPERIMENTAL capabilities only; UNAVAILABLE capabilities
@@ -346,6 +350,9 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
         for c in capability.capabilities
         if c.status is not CapabilityStatus.UNAVAILABLE
     }
+
+    # Build a lookup from capability_id -> premium flag
+    premium_lookup = {c.id: c.premium for c in capability.capabilities}
 
     # Lazy handler resolution avoids engine import at module load (§2.2) and
     # circularity; handlers are resolved by name but never invoked here.
@@ -365,6 +372,9 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
     for name, capability_id in _TOOL_CAPABILITY.items():
         if capability_id not in ok_ids:
             continue  # UNAVAILABLE capability → never surfaces (defense in depth)
+        is_premium = premium_lookup.get(capability_id, False)
+        if premium_only and not is_premium:
+            continue
         defs.append(
             ToolDef(
                 name=name,
@@ -376,6 +386,37 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
                 capability_id=capability_id,
                 status=next(c.status for c in capability.capabilities if c.id == capability_id),
                 handler=_handler(name),
+                premium=is_premium,
             )
         )
     return ToolDefRegistry(defs)
+
+
+def filter_free_tools(registry: CapabilityRegistry) -> ToolDefRegistry:
+    """Return a ToolDefRegistry containing only non-premium tools.
+
+    Args:
+        registry: The capability registry to filter.
+
+    Returns:
+        A ToolDefRegistry with premium-backed tools removed.
+    """
+    all_tools = build_tool_defs(registry=registry)
+    free_defs = [t for t in all_tools if not t.premium]
+    return ToolDefRegistry(free_defs)
+
+
+def build_paid_tool_defs(pricing: dict[str, Any] | None = None) -> list[ToolDef]:
+    """Return ToolDefs for tools that have a price entry in the pricing table.
+
+    Args:
+        pricing: Optional pricing dict. Uses x402.X402_TOOL_PRICES if None.
+
+    Returns:
+        List of ToolDef objects for paid tools only.
+    """
+    from .x402 import X402_TOOL_PRICES
+
+    prices = pricing if pricing is not None else X402_TOOL_PRICES
+    full = build_tool_defs()
+    return [t for t in full if t.name in prices]

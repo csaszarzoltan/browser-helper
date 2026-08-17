@@ -30,6 +30,8 @@ class MCPSettings:
     port: int = 8765
     server_name: str = "browser-helper"
     instructions: str = ""
+    auth_secret: str = ""
+    auth_enabled: bool = False
 
 
 def load_mcp_settings(overrides: dict[str, Any] | None = None) -> MCPSettings:

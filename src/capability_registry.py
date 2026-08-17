@@ -17,6 +17,13 @@ class CapabilityStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class CapabilityTier(StrEnum):
+    """Tier classification for capability-based access control."""
+
+    FREE = "free"
+    PREMIUM = "premium"
+
+
 @dataclass(frozen=True, slots=True)
 class Capability:
     id: str
@@ -26,6 +33,7 @@ class Capability:
     description: str
     reason: str | None = None
     action: str | None = None
+    premium: bool = False
 
     def as_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -57,6 +65,7 @@ class CapabilityRegistry:
                     CapabilityStatus.READY,
                     "Search an engine (perplexity/google/ddg/bing) and return the answer text in one call.",
                     action="Run Search",
+                    premium=True,
                 ),
                 Capability(
                     "agent.flow", "E2E test flows", "Agent Tools",
@@ -70,6 +79,7 @@ class CapabilityRegistry:
                     "Compose fingerprint, proxy, stealth, and session policies.",
                     "The supplied compositor and fingerprint database still contain pre-development paths.",
                     "Review experimental API",
+                    premium=True,
                 ),
                 Capability(
                     "behavioral.scroll", "Behavioral input middleware", "Automation",
