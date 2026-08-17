@@ -223,13 +223,18 @@ MCP client                    Browser Helper process
 ```
 src/mcp_server/
 ├── __init__.py        # re-exports create_mcp_server, MCPServer, __version__
+├── auth.py            # JWT API key auth, tier enforcement, BH_AUTH_DISABLED bypass
+├── cli.py             # argparse main() + Click mcp command + entry-point app
 ├── config.py          # MCPSettings dataclass + MCPTransport enum + load_mcp_settings()
-├── registry.py        # ToolDef + ToolDefRegistry (capability-derived, status-filtered)
+├── fleet_tools.py     # 3 read-only fleet handlers
+├── prompts.py         # MCP prompt templates (competitive analysis, form, monitoring)
+├── registry.py        # ToolDef + ToolDefRegistry, filter_free_tools, build_paid_tool_defs
+├── resources.py       # MCP resources (session state, fleet health, memory, pricing)
+├── serialization.py   # envelope normalization (json_dumps, tool_result, tool_error)
 ├── server.py          # MCPServer: FastMCP lifecycle + tool registration + run()
 ├── tools.py           # 9 browser tool handlers (navigate, click, type, …)
-├── fleet_tools.py     # 3 read-only fleet handlers
-├── serialization.py   # envelope normalization (json_dumps, tool_result, tool_error)
-└── cli.py             # argparse main() + Click mcp command + entry-point app
+├── usage.py           # SQLite-backed usage tracking and revenue analytics
+└── x402.py            # x402 micropayment gating for premium tools
 src/browser_helper/
 ├── mcp.py             # python -m browser_helper.mcp shim (sys.path bootstrap)
 └── __main__.py        # bh CLI router group (bh mcp)
@@ -316,12 +321,112 @@ python -m pytest tests/test_mcp_server.py -q   # 55 tests: interface, engine bin
 
 ---
 
-## 8. Source links
+## 8. Profit-driven features
+
+Browser Helper's MCP server supports **tiered access control**, **micropayments**, **MCP resources**, **MCP prompts**, and **usage tracking** for premium tool monetization.
+
+### 8.1 Authentication & tier enforcement
+
+JWT-based API key verification with four access tiers:
+
+| Tier | Value | Access |
+|------|-------|--------|
+| `anonymous` | 0 | Free tools only |
+| `free` | 1 | All free tools |
+| `premium` | 2 | Free + premium tools |
+| `admin` | 3 | Full access |
+
+```python
+from mcp_server.auth import generate_api_key, verify_api_key, require_auth, AuthLevel
+
+# Generate a key
+token = generate_api_key(level=AuthLevel.PREMIUM, secret="my-secret")
+
+# Verify and get context
+ctx = verify_api_key(token, "my-secret")  # → AuthContext(level=PREMIUM, ...)
+
+# Guard check
+guard = require_auth(min_level=AuthLevel.PREMIUM)
+guard(ctx)  # raises PermissionError if level < PREMIUM
+```
+
+Set `BH_AUTH_DISABLED=1` to bypass all auth checks (development mode).
+
+### 8.2 x402 micropayments
+
+Premium tools are priced in USDC cents:
+
+| Tool | Price | Description |
+|------|-------|-------------|
+| `fleet_run_batch` | 10¢ | Batch browser tasks across fleet |
+| `search` | 3¢ | Web search with engine selection |
+| `observe` | 2¢ | Semantic/accessibility page observation |
+| `act` | 2¢ | Execute browser actions via semantic refs |
+| `clone_session` | 5¢ | Clone browser session with cookies/state |
+
+```python
+from mcp_server.x402 import check_x402_payment, PaymentRequiredError
+
+# Check payment (free tools always pass)
+await check_x402_payment("navigate", None)  # True (free)
+await check_x402_payment("search", None)   # raises PaymentRequiredError
+await check_x402_payment("search", "payment-token")  # True (paid)
+```
+
+### 8.3 MCP Resources
+
+Four read-only resources expose server state:
+
+| URI | Description |
+|-----|-------------|
+| `browser-helper://session-state` | Browser session state (session_id, tabs, uptime) |
+| `browser-helper://fleet-health` | Fleet node health and session counts |
+| `browser-helper://memory-cache` | Memory cache contents |
+| `browser-helper://tool-pricing` | Tool pricing (free + paid lists) |
+
+### 8.4 MCP Prompts
+
+Three workflow prompt templates:
+
+| Template | Description |
+|----------|-------------|
+| `competitive_analysis` | Multi-competitor product research workflow |
+| `form_automation` | Automated form filling workflow |
+| `site_monitoring` | Website change detection workflow |
+
+### 8.5 Usage tracking
+
+SQLite-backed analytics for tool calls and revenue:
+
+```python
+from mcp_server.usage import UsageTracker
+
+tracker = UsageTracker(db_path=":memory:")  # or a file path
+tracker.record_call("search", is_paid=True, price_cents=3)
+tracker.record_call("navigate", is_paid=False)
+
+stats = tracker.get_stats()           # → [UsageStats(...), ...]
+revenue = tracker.get_total_revenue()  # → 3 (cents)
+```
+
+### 8.6 Tool filtering
+
+```python
+from mcp_server.registry import build_tool_defs, filter_free_tools
+
+all_tools = build_tool_defs()              # all tools
+free_tools = filter_free_tools(registry)   # non-premium only
+premium_tools = build_tool_defs(premium_only=True)  # premium only
+```
+
+---
+
+## 9. Source links
 
 - Design spec: `docs/architecture/mcp-server-design.md`
 - Reference analysis: `analysis/mcp-reference-analysis.md`
-- Implementation: `src/mcp_server/` (config, registry, server, tools, fleet_tools, serialization, cli)
+- Implementation: `src/mcp_server/` (auth, config, fleet_tools, prompts, registry, resources, serialization, server, tools, usage, x402, cli)
 - Entry shim: `src/browser_helper/mcp.py`; CLI router: `src/browser_helper/__main__.py`
 - Engine singletons: `src/main.py` (`run_op`, `client`, `_session_mgr`); fleet: `src/fleet/api.py`
 - Capability registry: `src/capability_registry.py`
-- Tests: `tests/test_mcp_server.py` (55 tests)
+- Tests: `tests/test_mcp_server.py` + 6 new test files (145 tests total for MCP)

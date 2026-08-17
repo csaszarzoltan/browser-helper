@@ -4,6 +4,17 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **MCP server profit-driven enhancement** — 5 new modules for premium tool monetization:
+  - `auth.py` — JWT API key verification with 4 access tiers (anonymous/free/premium/admin), `BH_AUTH_DISABLED=1` dev bypass
+  - `x402.py` — x402 micropayment gating (5 priced tools: fleet_run_batch 10¢, search 3¢, observe 2¢, act 2¢, clone_session 5¢)
+  - `resources.py` — 4 MCP resources (session-state, fleet-health, memory-cache, tool-pricing)
+  - `prompts.py` — 3 MCP prompt templates (competitive analysis, form automation, site monitoring)
+  - `usage.py` — SQLite-backed usage tracking (call counts, revenue, per-tool stats)
+  - `capability_registry.py` — `CapabilityTier` enum + `premium` field on `Capability`
+  - `registry.py` — `filter_free_tools()`, `build_paid_tool_defs()`, `premium_only` flag on `build_tool_defs()`
+  - 90 new tests across 6 test files (all interface + behavioral contract tests)
+
 ## [1.27.5] — 2026-08-16
 
 #### Fixed
