@@ -66,6 +66,12 @@ from chrome_manager import ChromeManager
 from daily_launchpad import build_daily_launchpad
 from detection_tester import DetectionTester
 from domain_throttle import domain_throttle
+
+# Serialize concurrent navigate commands: Chrome's CDP WebSocket can't
+# handle multiple Page.navigate calls at once — the second one silently
+# times out while the first is still loading.  A global lock ensures at
+# most one navigate is in-flight across all sessions.
+_navigate_lock = asyncio.Lock()
 from environment_store import EnvironmentStore
 from headless_manager import HeadlessManager
 from profile_manager import Profile, ProfileManager
@@ -250,7 +256,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.27.5",
+    version="1.27.6",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -1567,7 +1573,7 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
             # navigations (multiple systems share this service). Applies to
             # navigate-style ops that carry a URL; interval is configurable
             # via settings.json ``domain_min_interval_sec`` (default 4.0s).
-            if operation == "navigate" and args and isinstance(args[0], str):
+            if operation in ("navigate", "search_navigate") and args and isinstance(args[0], str):
                 raw_interval = settings_mgr.get("domain_min_interval_sec", 4.0)
                 try:
                     interval = float(raw_interval) if raw_interval is not None else 4.0
@@ -1580,7 +1586,16 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
                         waited,
                         domain_throttle._domain_of(args[0]),
                     )
-            result = await method(*args, **kwargs)
+            # Navigate serialization: Chrome's CDP WebSocket can only handle
+            # one Page.navigate at a time.  Without this lock, concurrent
+            # navigations from multiple sessions cause 30s timeouts and
+            # auto-heal tab storms.  The throttle waits ABOVE run inside the
+            # lock so multiple callers can queue their throttle concurrently.
+            if operation in ("navigate", "search_navigate"):
+                async with _navigate_lock:
+                    result = await method(*args, **kwargs)
+            else:
+                result = await method(*args, **kwargs)
             elapsed = (time.monotonic() - start) * 1000
             # Some CDP methods return a generator/iterator (e.g. streaming
             # results). Consuming it twice (str() for the log, then JSON

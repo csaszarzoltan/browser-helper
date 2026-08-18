@@ -14,7 +14,7 @@ FROM python:3.11-slim
 # ---------------------------------------------------------------------------
 LABEL org.opencontainers.image.title="Browser Helper Proxy"
 LABEL org.opencontainers.image.description="Remote Chrome control proxy with REST API + GUI dashboard"
-LABEL org.opencontainers.image.version="1.27.5"
+LABEL org.opencontainers.image.version="1.27.6"
 
 # Disable Python bytecode writes inside the container (saves space, no
 # __pycache__ dirt at runtime).  Devs can still build bytecode on their host.

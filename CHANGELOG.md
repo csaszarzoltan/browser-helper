@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.6] — 2026-08-18
+
+#### Fixed
+- **Navigate serialization** (`src/main.py`) — a global `asyncio.Lock` now ensures at most one `Page.navigate` CDP command is in-flight at a time across all sessions. Without this, concurrent navigations from multiple sessions (e.g. 6–11 agents sharing one Chrome) caused repeated 30s CDP timeouts and auto-heal tab storms (42 timeout errors observed in a ~9-minute window). Non-navigate operations (screenshot, evaluate, click, etc.) are unaffected.
+- **Domain throttle now also covers `search_navigate`** — the `POST /search` endpoint routes through `run_op("search_navigate", ...)` which also issues `Page.navigate`; it was previously unthrottled.
+
 ## [1.27.5] — 2026-08-16
 
 #### Fixed
