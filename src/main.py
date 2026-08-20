@@ -256,7 +256,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.27.6",
+    version="1.27.7",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -2051,7 +2051,16 @@ async def session_clone(session_id: str):
         imported = imp.get("imported", 0)
     except Exception as exc:
         logger.warning("session clone failed: %s", exc, exc_info=True)
-        return api_error("auth_clone", "clone_failed", str(exc), 502)
+        hint = ""
+        if "session_not_found" in str(exc) or "not found" in str(exc).lower():
+            hint = " The source session may have expired (TTL 900s). Check with GET /sessions."
+        elif "tab" in str(exc).lower():
+            hint = " The source tab may have been closed. The session registry auto-creates new tabs."
+        return api_error(
+            "auth_clone", "clone_failed",
+            f"{str(exc)}.{hint} Cookie export failed between source and target session.",
+            502,
+        )
     return api_success("auth_clone", {
         "session_id": new_sess.session_id,
         "tab_id": new_sess.tab_id,
@@ -2613,6 +2622,27 @@ async def page_analyze(condensed: bool = Query(False, description="Enable conden
             if isinstance(page, dict):
                 page["snapshot_id"] = snap.snapshot_id
                 page["elements"] = snap.elements
+                # Detect JSON-only pages (e.g. auth errors, API endpoints
+                # returning JSON instead of HTML).  Agents navigating to
+                # API URLs see this instead of a real web page — warn them.
+                visible_text = page.get("visible_text", "") or ""
+                stripped = visible_text.strip()
+                if stripped and (
+                    (stripped.startswith("{") and stripped.endswith("}"))
+                    or (stripped.startswith("[") and stripped.endswith("]"))
+                ):
+                    import json as _json
+                    try:
+                        _json.loads(stripped)
+                        page.setdefault("warnings", []).append(
+                            "Page contains only JSON (not HTML). "
+                            "This may be an API endpoint that requires "
+                            "authentication headers — navigate to a "
+                            "browser-accessible URL instead, or check "
+                            "the page content for error messages."
+                        )
+                    except (ValueError, TypeError):
+                        pass  # not valid JSON — just looks like it
         return api_success("page_analyze_condensed" if condensed else "page_analyze", raw)
     except Exception as exc:
         logger.warning("page analyze failed: %s", exc, exc_info=True)
@@ -3044,6 +3074,9 @@ async def screenshot():
     Capture a screenshot of the current page.
 
     Returns a base64-encoded JPEG image (quality 70).
+    To display: decode the base64 string and save as .jpg, or pass
+    directly to vision tools. Do NOT attempt to read the raw base64
+    as text — it is binary image data.
     """
     return await run_op("screenshot", client.screenshot)
 

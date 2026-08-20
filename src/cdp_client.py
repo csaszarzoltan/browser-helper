@@ -718,6 +718,10 @@ class CDPClient:
 
         return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url}
 
+    # navigate() is complete — note: JSON-page detection lives in
+    # /page/analyze (main.py) where agents typically check page state
+    # after navigation.
+
     async def evaluate(self, js_code: str) -> dict:
         """Execute JavaScript in page and return result."""
         await self._activate_current()
@@ -3152,7 +3156,13 @@ class CDPClient:
             tabs = await self.discover_tabs()
             target = next((t for t in tabs if t["id"] == tab_id), None)
         if not target:
-            raise CDPError(f"Tab not found: {tab_id}")
+            raise CDPError(
+                f"Tab not found: {tab_id}. "
+                "This tab may have been closed by another agent or session timeout. "
+                "To recover: 1) GET /tabs to list available tabs, "
+                "2) POST /connect to attach to an existing tab, or "
+                "3) any operation on this session will auto-mint a fresh tab."
+            )
         await self.connect_to_target(tab_id)
         await self._activate_current()
         return {"status": "ok", "tab_id": tab_id, "title": target.get("title", "")}
@@ -3168,7 +3178,11 @@ class CDPClient:
         tabs = await self.discover_tabs()
         target = next((t for t in tabs if t["id"] == tab_id), None)
         if not target:
-            raise CDPError(f"Tab not found: {tab_id}")
+            raise CDPError(
+                f"Tab not found: {tab_id}. "
+                "The tab may have been closed or navigated to a new target. "
+                "GET /tabs to see available tabs; POST /connect to re-attach."
+            )
         if self._ws:
             try:
                 await self._ws.close()

@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.7] — 2026-08-20
+
+#### Improved
+- **Better error messages for agents** — five usability improvements based on real-world agent testing failures:
+  - **"Tab not found"** now includes recovery steps (GET /tabs, POST /connect, or auto-mint).
+  - **Clone failure** now hints at the likely cause (expired session, closed tab) with recovery actions.
+  - **`/page/analyze`** detects JSON-only pages (auth errors, API endpoints returning JSON instead of HTML) and adds a `warnings` field telling the agent the page is not a browser UI.
+  - **`/screenshot`** docstring warns that base64 is binary data — agents should decode to .jpg, not read as text.
+
 ## [1.27.6] — 2026-08-18
 
 #### Fixed
