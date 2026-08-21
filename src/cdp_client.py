@@ -140,6 +140,8 @@ class CDPClient:
         self._network_monitoring = False
         self._console_entries: list[dict] = []
         self._console_monitoring = False
+        self._notifications: list[dict] = []
+        self._notification_monitoring = False
         self._recording_frames: list[str] | None = None
         self._recording_quality = 70
         self._request_mocks: list[dict] = []
@@ -552,6 +554,88 @@ class CDPClient:
     def clear_console_entries(self) -> None:
         """Drop all collected console entries."""
         self._console_entries = []
+
+    # ─── Notification / toast monitoring ──────────────────────────
+
+    async def start_notification_monitoring(self) -> dict:
+        """Inject a MutationObserver that captures toast/alert/notification elements.
+
+        Watches for elements matching common notification selectors
+        (toast, alert, snackbar, notification, dialog, message, banner).
+        Each new element is recorded with its text, class, and timestamp.
+        """
+        if self._notification_monitoring:
+            return {"status": "ok", "notification_monitoring": True}
+        await self._activate_current()
+        js = r"""
+(function() {
+  if (window.__bh_notification_observer__) return;
+  const selectors = [
+    '[class*=toast]', '[class*=Toast]',
+    '[class*=alert]', '[class*=Alert]',
+    '[class*=snackbar]', '[class*=Snackbar]',
+    '[class*=notification]', '[class*=Notification]',
+    '[class*=message]', '[class*=Message]',
+    '[class*=banner]', '[class*=Banner]',
+    '[role=alert]', '[role=status]',
+    '.modal-body', '[class*=dialog]'
+  ].join(', ');
+  const seen = new WeakSet();
+  function capture(el) {
+    if (seen.has(el)) return;
+    const text = (el.textContent || '').trim().substring(0, 500);
+    if (!text) return;
+    seen.add(el);
+    window.__bh_notifications__ = window.__bh_notifications__ || [];
+    window.__bh_notifications__.push({
+      text: text,
+      classes: el.className || '',
+      tag: el.tagName.toLowerCase(),
+      timestamp: Date.now() / 1000
+    });
+    if (window.__bh_notifications__.length > 200) {
+      window.__bh_notifications__ = window.__bh_notifications__.slice(-200);
+    }
+  }
+  const observer = new MutationObserver(function(mutations) {
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        if (node.matches && node.matches(selectors)) capture(node);
+        if (node.querySelectorAll) {
+          node.querySelectorAll(selectors).forEach(capture);
+        }
+      }
+      if (m.type === 'characterData' && m.target.parentElement) {
+        const el = m.target.parentElement;
+        if (el.matches && el.matches(selectors)) capture(el);
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  window.__bh_notification_observer__ = observer;
+  window.__bh_notifications__ = [];
+  // Capture already-visible notifications
+  document.querySelectorAll(selectors).forEach(capture);
+})();
+"""
+        try:
+            await self.evaluate(js)
+            self._notification_monitoring = True
+            return {"status": "ok", "notification_monitoring": True}
+        except (CDPError, Exception) as exc:
+            return {"status": "error", "error": str(exc)}
+
+    def get_notifications(self, since: float = 0.0) -> list[dict]:
+        """Return captured notifications, optionally filtered by timestamp."""
+        entries = list(self._notifications)
+        if since > 0:
+            entries = [e for e in entries if e.get("timestamp", 0) >= since]
+        return entries
+
+    def clear_notifications(self) -> None:
+        """Drop all collected notifications."""
+        self._notifications = []
 
     async def _send_command(self, method: str, params: dict | None = None, **extra) -> dict:
         """Send CDP command and wait for result.

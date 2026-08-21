@@ -256,7 +256,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.27.7",
+    version="1.27.8",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -2711,6 +2711,52 @@ class AssertRequest(BaseModel):
     expected: int | str | None = Field(None, description="Expected count (int) or substring (str)")
 
 
+class WaitJsRequest(BaseModel):
+    """Wait for an arbitrary JS expression to return truthy."""
+
+    js: str = Field(..., description="JavaScript expression that should return truthy when the condition is met (e.g. \"document.querySelectorAll('.completed').length > 0\")")
+    timeout: int = Field(30, description="Max seconds to wait (polls every 200ms)")
+
+
+@app.post("/wait/js")
+async def wait_js(body: WaitJsRequest):
+    """Wait for an arbitrary JS expression to become truthy.
+
+    Unlike ``/wait/for`` (which only supports selector|text|url),
+    this endpoint accepts any valid JS expression.  The expression is
+    re-evaluated every 200ms until it returns a truthy value or timeout.
+
+    Examples::
+
+        {"js": "document.querySelectorAll('.completed').length > 0", "timeout": 30}
+        {"js": "window.__APP_STATE__?.loaded === true", "timeout": 15}
+        {"js": "document.querySelector('#toast')?.innerText.includes('Saved')", "timeout": 10}
+    """
+    js = f"""
+(async function() {{
+  const deadline = Date.now() + {int(body.timeout) * 1000};
+  const poll = 200;
+  while (Date.now() < deadline) {{
+    try {{
+      const result = {body.js};
+      if (result) return JSON.stringify({{status: "ok", condition: "js_truthy", result: result}});
+    }} catch (e) {{}}
+    await new Promise(r => setTimeout(r, poll));
+  }}
+  return JSON.stringify({{status: "error", error: "timeout after {int(body.timeout)}s waiting for JS expression"}});
+}})();
+"""
+    target, _sess = await _resolve_session_client()
+    result = await target.evaluate(js)
+    raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+    import json as _json
+    try:
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+    except (_json.JSONDecodeError, TypeError):
+        data = {"error": "parse failed"}
+    return api_success("wait_js", data)
+
+
 @app.post("/wait/for")
 async def wait_for(body: WaitForRequest):
     """Wait until a DOM condition holds (deterministic, no guessy sleeps).
@@ -2738,6 +2784,51 @@ async def assert_dom(body: AssertRequest):
                          f"Assertion failed: {body.condition} {body.kind}={body.value}",
                          409, details=data)
     return res
+
+
+@app.get("/element/{selector:path}")
+async def element_state(selector: str):
+    """Get the current state of a DOM element by CSS selector.
+
+    Returns disabled, text, value, visible, tag, classes, and bounding rect.
+
+    Examples::
+
+        GET /element/#my-button
+        GET /element/input[name=email]
+        GET /element/.completed:first-child
+    """
+    js = f"""(() => {{
+  const el = document.querySelector({json.dumps(selector)});
+  if (!el) return JSON.stringify({{status: "error", error: "Element not found: " + {json.dumps(selector)}}});
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+  return JSON.stringify({{
+    status: "ok",
+    selector: {json.dumps(selector)},
+    tag: el.tagName.toLowerCase(),
+    text: (el.textContent || "").trim().substring(0, 500),
+    value: el.value || null,
+    disabled: el.disabled || false,
+    readonly: el.readOnly || false,
+    visible: el.offsetParent !== null && style.display !== "none" && style.visibility !== "hidden",
+    classes: el.className || "",
+    id: el.id || null,
+    type: el.type || null,
+    placeholder: el.placeholder || null,
+    rect: {{x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height)}}
+  }});
+}})()"""
+    target, _sess = await _resolve_session_client()
+    result = await target.evaluate(js)
+    raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        data = {"error": "parse failed"}
+    if data.get("status") == "error":
+        return api_error("element_state", "not_found", data.get("error", "Element not found"), 404)
+    return api_success("element_state", data)
 
 
 @app.post("/page/diff")
@@ -3515,6 +3606,94 @@ async def network_log():
 async def network_clear():
     """Clear the network request log."""
     return await run_op("network_clear", client.clear_network_log)
+
+
+@app.get("/network/requests")
+async def network_requests(
+    path: str | None = Query(None, description="Filter by URL path substring (e.g. '/api/')"),
+    method: str | None = Query(None, description="Filter by HTTP method (GET, POST, …)"),
+    status: int | None = Query(None, description="Filter by HTTP status code"),
+    since: float | None = Query(None, description="Only entries with timestamp >= this value"),
+    limit: int = Query(100, description="Max entries to return"),
+):
+    """Get network requests with optional filtering.
+
+    Returns request/response pairs collected by the CDP Network domain.
+    Use ``/network/start`` first to begin tracking.
+    """
+    target, _sess = await _resolve_session_client()
+    try:
+        await target.start_network_monitoring()
+    except Exception:
+        pass
+    data = await target.get_network_log()
+    entries = data.get("entries", [])
+
+    # Apply filters
+    if path:
+        entries = [e for e in entries if path in e.get("url", "")]
+    if method:
+        m = method.upper()
+        entries = [e for e in entries if e.get("method", "").upper() == m]
+    if status:
+        entries = [e for e in entries if e.get("status") == status]
+    if since is not None:
+        entries = [e for e in entries if e.get("timestamp", 0) >= since]
+
+    # Most recent last
+    entries = entries[-limit:]
+
+    return api_success("network_requests", {
+        "count": len(entries),
+        "entries": entries,
+    })
+
+
+@app.get("/notifications")
+async def get_notifications(
+    since: float | None = Query(None, description="Only notifications with timestamp >= this value"),
+    limit: int = Query(50, description="Max notifications to return"),
+    clear: bool = Query(False, description="Clear buffer after reading"),
+):
+    """Get captured toast/alert/notification messages.
+
+    Uses a MutationObserver to watch for common notification elements
+    (toast, alert, snackbar, notification, dialog, message, banner).
+    Call ``GET /notifications/start`` first to begin monitoring.
+
+    Returns an array of ``{text, classes, tag, timestamp}`` objects.
+    """
+    target, _sess = await _resolve_session_client()
+    try:
+        await target.start_notification_monitoring()
+    except Exception:
+        pass
+    # Read notifications from the browser's window.__bh_notifications__
+    js = "JSON.stringify(window.__bh_notifications__ || [])"
+    result = await target.evaluate(js)
+    raw = result.get("result", "[]") if isinstance(result, dict) else "[]"
+    try:
+        entries = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        entries = []
+    if not isinstance(entries, list):
+        entries = []
+    if since is not None:
+        entries = [e for e in entries if e.get("timestamp", 0) >= since]
+    entries = entries[-limit:]
+    if clear:
+        await target.evaluate("window.__bh_notifications__ = []")
+    return api_success("notifications", {
+        "count": len(entries),
+        "entries": entries,
+    })
+
+
+@app.post("/notifications/start")
+async def notifications_start():
+    """Start monitoring for toast/alert/notification DOM changes."""
+    target, _sess = await _resolve_session_client()
+    return api_success("notifications_start", await target.start_notification_monitoring())
 
 
 # ---------------------------------------------------------------------------
@@ -5045,6 +5224,35 @@ async def agent_console(body: AgentConsoleRequest | None = None):
         "count": len(entries),
         "errors": len(errors),
         "entries": entries[-100:],
+    })
+
+
+@app.get("/console/errors")
+async def console_errors(
+    since: float | None = Query(None, description="Only errors with timestamp >= this value (unix seconds)"),
+    limit: int = Query(50, description="Max errors to return"),
+):
+    """Get console errors without clearing the buffer.
+
+    Unlike ``/agent/console`` (POST), this endpoint:
+    - Only returns error/exception level entries
+    - Does NOT clear the buffer on read (persistent)
+    - Supports ``since`` filtering for incremental reads
+
+    Use this for ongoing error monitoring; use ``/agent/console`` with
+    ``clear_first=true`` to reset after taking action.
+    """
+    target, _sess = await _resolve_session_client()
+    try:
+        await target.start_console_monitoring()
+    except Exception:
+        pass
+    entries = target.get_console_entries(level="error")
+    if since is not None:
+        entries = [e for e in entries if e.get("timestamp", 0) >= since]
+    return api_success("console_errors", {
+        "count": len(entries),
+        "entries": entries[-limit:],
     })
 
 

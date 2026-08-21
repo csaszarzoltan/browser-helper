@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.8] — 2026-08-20
+
+#### Added
+- **`GET /network/requests`** — filtered network request log.  Supports `?path=/api/`, `?method=POST`, `?status=500`, `?since=<timestamp>`.  Wraps the existing CDP Network domain monitoring with query-string filtering.
+- **`GET /console/errors`** — persistent console error buffer (does NOT clear on read).  Supports `?since=` for incremental reads.  Unlike `/agent/console` (which clears by default), this is safe for ongoing monitoring.
+- **`POST /wait/js`** — wait for an arbitrary JS expression to become truthy (polls every 200ms).  Accepts `{"js": "document.querySelectorAll('.completed').length > 0", "timeout": 30}`.  Fills the gap between `/wait/for` (selector|text|url only) and raw `sleep()`.
+- **`GET /notifications`** + **`POST /notifications/start`** — MutationObserver-based toast/alert/notification monitoring.  Captures elements matching `[class*=toast]`, `[role=alert]`, `[class*=snackbar]`, etc.  Returns `{text, classes, tag, timestamp}`.  Supports `?since=`, `?clear=true`.
+- **`GET /element/{selector}`** — query a DOM element's state: `{tag, text, value, disabled, readonly, visible, classes, rect}`.  Returns 404 with helpful message when element is not found.
+
 ## [1.27.7] — 2026-08-20
 
 #### Improved
