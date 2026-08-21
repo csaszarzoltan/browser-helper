@@ -256,7 +256,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.27.8",
+    version="1.27.9",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )

@@ -75,6 +75,13 @@ EXPECTED_TOOLS = [
     "memory_recall",
     "memory_forget",
     "memory_list",
+    # Agent testing helpers (v1.27.8)
+    "get_notifications",
+    "notifications_start",
+    "get_network_requests",
+    "get_console_errors",
+    "wait_js",
+    "element_state",
 ]
 
 # tool -> required parameter names (spec §8.1: exact required params)
@@ -111,6 +118,13 @@ EXPECTED_REQUIRED_PARAMS = {
     "memory_recall": ["query"],
     "memory_forget": ["key_or_id"],
     "memory_list": [],
+    # Agent testing helpers (v1.27.8)
+    "get_notifications": [],
+    "notifications_start": [],
+    "get_network_requests": [],
+    "get_console_errors": [],
+    "wait_js": ["js"],
+    "element_state": ["selector"],
 }
 
 # tool -> (capability_id, expected status)
@@ -147,6 +161,13 @@ EXPECTED_CAPABILITY = {
     "memory_recall": ("memory.persistent", "ready"),
     "memory_forget": ("memory.persistent", "ready"),
     "memory_list": ("memory.persistent", "ready"),
+    # Agent testing helpers (v1.27.8)
+    "get_notifications": ("agent.testing", "ready"),
+    "notifications_start": ("agent.testing", "ready"),
+    "get_network_requests": ("browser.core", "ready"),
+    "get_console_errors": ("agent.testing", "ready"),
+    "wait_js": ("agent.testing", "ready"),
+    "element_state": ("agent.testing", "ready"),
 }
 
 TOOL_MODULES = {
@@ -182,6 +203,13 @@ TOOL_MODULES = {
     "memory_recall": "memory.tools",
     "memory_forget": "memory.tools",
     "memory_list": "memory.tools",
+    # Agent testing helpers (v1.27.8)
+    "get_notifications": "tools",
+    "notifications_start": "tools",
+    "get_network_requests": "tools",
+    "get_console_errors": "tools",
+    "wait_js": "tools",
+    "element_state": "tools",
 }
 
 

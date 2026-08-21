@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **32 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory).
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **38 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory + 6 agent testing).
 
 ---
 
@@ -131,9 +131,9 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ---
 
-## 3. Tool reference (32 tools)
+## 3. Tool reference (38 tools)
 
-All 32 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
+All 38 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 
 ### Browser tools — `src/mcp_server/tools.py`
 
@@ -150,6 +150,12 @@ Each maps 1:1 to the engine call behind a REST endpoint (same `main.run_op` + `c
 | `switch_tab` | `id` (str, required) | `browser.core` | `run_op("switch_tab", client.switch_tab, id)` | `POST /switch_tab/{tab_id}` |
 | `close_tab` | `id` (str, required) | `browser.core` | `run_op("close_tab", client.close_tab, id)` | `POST /tab/close/{tab_id}` |
 | `session_status` | — | `diagnostics.privacy` | `_session_mgr.list_sessions()` (no CDP dependency) | `GET /api/v1/session` |
+| `get_notifications` | `since` (float, opt), `limit` (int, opt) | `agent.testing` | `window.__bh_notifications__` (MutationObserver) | `GET /notifications` |
+| `notifications_start` | — | `agent.testing` | `start_notification_monitoring()` | `POST /notifications/start` |
+| `get_network_requests` | `path` (str, opt), `method` (str, opt), `status` (int, opt), `since` (float, opt), `limit` (int, opt) | `browser.core` | `get_network_log()` + filters | `GET /network/requests` |
+| `get_console_errors` | `since` (float, opt), `limit` (int, opt) | `agent.testing` | `get_console_entries(level="error")` | `GET /console/errors` |
+| `wait_js` | `js` (str, required), `timeout` (int, opt) | `agent.testing` | `evaluate()` + JS poll loop | `POST /wait/js` |
+| `element_state` | `selector` (str, required) | `agent.testing` | `evaluate()` + `querySelector` | `GET /element/{selector}` |
 
 ### Fleet tools — `src/mcp_server/fleet_tools.py`
 
@@ -274,9 +280,9 @@ All three tools are pure reads: they never register, unregister, allocate, relea
 
 Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`) require a live CDP connection. Without one, `run_op` raises `HTTPException` 400 *before* the engine call — the agent sees a tool-call error with that message rather than an envelope. Start Browser Helper (or launch Chrome with `--remote-debugging-port=9555` and connect) before calling them. `session_status` and the fleet tools work without a browser connection.
 
-### The agent sees only 32 tools
+### The agent sees only 38 tools
 
-32 is the correct count for v1.27.3 (28 browser/fleet + 4 persistent memory). The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
+38 is the correct count for v1.27.8 (28 browser/fleet + 4 persistent memory + 6 agent testing). The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
 
 ### stdio mode hangs / "port already in use"
 

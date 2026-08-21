@@ -683,3 +683,210 @@ async def network_mock(mocks: list[dict], ctx: Context | None = None) -> str:
                            "error": None, "meta": {}})
     except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
         return tool_error("network_mock", "mock_failed", str(exc))
+
+
+# ── Agent testing helpers (v1.27.8) ───────────────────────────────
+
+
+async def get_notifications(
+    since: float | None = None,
+    limit: int = 50,
+    ctx: Context | None = None,
+) -> str:
+    """Get captured toast/alert/notification messages (capability ``agent.testing``, READY).
+
+    Uses a MutationObserver to watch for DOM changes matching common
+    notification selectors (toast, alert, snackbar, notification, dialog).
+
+    Call ``notifications_start`` first to begin monitoring.
+    Returns ``{text, classes, tag, timestamp}`` objects.
+    """
+    from main import client, run_op
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info("reading notifications")
+    try:
+        await target.start_notification_monitoring()
+        js = "JSON.stringify(window.__bh_notifications__ || [])"
+        result = await target.evaluate(js)
+        raw = result.get("result", "[]") if isinstance(result, dict) else "[]"
+        import json as _json
+        entries = _json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(entries, list):
+            entries = []
+        if since is not None:
+            entries = [e for e in entries if e.get("timestamp", 0) >= since]
+        entries = entries[-limit:]
+        return tool_result("get_notifications", {"count": len(entries), "entries": entries})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("get_notifications", "failed", str(exc))
+
+
+async def notifications_start(ctx: Context | None = None) -> str:
+    """Start monitoring for toast/alert/notification DOM changes (capability ``agent.testing``, READY).
+
+    Injects a MutationObserver that watches for elements with classes like
+    toast, alert, snackbar, notification, dialog, banner.
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info("starting notification monitoring")
+    try:
+        result = await target.start_notification_monitoring()
+        return tool_result("notifications_start", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("notifications_start", "failed", str(exc))
+
+
+async def get_network_requests(
+    path: str | None = None,
+    method: str | None = None,
+    status: int | None = None,
+    since: float | None = None,
+    limit: int = 100,
+    ctx: Context | None = None,
+) -> str:
+    """Get filtered network request log (capability ``browser.core``, READY).
+
+    Returns request/response pairs collected by the CDP Network domain.
+    Filter by URL path substring (``path``), HTTP method, status code, or
+    timestamp.  Call ``POST /network/start`` or navigate first to populate.
+    """
+    from main import client, run_op
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info("reading network requests")
+    try:
+        await target.start_network_monitoring()
+        data = await target.get_network_log()
+        entries = data.get("entries", [])
+        if path:
+            entries = [e for e in entries if path in e.get("url", "")]
+        if method:
+            m = method.upper()
+            entries = [e for e in entries if e.get("method", "").upper() == m]
+        if status:
+            entries = [e for e in entries if e.get("status") == status]
+        if since is not None:
+            entries = [e for e in entries if e.get("timestamp", 0) >= since]
+        entries = entries[-limit:]
+        return tool_result("get_network_requests", {"count": len(entries), "entries": entries})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("get_network_requests", "failed", str(exc))
+
+
+async def get_console_errors(
+    since: float | None = None,
+    limit: int = 50,
+    ctx: Context | None = None,
+) -> str:
+    """Get persistent console errors (capability ``agent.testing``, READY).
+
+    Returns error/exception level console entries WITHOUT clearing the buffer.
+    Supports ``since`` for incremental reads (pass the timestamp of the last
+    entry you saw).  Unlike the REST ``/agent/console`` (which clears on
+    read), this is safe for ongoing monitoring.
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info("reading console errors")
+    try:
+        await target.start_console_monitoring()
+        entries = target.get_console_entries(level="error")
+        if since is not None:
+            entries = [e for e in entries if e.get("timestamp", 0) >= since]
+        entries = entries[-limit:]
+        return tool_result("get_console_errors", {"count": len(entries), "entries": entries})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("get_console_errors", "failed", str(exc))
+
+
+async def wait_js(
+    js: str,
+    timeout: int = 30,
+    ctx: Context | None = None,
+) -> str:
+    """Wait for an arbitrary JS expression to become truthy (capability ``agent.testing``, READY).
+
+    Polls every 200ms until the expression returns a truthy value or timeout.
+
+    Examples::
+
+        wait_js("document.querySelectorAll('.completed').length > 0")
+        wait_js("window.__APP_STATE__?.loaded === true")
+        wait_js("document.querySelector('#toast')?.innerText.includes('Saved')")
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"waiting for JS (timeout={timeout}s)")
+    poll_js = f"""(async function() {{
+  const deadline = Date.now() + {int(timeout) * 1000};
+  const poll = 200;
+  while (Date.now() < deadline) {{
+    try {{
+      const result = {js};
+      if (result) return JSON.stringify({{status: "ok", condition: "js_truthy", result: result}});
+    }} catch (e) {{}}
+    await new Promise(r => setTimeout(r, poll));
+  }}
+  return JSON.stringify({{status: "error", error: "timeout after {int(timeout)}s waiting for JS expression"}});
+}})();"""
+    try:
+        result = await target.evaluate(poll_js)
+        raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+        import json as _json
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        return tool_result("wait_js", data)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("wait_js", "failed", str(exc))
+
+
+async def element_state(
+    selector: str,
+    ctx: Context | None = None,
+) -> str:
+    """Get the current state of a DOM element by CSS selector (capability ``agent.testing``, READY).
+
+    Returns disabled, text, value, visible, tag, classes, type, and
+    bounding rect.  Returns error if element not found.
+
+    Examples::
+
+        element_state("#my-button")
+        element_state("input[name=email]")
+        element_state(".completed:first-child")
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"querying element: {selector}")
+    import json as _json
+    js = f"""(() => {{
+  const el = document.querySelector({_json.dumps(selector)});
+  if (!el) return JSON.stringify({{status: "error", error: "Element not found: " + {_json.dumps(selector)}}});
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+  return JSON.stringify({{
+    status: "ok",
+    selector: {_json.dumps(selector)},
+    tag: el.tagName.toLowerCase(),
+    text: (el.textContent || "").trim().substring(0, 500),
+    value: el.value || null,
+    disabled: el.disabled || false,
+    readonly: el.readOnly || false,
+    visible: el.offsetParent !== null && style.display !== "none" && style.visibility !== "hidden",
+    classes: el.className || "",
+    id: el.id || null,
+    type: el.type || null,
+    placeholder: el.placeholder || null,
+    rect: {{x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height)}}
+  }});
+}})()"""
+    try:
+        result = await target.evaluate(js)
+        raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        if data.get("status") == "error":
+            return tool_error("element_state", "not_found", data.get("error", "Element not found"))
+        return tool_result("element_state", data)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("element_state", "failed", str(exc))

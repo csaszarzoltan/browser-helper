@@ -19,7 +19,7 @@ bh mcp                     # stdio
 bh mcp --http --port 8765  # streamable HTTP
 ```
 
-The server now exposes **32 tools** (28 browser/fleet + 4 memory). Memory tools are backed by the `memory.persistent` capability (status: READY).
+The server now exposes **38 tools** (28 browser/fleet + 4 memory + 6 agent testing). Memory tools are backed by the `memory.persistent` capability (status: READY).
 
 ### CLI
 

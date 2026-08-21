@@ -56,6 +56,13 @@ _TOOL_CAPABILITY = {
     # Network interception (v1.27.0, F6)
     "network_block": "browser.core",
     "network_mock": "browser.core",
+    # Agent testing helpers (v1.27.8)
+    "get_notifications": "agent.testing",
+    "notifications_start": "agent.testing",
+    "get_network_requests": "browser.core",
+    "get_console_errors": "agent.testing",
+    "wait_js": "agent.testing",
+    "element_state": "agent.testing",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -279,6 +286,50 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["mocks"],
+    },
+    # Agent testing helpers (v1.27.8)
+    "get_notifications": {
+        "type": "object",
+        "properties": {
+            "since": {"type": "number", "description": "Only entries with timestamp >= this value (unix seconds)"},
+            "limit": {"type": "integer", "description": "Max entries to return (default 50)"},
+        },
+    },
+    "notifications_start": {
+        "type": "object",
+        "properties": {},
+    },
+    "get_network_requests": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Filter by URL path substring (e.g. '/api/')"},
+            "method": {"type": "string", "description": "Filter by HTTP method (GET, POST, …)"},
+            "status": {"type": "integer", "description": "Filter by HTTP status code"},
+            "since": {"type": "number", "description": "Only entries with timestamp >= this value"},
+            "limit": {"type": "integer", "description": "Max entries to return (default 100)"},
+        },
+    },
+    "get_console_errors": {
+        "type": "object",
+        "properties": {
+            "since": {"type": "number", "description": "Only errors with timestamp >= this value"},
+            "limit": {"type": "integer", "description": "Max errors to return (default 50)"},
+        },
+    },
+    "wait_js": {
+        "type": "object",
+        "properties": {
+            "js": {"type": "string", "description": "JS expression that should return truthy when condition is met"},
+            "timeout": {"type": "integer", "description": "Max seconds to wait (default 30, polls every 200ms)"},
+        },
+        "required": ["js"],
+    },
+    "element_state": {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector of the element to inspect"},
+        },
+        "required": ["selector"],
     },
 }
 

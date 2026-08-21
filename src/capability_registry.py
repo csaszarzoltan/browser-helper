@@ -65,6 +65,12 @@ class CapabilityRegistry:
                     action="Run Flow",
                 ),
                 Capability(
+                    "agent.testing", "Agent testing helpers", "Agent Tools",
+                    CapabilityStatus.READY,
+                    "Notification monitoring, console errors, JS-based waits, element state queries.",
+                    action="Open Testing Tools",
+                ),
+                Capability(
                     "anti_detection.compositor", "Anti-detection composition", "Environments",
                     CapabilityStatus.EXPERIMENTAL,
                     "Compose fingerprint, proxy, stealth, and session policies.",

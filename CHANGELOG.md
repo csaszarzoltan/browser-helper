@@ -4,6 +4,20 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.27.9] — 2026-08-20
+
+#### Added
+- **6 new MCP tools** for agent testing workflows (38 tools total):
+  - `get_notifications` / `notifications_start` — MutationObserver-based toast/alert/notification monitoring
+  - `get_network_requests` — filtered network request log (path, method, status, since)
+  - `get_console_errors` — persistent console error buffer (no clear on read)
+  - `wait_js` — wait for arbitrary JS expression (replaces sleep+eval loops)
+  - `element_state` — query DOM element state (disabled, text, value, visible, rect)
+- **`agent.testing` capability** registered in `capability_registry.py` (READY)
+
+#### Changed
+- Tool count updated 32 → 38 across all docs (mcp-server.md, mcp-memory.md, architecture, README)
+
 ## [1.27.8] — 2026-08-20
 
 #### Added
