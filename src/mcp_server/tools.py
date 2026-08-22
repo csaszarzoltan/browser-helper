@@ -841,6 +841,53 @@ async def wait_js(
         return tool_error("wait_js", "failed", str(exc))
 
 
+async def eval(js: str, timeout: int = 30, ctx: Context | None = None) -> str:
+    """Execute JS directly and return the value (capability ``browser.core``, READY).
+
+    Calls ``client.evaluate_js`` directly — no snapshot round-trip.
+
+    Examples::
+
+        eval("document.title")
+        eval("window.__APP_STATE__")
+        eval("document.querySelectorAll('a').length")
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"eval js ({len(js)} chars, timeout={timeout}s)")
+    try:
+        result = await target.evaluate_js(js)
+        return tool_result("eval", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("eval", "failed", str(exc))
+
+
+async def get_page_text(
+    wait_ready: bool = True,
+    timeout: int = 20,
+    ctx: Context | None = None,
+) -> str:
+    """Get visible page text (capability ``browser.core``, READY).
+
+    Optionally waits for the page to reach ready (network idle + stable DOM)
+    before extracting, same as ``get_content`` with the cleaner main-content
+    filter stripped.  Alias for ``client.get_page_text`` with wait handling.
+    """
+    target, run_op_fn = await _target()
+    if ctx is not None:
+        ctx.info(f"get_page_text wait_ready={wait_ready} timeout={timeout}")
+    try:
+        if wait_ready:
+            try:
+                await run_op_fn("get_page_text_wait", target.wait_for_ready, timeout)
+            except Exception:  # noqa: BLE001 — wait is best-effort; text still readable
+                pass
+        result = await target.get_page_text()
+        return tool_result("get_page_text", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("get_page_text", "failed", str(exc))
+
+
 async def element_state(
     selector: str,
     ctx: Context | None = None,
@@ -890,3 +937,183 @@ async def element_state(
         return tool_result("element_state", data)
     except Exception as exc:  # noqa: BLE001
         return tool_error("element_state", "failed", str(exc))
+
+
+async def press_key(
+    key: str,
+    selector: str | None = None,
+    ctx: Context | None = None,
+) -> str:
+    """Press a keyboard key (capability ``browser.core``, READY).
+
+    Optionally focuses *selector* first.  Key names: Enter, Escape,
+    ArrowDown, ArrowUp, Tab, Backspace, etc.
+
+    Examples::
+
+        press_key("Enter")
+        press_key("Escape")
+        press_key("ArrowDown", selector="#dropdown")
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"press_key {key}" + (f" @ {selector}" if selector else ""))
+    try:
+        result = await target.press_key(key, selector)
+        if result.get("status") == "error":
+            return tool_error("press_key", "not_found", result.get("error", "Element not found"))
+        return tool_result("press_key", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("press_key", "failed", str(exc))
+
+
+async def hover(selector: str, ctx: Context | None = None) -> str:
+    """Hover over an element by CSS selector (capability ``browser.core``, READY).
+
+    Resolves the element's center point, then dispatches a real CDP
+    mouseMoved event — triggers CSS :hover and mouseenter handlers
+    (dropdown menus, tooltips).
+
+    Example: hover("#nav-menu") → dropdown opens.
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"hover {selector}")
+    try:
+        result = await target.hover(selector)
+        if result.get("status") == "error":
+            return tool_error("hover", "not_found", result.get("error", "Element not found"))
+        return tool_result("hover", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("hover", "failed", str(exc))
+
+
+async def scroll(
+    x: int = 0,
+    y: int = 0,
+    selector: str | None = None,
+    ctx: Context | None = None,
+) -> str:
+    """Scroll page or element by x, y pixels (capability ``browser.core``, READY).
+
+    With *selector* scrolls that scrollable container instead of the window.
+
+    Examples::
+
+        scroll(y=500)                    # page down 500px
+        scroll(selector=".chat-list", y=1000)
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"scroll x={x} y={y}" + (f" @ {selector}" if selector else ""))
+    try:
+        result = await target.scroll(x, y, selector)
+        if result.get("status") == "error":
+            return tool_error("scroll", "not_found", result.get("error", "Element not found"))
+        return tool_result("scroll", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("scroll", "failed", str(exc))
+
+
+async def reload(
+    ignore_cache: bool = False,
+    ctx: Context | None = None,
+) -> str:
+    """Reload the current page (capability ``browser.core``, READY).
+
+    Set *ignore_cache* to bypass the HTTP cache (hard reload).
+    """
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"reload ignore_cache={ignore_cache}")
+    try:
+        result = await target.reload(ignore_cache)
+        return tool_result("reload", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("reload", "failed", str(exc))
+
+
+async def wait_network_idle(
+    timeout: int = 10,
+    quiet_ms: int = 500,
+    ctx: Context | None = None,
+) -> str:
+    """Wait until network is idle (capability ``browser.core``, READY).
+
+    Returns once no network requests have been in flight for *quiet_ms*
+    (default 500ms).  Use after form submissions or clicks that trigger
+    AJAX calls so the next action never races in-flight requests.
+    """
+    target, run_op_fn = await _target()
+    if ctx is not None:
+        ctx.info(f"wait_network_idle timeout={timeout}s quiet_ms={quiet_ms}")
+    try:
+        result = await run_op_fn(
+            "wait_for_network_idle", target.wait_for_network_idle, timeout, quiet_ms
+        )
+        return tool_result("wait_network_idle", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("wait_network_idle", "failed", str(exc))
+
+
+async def rate_limiter_status(ctx: Context | None = None) -> str:
+    """Return domain throttle + rate limiter state (capability ``browser.core``, READY).
+
+    Shows the current interval, per-domain last-hit + remaining wait.
+    Useful when ``navigate`` feels slow — tells you if the 4s domain
+    throttle is holding the request.
+    """
+    if ctx is not None:
+        ctx.info("rate_limiter_status")
+    try:
+        import time as _time
+
+        from domain_throttle import DEFAULT_MIN_INTERVAL_SEC, domain_throttle as _dt
+        from main import settings_mgr as _sm
+
+        raw = _sm.get("domain_min_interval_sec", DEFAULT_MIN_INTERVAL_SEC)
+        try:
+            interval = float(raw)
+        except (TypeError, ValueError):
+            interval = DEFAULT_MIN_INTERVAL_SEC
+        now = _time.monotonic()
+        domains: dict[str, dict] = {}
+        for dom, ts in list(_dt._last.items()):
+            elapsed = now - ts
+            remaining = max(0.0, interval - elapsed)
+            domains[dom] = {"last_hit_ago_s": round(elapsed, 2), "remaining_wait_s": round(remaining, 2)}
+        data = {"interval_sec": interval, "default_interval_sec": DEFAULT_MIN_INTERVAL_SEC, "domains": domains}
+        return tool_result("rate_limiter_status", {"status": "ok", **data})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("rate_limiter_status", "failed", str(exc))
+
+
+async def dialog_handle(
+    action: str,
+    prompt_text: str | None = None,
+    ctx: Context | None = None,
+) -> str:
+    """Accept or dismiss a JavaScript dialog (capability ``browser.core``, READY).
+
+    Handles alert/confirm/prompt/beforeunload.  Use ``prompt_text`` when
+    accepting a ``prompt()`` dialog to provide the input value.
+
+    Examples::
+
+        dialog_handle("accept")
+        dialog_handle("dismiss")
+        dialog_handle("accept", prompt_text="my answer")
+    """
+    if action not in ("accept", "dismiss"):
+        return tool_error("dialog_handle", "invalid_action", "action must be 'accept' or 'dismiss'")
+    target, _run_op = await _target()
+    if ctx is not None:
+        ctx.info(f"dialog_handle {action}")
+    try:
+        if action == "accept":
+            result = await target.dialog_accept(prompt_text)
+        else:
+            result = await target.dialog_dismiss()
+        return tool_result("dialog_handle", result)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("dialog_handle", "failed", str(exc))

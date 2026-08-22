@@ -3047,6 +3047,86 @@ class CDPClient:
         await self.evaluate(f"window.scrollBy({x}, {y})")
         await asyncio.sleep(0.1)
 
+    async def scroll(self, x: int = 0, y: int = 0, selector: str | None = None) -> dict:
+        """Scroll page or element by x, y pixels."""
+        await self._activate_current()
+        if selector:
+            js = (
+                f"(function(){{"
+                f"  const el=document.querySelector({json.dumps(selector)});"
+                f"  if(!el) return {{'status':'error','error':'Element not found'}};"
+                f"  el.scrollBy({x},{y});"
+                f"  return {{'status':'ok','selector':{json.dumps(selector)},'x':{x},'y':{y}}};"
+                f"}})()"
+            )
+            result = await self.evaluate(js)
+            if result.get("status") == "error":
+                return result
+            await asyncio.sleep(0.1)
+            return {"status": "ok", "selector": selector, "x": x, "y": y}
+        await self._scroll_by(x, y)
+        return {"status": "ok", "x": x, "y": y}
+
+    async def press_key(self, key: str, selector: str | None = None) -> dict:
+        """Press a key (optionally focusing an element first)."""
+        await self._activate_current()
+        if selector:
+            focus_js = (
+                f"(function(){{"
+                f"  const el=document.querySelector({json.dumps(selector)});"
+                f"  if(!el) return {{'status':'error','error':'Element not found'}};"
+                f"  el.focus(); return {{'status':'ok'}};"
+                f"}})()"
+            )
+            fr = await self.evaluate(focus_js)
+            if fr.get("status") == "error":
+                return fr
+        # Map common key names to CDP key codes; CDP needs `key` + `code`
+        await self._send_command("Input.dispatchKeyEvent", type="keyDown", key=key)
+        await self._send_command("Input.dispatchKeyEvent", type="keyUp", key=key)
+        return {"status": "ok", "key": key, "selector": selector}
+
+    async def hover(self, selector: str) -> dict:
+        """Hover over element matching selector."""
+        await self._activate_current()
+        js = (
+            f"(function(){{"
+            f"  const el=document.querySelector({json.dumps(selector)});"
+            f"  if(!el) return JSON.stringify({{'status':'error','error':'Element not found'}});"
+            f"  const r=el.getBoundingClientRect();"
+            f"  return JSON.stringify({{'status':'ok','x':Math.round(r.x+r.width/2),'y':Math.round(r.y+r.height/2)}});"
+            f"}})()"
+        )
+        eval_result = await self.evaluate(js)
+        raw = eval_result.get("result", "{}") if isinstance(eval_result, dict) else "{}"
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {"status": "error", "error": "hover: failed to resolve element"}
+        if data.get("status") == "error":
+            return data
+        x, y = int(data["x"]), int(data["y"])
+        await self._send_command("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
+        return {"status": "ok", "selector": selector, "x": x, "y": y}
+
+    async def reload(self, ignore_cache: bool = False) -> dict:
+        """Reload the current page."""
+        await self._activate_current()
+        await self._send_command("Page.reload", ignoreCache=ignore_cache)
+        return {"status": "ok", "ignore_cache": ignore_cache}
+
+    # ── C10: Dialog (alert/confirm/prompt/beforeunload) handling ───
+
+    async def dialog_accept(self, prompt_text: str | None = None) -> dict:
+        """Accept the next JavaScript dialog (alert/confirm/prompt/beforeunload)."""
+        await self._send_command("Page.handleJavaScriptDialog", accept=True, **({} if prompt_text is None else {"promptText": prompt_text}))
+        return {"status": "ok", "action": "accept"}
+
+    async def dialog_dismiss(self) -> dict:
+        """Dismiss the next JavaScript dialog."""
+        await self._send_command("Page.handleJavaScriptDialog", accept=False)
+        return {"status": "ok", "action": "dismiss"}
+
     # ─── NEW: Session management ──────────────────────────────────
 
     async def session_save(self) -> dict:

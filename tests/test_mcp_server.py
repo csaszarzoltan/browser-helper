@@ -82,6 +82,18 @@ EXPECTED_TOOLS = [
     "get_console_errors",
     "wait_js",
     "element_state",
+    # A1+A4: direct eval + page text (agent direct access)
+    "eval",
+    "get_page_text",
+    # B5+B6: press_key / hover / scroll / reload / wait_network_idle
+    "press_key",
+    "hover",
+    "scroll",
+    "reload",
+    "wait_network_idle",
+    # C9+C10: rate_limiter_status + dialog_handle
+    "rate_limiter_status",
+    "dialog_handle",
 ]
 
 # tool -> required parameter names (spec §8.1: exact required params)
@@ -125,6 +137,18 @@ EXPECTED_REQUIRED_PARAMS = {
     "get_console_errors": [],
     "wait_js": ["js"],
     "element_state": ["selector"],
+    # A1+A4: direct eval + page text
+    "eval": ["js"],
+    "get_page_text": [],
+    # B5+B6: press_key / hover / scroll / reload / wait_network_idle
+    "press_key": ["key"],
+    "hover": ["selector"],
+    "scroll": [],
+    "reload": [],
+    "wait_network_idle": [],
+    # C9+C10: rate_limiter_status + dialog_handle
+    "rate_limiter_status": [],
+    "dialog_handle": ["action"],
 }
 
 # tool -> (capability_id, expected status)
@@ -168,6 +192,18 @@ EXPECTED_CAPABILITY = {
     "get_console_errors": ("agent.testing", "ready"),
     "wait_js": ("agent.testing", "ready"),
     "element_state": ("agent.testing", "ready"),
+    # A1+A4: eval + get_page_text
+    "eval": ("browser.core", "ready"),
+    "get_page_text": ("browser.core", "ready"),
+    # B5+B6: press_key / hover / scroll / reload / wait_network_idle
+    "press_key": ("browser.core", "ready"),
+    "hover": ("browser.core", "ready"),
+    "scroll": ("browser.core", "ready"),
+    "reload": ("browser.core", "ready"),
+    "wait_network_idle": ("browser.core", "ready"),
+    # C9+C10: rate_limiter_status + dialog_handle
+    "rate_limiter_status": ("browser.core", "ready"),
+    "dialog_handle": ("browser.core", "ready"),
 }
 
 TOOL_MODULES = {
@@ -210,6 +246,16 @@ TOOL_MODULES = {
     "get_console_errors": "tools",
     "wait_js": "tools",
     "element_state": "tools",
+    # A1+A4 + B5/C
+    "eval": "tools",
+    "get_page_text": "tools",
+    "press_key": "tools",
+    "hover": "tools",
+    "scroll": "tools",
+    "reload": "tools",
+    "wait_network_idle": "tools",
+    "rate_limiter_status": "tools",
+    "dialog_handle": "tools",
 }
 
 

@@ -1,6 +1,6 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.27.9-blue)
+![Version](https://img.shields.io/badge/version-1.28.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-2630%20passed-brightgreen)
 
@@ -262,7 +262,7 @@ bh mcp --http --host 0.0.0.0 --port 8765
 
 (Cursor: project/global `.cursor/mcp.json`; Windsurf: `~/.codeium/windsurf/mcp_config.json`. For a client on another machine, replace `localhost` with the server host.)
 
-#### Tool reference (38 tools)
+#### Tool reference (47 tools)
 
 All tools are backed by READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`); EXPERIMENTAL/UNAVAILABLE capabilities never surface. Every tool returns a JSON string with the REST envelope shape (`status`/`operation`/`data`/`error`/`meta`).
 

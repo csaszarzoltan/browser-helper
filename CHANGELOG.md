@@ -4,6 +4,28 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.28.0] — 2026-08-22
+
+#### Added (9 new MCP tools — 38 → 47 total)
+- **`eval`** (browser.core) — direct `client.evaluate_js(js)` without snapshot round-trip. `act(eval)` required `snapshot_id` + `ref`; this is one call.
+- **`get_page_text`** (browser.core) — `client.get_page_text()` with optional `wait_ready` (network idle + stable DOM). Alias for `GET/POST /page/text` (now `api_route` so `GET` no longer 405s). `get_content` covers HTML/main-content; this is the plain `innerText` path.
+- **`press_key`** (browser.core) — `Input.dispatchKeyEvent` via `client.press_key(key, selector?)`. Keys: `Enter`, `Escape`, `ArrowDown`, etc. Optional `selector` focuses before pressing.
+- **`hover`** (browser.core) — `client.hover(selector)` → resolves center rect, dispatches `mouseMoved` (triggers `:hover` / `mouseenter`, opens dropdowns/tooltips).
+- **`scroll`** (browser.core) — `client.scroll(x, y, selector?)`. Window or element scroll (`el.scrollBy`).
+- **`reload`** (browser.core) — `Page.reload` (+ `ignore_cache` for hard reload).
+- **`wait_network_idle`** (browser.core) — `client.wait_for_network_idle(timeout, quiet_ms)` as a named MCP tool (REST `POST /wait/network-idle` already existed).
+- **`rate_limiter_status`** (browser.core) — `domain_throttle` state + interval. Answers "why is navigate slow?" without guessing (shows 4s domain throttle remaining wait per domain).
+- **`dialog_handle`** (browser.core) — `Page.handleJavaScriptDialog` (`accept`/`dismiss` + `promptText`). Covers `alert`/`confirm`/`prompt`/`beforeunload` that otherwise hang interaction.
+
+#### Fixed
+- **`GET /page/text` and `GET /console/errors` now accept both `GET` and `POST`** (`api_route` with `methods=["GET","POST"]`). Agents that tried `GET /page/text` / `GET /console/errors` got `405 Method Not Allowed` (5 occurrences in last 24h logs); both verbs now work. Both handlers use only `Query` params so GET is safe.
+- **Verbose 422 handler** — `RequestValidationError` is now caught and returned as `{"detail": "<field>: <msg> (hint)", "errors": [...]}` with a body-shape hint, instead of the default FastAPI envelope that confused agents about what was wrong.
+- **Session cap / TTL tuning** — `BH_MAX_SESSIONS` default `20→30`, TTL `900s→1800s` — a burst of ~20 parallel sessions no longer triggers mass LRU eviction (9 evictions in 5 minutes on 2026-08-21).
+
+#### Changed
+- **Chrome `renderer-process-limit` `8→4`** and **watchdog interval `300s→120s`** — reduces Chrome's peak RAM / recovery time on the small VPS (6 Chrome crashes in last 24h were watchdog-recovered).
+- Tool count updated `38→47` across all docs (mcp-server.md, mcp-memory.md, architecture, README).
+
 ## [1.27.9] — 2026-08-20
 
 #### Added

@@ -63,6 +63,18 @@ _TOOL_CAPABILITY = {
     "get_console_errors": "agent.testing",
     "wait_js": "agent.testing",
     "element_state": "agent.testing",
+    # Direct JS eval + page text alias (A1+A4)
+    "eval": "browser.core",
+    "get_page_text": "browser.core",
+    # B5+B6: press_key / hover / scroll / reload / wait_network_idle
+    "press_key": "browser.core",
+    "hover": "browser.core",
+    "scroll": "browser.core",
+    "reload": "browser.core",
+    "wait_network_idle": "browser.core",
+    # C9+C10: rate_limiter_status + dialog_handle
+    "rate_limiter_status": "browser.core",
+    "dialog_handle": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -330,6 +342,70 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "selector": {"type": "string", "description": "CSS selector of the element to inspect"},
         },
         "required": ["selector"],
+    },
+    # Direct JS eval (A1) — calls client.evaluate_js without snapshot
+    "eval": {
+        "type": "object",
+        "properties": {
+            "js": {"type": "string", "description": "JavaScript expression to evaluate in the page"},
+            "timeout": {"type": "integer", "description": "Max seconds to wait (default 30)"},
+        },
+        "required": ["js"],
+    },
+    # Page text alias (A4) — calls client.get_page_text
+    "get_page_text": {
+        "type": "object",
+        "properties": {
+            "wait_ready": {"type": "boolean", "description": "Wait for page ready before extracting (default true)"},
+            "timeout": {"type": "integer", "description": "Max seconds to wait for ready (default 20)"},
+        },
+    },
+    # B5+B6: press_key / hover / scroll / reload / wait_network_idle
+    "press_key": {
+        "type": "object",
+        "properties": {
+            "key": {"type": "string", "description": "Key name (Enter, Escape, ArrowDown, Tab, Backspace, etc.)"},
+            "selector": {"type": "string", "description": "Optional CSS selector to focus before pressing"},
+        },
+        "required": ["key"],
+    },
+    "hover": {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector to hover over"},
+        },
+        "required": ["selector"],
+    },
+    "scroll": {
+        "type": "object",
+        "properties": {
+            "x": {"type": "integer", "description": "Horizontal scroll delta (default 0)"},
+            "y": {"type": "integer", "description": "Vertical scroll delta (default 0)"},
+            "selector": {"type": "string", "description": "Optional CSS selector of scrollable element"},
+        },
+    },
+    "reload": {
+        "type": "object",
+        "properties": {
+            "ignore_cache": {"type": "boolean", "description": "Bypass HTTP cache if true (hard reload, default false)"},
+        },
+    },
+    "wait_network_idle": {
+        "type": "object",
+        "properties": {
+            "timeout": {"type": "integer", "description": "Max seconds to wait (default 10)"},
+            "quiet_ms": {"type": "integer", "description": "Ms of silence to confirm idle (default 500)"},
+        },
+    },
+    # C9+C10: rate_limiter_status + dialog_handle
+    "rate_limiter_status": {"type": "object", "properties": {}},
+    "dialog_handle": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "description": "accept|dismiss — dialog action"},
+            "prompt_text": {"type": "string", "description": "Prompt text when accepting a prompt() dialog (optional)"},
+        },
+        "required": ["action"],
     },
 }
 

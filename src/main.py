@@ -28,6 +28,7 @@ except AttributeError:
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -256,7 +257,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.27.9",
+    version="1.28.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -286,7 +287,8 @@ chrome_mgr = ChromeManager(settings_mgr)
 # Per-client session registry (each session owns its own tab + CDP client)
 # max_sessions: hard cap — LRU eviction closes the least-recently-used
 # session's tab when the cap is reached (client auto-heals on next call).
-session_registry = SessionRegistry(ttl=900.0, max_sessions=int(os.environ.get("BH_MAX_SESSIONS", "20")))
+# B8: 30 (was 20) — burst of parallel agents no longer triggers mass eviction.
+session_registry = SessionRegistry(ttl=1800.0, max_sessions=int(os.environ.get("BH_MAX_SESSIONS", "30")))
 
 # Headless session manager
 headless_mgr = HeadlessManager()
@@ -970,6 +972,33 @@ class DeleteBaselineRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# A3: Verbose 422 — turn raw Pydantic errors into actionable messages
+# ---------------------------------------------------------------------------
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for err in exc.errors():
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "validation error")
+        typ = err.get("type", "")
+        hint = ""
+        if typ == "missing":
+            hint = " (required field not provided)"
+        elif "enum" in typ:
+            hint = " (check allowed values)"
+        elif "type_error" in typ or "string_type" in typ:
+            hint = " (wrong type)"
+        errors.append(f"{loc}: {msg}{hint}" if loc else f"{msg}{hint}")
+    detail = "; ".join(errors) if errors else str(exc)
+    # Add body hint for 422s that confuse agents (e.g. POST without JSON)
+    if not errors or all("missing" in e for e in errors):
+        detail += " — hint: check Content-Type: application/json and JSON body shape"
+    return JSONResponse(status_code=422, content={"detail": detail, "errors": errors})
+
+
+# ---------------------------------------------------------------------------
 # Auth middleware — Bearer token check
 # ---------------------------------------------------------------------------
 
@@ -1313,7 +1342,7 @@ async def _chrome_health_watchdog() -> None:
     it auto-restarts.  Orphan Chrome processes are killed to prevent RAM
     accumulation.
     """
-    WATCHDOG_INTERVAL = 300  # 5 minutes
+    WATCHDOG_INTERVAL = 120  # 2 minutes (was 300s — faster recovery after crash)
     while True:
         await asyncio.sleep(WATCHDOG_INTERVAL)
         try:
@@ -2921,7 +2950,7 @@ async def upload_files(body: UploadRequest):
 # ─── New: Page text extraction ────────────────────────────────
 
 
-@app.post("/page/text")
+@app.api_route("/page/text", methods=["GET", "POST"])
 async def page_text(wait_ready: bool = Query(False, description="Wait for network idle + stable DOM before reading"),
                     timeout: int = Query(30, description="Max seconds to wait when wait_ready=true")):
     """Extract the full visible text content of the current page.
@@ -5227,7 +5256,7 @@ async def agent_console(body: AgentConsoleRequest | None = None):
     })
 
 
-@app.get("/console/errors")
+@app.api_route("/console/errors", methods=["GET", "POST"])
 async def console_errors(
     since: float | None = Query(None, description="Only errors with timestamp >= this value (unix seconds)"),
     limit: int = Query(50, description="Max errors to return"),
@@ -5876,6 +5905,97 @@ async def post_scroll_config(req: ScrollConfigRequest):
 async def get_scroll_config():
     """Return the current behavioral scroll configuration."""
     return _scroll_instance.get_config()
+
+
+# ── B5+B6: press_key / hover / scroll / reload / wait_network_idle ──
+
+class PressKeyRequest(BaseModel):
+    key: str = Field(..., description="Key name (Enter, Escape, ArrowDown, Tab, etc.)")
+    selector: str | None = Field(None, description="Optional CSS selector to focus before pressing")
+
+
+class HoverRequest(BaseModel):
+    selector: str = Field(..., description="CSS selector to hover over")
+
+
+class ScrollRequest(BaseModel):
+    x: int = Field(0, description="Horizontal scroll delta in pixels")
+    y: int = Field(0, description="Vertical scroll delta in pixels")
+    selector: str | None = Field(None, description="Optional CSS selector of scrollable element")
+
+
+class ReloadRequest(BaseModel):
+    ignore_cache: bool = Field(False, description="Bypass cache if true")
+
+
+@app.post("/press_key")
+async def press_key(body: PressKeyRequest):
+    """Press a key (optionally focusing an element first)."""
+    return await run_op("press_key", client.press_key, body.key, body.selector)
+
+
+@app.post("/hover")
+async def hover(body: HoverRequest):
+    """Hover over element matching selector."""
+    result = await run_op("hover", client.hover, body.selector)
+    inner = result.get("data") if isinstance(result, dict) else None
+    if isinstance(inner, dict) and inner.get("status") == "error":
+        err = str(inner.get("error", ""))
+        if "not found" in err.lower():
+            raise HTTPException(status_code=404, detail=f"Element not found for selector {body.selector!r}")
+    return result
+
+
+@app.post("/scroll")
+async def scroll(body: ScrollRequest):
+    """Scroll page or element by x, y pixels."""
+    return await run_op("scroll", client.scroll, body.x, body.y, body.selector)
+
+
+@app.post("/reload")
+async def reload_page(body: ReloadRequest | None = None):
+    """Reload the current page."""
+    ignore_cache = body.ignore_cache if body else False
+    return await run_op("reload", client.reload, ignore_cache)
+
+
+class DialogRequest(BaseModel):
+    action: str = Field(..., description="accept|dismiss")
+    prompt_text: str | None = Field(None, description="Prompt text when accepting a prompt() dialog")
+
+
+@app.post("/dialog/handle")
+async def dialog_handle(body: DialogRequest):
+    """Accept or dismiss a JavaScript dialog (alert/confirm/prompt)."""
+    if body.action not in ("accept", "dismiss"):
+        raise HTTPException(status_code=422, detail="action must be 'accept' or 'dismiss'")
+    if body.action == "accept":
+        return await run_op("dialog_accept", client.dialog_accept, body.prompt_text)
+    return await run_op("dialog_dismiss", client.dialog_dismiss)
+
+
+@app.get("/rate_limiter/status")
+async def rate_limiter_status():
+    """Return current domain throttle + rate limiter state for debugging."""
+    from domain_throttle import DEFAULT_MIN_INTERVAL_SEC, domain_throttle as dt
+
+    raw_interval = settings_mgr.get("domain_min_interval_sec", DEFAULT_MIN_INTERVAL_SEC)
+    try:
+        interval = float(raw_interval)
+    except (TypeError, ValueError):
+        interval = DEFAULT_MIN_INTERVAL_SEC
+    # Expose last-hit per domain (monotonic timestamps) + remaining wait
+    now = __import__("time").monotonic()
+    domains: dict[str, dict] = {}
+    for dom, ts in list(dt._last.items()):
+        elapsed = now - ts
+        remaining = max(0.0, interval - elapsed)
+        domains[dom] = {"last_hit_ago_s": round(elapsed, 2), "remaining_wait_s": round(remaining, 2)}
+    return api_success("rate_limiter_status", {
+        "interval_sec": interval,
+        "default_interval_sec": DEFAULT_MIN_INTERVAL_SEC,
+        "domains": domains,
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -6,3 +6,4 @@ __pycache__/
 settings.json
 src/browser_helper.egg-info/
 .testmondata
+.worktrees/

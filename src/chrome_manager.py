@@ -318,7 +318,7 @@ class ChromeManager:
             #    (each tab can spawn several). Combined with the 8GB swapfile
             #    this keeps the service alive under memory pressure.
             "--disable-dev-shm-usage",
-            "--renderer-process-limit=8",
+            "--renderer-process-limit=4",
         ]
 
         # Headless mode: --headless=new (Chrome 112+), fallback --headless for older

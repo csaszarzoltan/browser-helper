@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **38 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory + 6 agent testing).
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **47 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory + 6 agent testing).
 
 ---
 
@@ -131,9 +131,9 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ---
 
-## 3. Tool reference (38 tools)
+## 3. Tool reference (47 tools)
 
-All 38 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
+All 47 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 
 ### Browser tools — `src/mcp_server/tools.py`
 
@@ -156,6 +156,15 @@ Each maps 1:1 to the engine call behind a REST endpoint (same `main.run_op` + `c
 | `get_console_errors` | `since` (float, opt), `limit` (int, opt) | `agent.testing` | `get_console_entries(level="error")` | `GET /console/errors` |
 | `wait_js` | `js` (str, required), `timeout` (int, opt) | `agent.testing` | `evaluate()` + JS poll loop | `POST /wait/js` |
 | `element_state` | `selector` (str, required) | `agent.testing` | `evaluate()` + `querySelector` | `GET /element/{selector}` |
+| `eval` | `js` (str, required), `timeout` (int, opt) | `browser.core` | `client.evaluate_js(js)` (no snapshot) | `POST /eval` |
+| `get_page_text` | `wait_ready` (bool, opt), `timeout` (int, opt) | `browser.core` | `client.get_page_text()` (+ `wait_for_ready` if `wait_ready`) | `GET/POST /page/text` |
+| `press_key` | `key` (str, required), `selector` (str, opt) | `browser.core` | `client.press_key(key, selector)` | `POST /press_key` |
+| `hover` | `selector` (str, required) | `browser.core` | `client.hover(selector)` (`mouseMoved`) | `POST /hover` |
+| `scroll` | `x` (int, opt), `y` (int, opt), `selector` (str, opt) | `browser.core` | `client.scroll(x, y, selector)` | `POST /scroll` |
+| `reload` | `ignore_cache` (bool, opt) | `browser.core` | `Page.reload` | `POST /reload` |
+| `wait_network_idle` | `timeout` (int, opt), `quiet_ms` (int, opt) | `browser.core` | `client.wait_for_network_idle` | `POST /wait/network-idle` |
+| `rate_limiter_status` | — | `browser.core` | `domain_throttle` state + interval | `GET /rate_limiter/status` |
+| `dialog_handle` | `action` (str, required), `prompt_text` (str, opt) | `browser.core` | `Page.handleJavaScriptDialog` | `POST /dialog/handle` |
 
 ### Fleet tools — `src/mcp_server/fleet_tools.py`
 
@@ -280,9 +289,9 @@ All three tools are pure reads: they never register, unregister, allocate, relea
 
 Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`) require a live CDP connection. Without one, `run_op` raises `HTTPException` 400 *before* the engine call — the agent sees a tool-call error with that message rather than an envelope. Start Browser Helper (or launch Chrome with `--remote-debugging-port=9555` and connect) before calling them. `session_status` and the fleet tools work without a browser connection.
 
-### The agent sees only 38 tools
+### The agent sees only 47 tools
 
-38 is the correct count for v1.27.8 (28 browser/fleet + 4 persistent memory + 6 agent testing). The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
+47 is the correct count for v1.28.0 (37 browser/fleet + 4 persistent memory + 6 agent testing). The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
 
 ### stdio mode hangs / "port already in use"
 
@@ -316,7 +325,7 @@ export PATH="$PWD/.venv/bin:$PATH"
 
 python -m browser_helper.mcp --help            # exits 0, prints transports
 bh mcp --help                                  # Click help (entry point)
-python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 12
+python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 47
 python -m pytest tests/test_mcp_server.py -q   # 55 tests: interface, engine binding, fleet reads, FastMCP
 ```
 
