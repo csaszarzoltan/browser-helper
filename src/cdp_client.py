@@ -623,7 +623,7 @@ class CDPClient:
             await self.evaluate(js)
             self._notification_monitoring = True
             return {"status": "ok", "notification_monitoring": True}
-        except (CDPError, Exception) as exc:
+        except (CDPError, OSError) as exc:
             return {"status": "error", "error": str(exc)}
 
     def get_notifications(self, since: float = 0.0) -> list[dict]:
@@ -3081,9 +3081,16 @@ class CDPClient:
             fr = await self.evaluate(focus_js)
             if fr.get("status") == "error":
                 return fr
-        # Map common key names to CDP key codes; CDP needs `key` + `code`
-        await self._send_command("Input.dispatchKeyEvent", type="keyDown", key=key)
-        await self._send_command("Input.dispatchKeyEvent", type="keyUp", key=key)
+        # CDP Input.dispatchKeyEvent needs `key` for both events; for printable
+        # single-char keys `text` must also be set or the char won't be inserted.
+        # `code` is omitted (let Chrome infer it from `key`).
+        text = key if len(key) == 1 else None
+        kw = {"type": "keyDown", "key": key}
+        if text:
+            kw["text"] = text
+        await self._send_command("Input.dispatchKeyEvent", **kw)
+        kw2 = {"type": "keyUp", "key": key}
+        await self._send_command("Input.dispatchKeyEvent", **kw2)
         return {"status": "ok", "key": key, "selector": selector}
 
     async def hover(self, selector: str) -> dict:

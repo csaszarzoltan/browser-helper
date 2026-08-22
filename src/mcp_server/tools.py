@@ -701,7 +701,6 @@ async def get_notifications(
     Call ``notifications_start`` first to begin monitoring.
     Returns ``{text, classes, tag, timestamp}`` objects.
     """
-    from main import client, run_op
     target, _run_op = await _target()
     if ctx is not None:
         ctx.info("reading notifications")
@@ -752,7 +751,6 @@ async def get_network_requests(
     Filter by URL path substring (``path``), HTTP method, status code, or
     timestamp.  Call ``POST /network/start`` or navigate first to populate.
     """
-    from main import client, run_op
     target, _run_op = await _target()
     if ctx is not None:
         ctx.info("reading network requests")
@@ -880,7 +878,7 @@ async def get_page_text(
         if wait_ready:
             try:
                 await run_op_fn("get_page_text_wait", target.wait_for_ready, timeout)
-            except Exception:  # noqa: BLE001 — wait is best-effort; text still readable
+            except Exception:  # noqa: BLE001,S110 — wait is best-effort; text still readable
                 pass
         result = await target.get_page_text()
         return tool_result("get_page_text", result)
@@ -1068,7 +1066,8 @@ async def rate_limiter_status(ctx: Context | None = None) -> str:
     try:
         import time as _time
 
-        from domain_throttle import DEFAULT_MIN_INTERVAL_SEC, domain_throttle as _dt
+        from domain_throttle import DEFAULT_MIN_INTERVAL_SEC
+        from domain_throttle import domain_throttle as _dt
         from main import settings_mgr as _sm
 
         raw = _sm.get("domain_min_interval_sec", DEFAULT_MIN_INTERVAL_SEC)

@@ -2087,7 +2087,7 @@ async def session_clone(session_id: str):
             hint = " The source tab may have been closed. The session registry auto-creates new tabs."
         return api_error(
             "auth_clone", "clone_failed",
-            f"{str(exc)}.{hint} Cookie export failed between source and target session.",
+            f"{exc!s}.{hint} Cookie export failed between source and target session.",
             502,
         )
     return api_success("auth_clone", {
@@ -3653,8 +3653,8 @@ async def network_requests(
     target, _sess = await _resolve_session_client()
     try:
         await target.start_network_monitoring()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 — monitoring may already be active
+        logger.debug("start_network_monitoring (network_requests): %s", exc)
     data = await target.get_network_log()
     entries = data.get("entries", [])
 
@@ -3695,8 +3695,8 @@ async def get_notifications(
     target, _sess = await _resolve_session_client()
     try:
         await target.start_notification_monitoring()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 — monitoring may already be active
+        logger.debug("start_notification_monitoring (notifications): %s", exc)
     # Read notifications from the browser's window.__bh_notifications__
     js = "JSON.stringify(window.__bh_notifications__ || [])"
     result = await target.evaluate(js)
@@ -5274,8 +5274,8 @@ async def console_errors(
     target, _sess = await _resolve_session_client()
     try:
         await target.start_console_monitoring()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 — monitoring may already be active
+        logger.debug("start_console_monitoring (console_errors): %s", exc)
     entries = target.get_console_entries(level="error")
     if since is not None:
         entries = [e for e in entries if e.get("timestamp", 0) >= since]
@@ -5977,7 +5977,8 @@ async def dialog_handle(body: DialogRequest):
 @app.get("/rate_limiter/status")
 async def rate_limiter_status():
     """Return current domain throttle + rate limiter state for debugging."""
-    from domain_throttle import DEFAULT_MIN_INTERVAL_SEC, domain_throttle as dt
+    from domain_throttle import DEFAULT_MIN_INTERVAL_SEC
+    from domain_throttle import domain_throttle as dt
 
     raw_interval = settings_mgr.get("domain_min_interval_sec", DEFAULT_MIN_INTERVAL_SEC)
     try:
