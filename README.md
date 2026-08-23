@@ -1,6 +1,6 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.28.1-blue)
+![Version](https://img.shields.io/badge/version-1.28.2-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-2630%20passed-brightgreen)
 

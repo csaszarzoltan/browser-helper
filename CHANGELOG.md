@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.28.2] — 2026-08-23
+
+#### Added
+- **`waitUntil` on `POST /navigate`:** `?waitUntil=domContentLoaded|load|networkIdle` (default `domContentLoaded` ~400ms, was `networkIdle` 8s) — `6s→1s` on 8080 SPA. Query+body, clamp 1–30s. `waitUntil` echoed in `data.waitUntil`.
+- **`docs/perf-prioritized.md`:** P0→P2 roadmap so every agent knows how BH beats Playwright — `waitUntil`, session affinity, `observe→act` (100ms vs `click_text` 6s), `include=console,network,screenshot`, fleet batch, metrika.
+
 ## [1.28.1] — 2026-08-23
 
 #### Fixed (diagnosis 1a–1d, control_plane → BH REST → CDP)
