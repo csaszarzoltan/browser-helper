@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.28.4] — 2026-08-23
+
+#### Changed
+- **`agent/run-flow` navigate inherits the DCL default:** `auto_wait` after a `navigate` step now polls `document.readyState` (domContentLoaded, ~400ms) instead of `wait_for_ready(quiet_ms=400)` (~6s on busy SPAs) — matches `POST /navigate ?waitUntil=domContentLoaded`.
+- **`agent/act` `include_observation:false`:** skips the returning observation snapshot — observe→act fast path measures ~115ms (was ~350ms with the bundled snapshot). Default unchanged (`observe_after=true` keeps returning it).
+
 ## [1.28.3] — 2026-08-23
 
 #### Fixed
