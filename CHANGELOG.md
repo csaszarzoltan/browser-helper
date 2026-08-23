@@ -4,6 +4,14 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.28.1] — 2026-08-23
+
+#### Fixed (diagnosis 1a–1d, control_plane → BH REST → CDP)
+- **1a session leak:** auto-minted session `logger.info` + `about:blank` warning in `agent/observe` — cookie-less caller (`new CookieJar()` per request) is now visible in logs; caller should reuse `X-Session-ID` / `bh_session` via one global jar.
+- **1b navigate 30s timeout:** `POST /navigate` now accepts `?wait`/`?timeout` (query + body `wait`/`timeout`, body wins, default `wait=true timeout=3s` was `8s`); `run_flow auto_wait 20s→5s`; `127.0.0.1`/`localhost` throttle bypass (`0.0`).
+- **1c run-flow schema:** `AgentFlowStep` action enum doc + `click {text}` → `click_text` alias (control plane sends `{action:click, text:"..."}`).
+- **1d screenshot 405:** `/screenshot` + `/api/screenshot` now `GET+POST` (`api_route`).
+
 ## [1.28.0] — 2026-08-22
 
 #### Added (9 new MCP tools — 38 → 47 total)
