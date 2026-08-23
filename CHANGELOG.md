@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.28.3] — 2026-08-23
+
+#### Fixed
+- **`agent/act` 422 with `ref` without `snapshot_id`:** control plane sent `{ref:"e11"}` after snapshot GC → `click` fell through to selector/text branch and 422'd. `_resolve_agent_target` now resolves bare `ref`/`backend_node_id` from the newest AX cache (or direct `DOM.resolveNode`) — observe→act stays ~100ms, no full re-observe.
+- **`agent/flow-vlm` `'JSONResponse' has no attribute 'get'`:** `agent_run_flow` returns `api_error(...)` (a `JSONResponse`) on failure; the VLM wrapper now guards with `isinstance` before `.get()` / `["data"]["vlm"]`.
+
 ## [1.28.2] — 2026-08-23
 
 #### Added
