@@ -348,6 +348,8 @@ class ClickRequest(BaseModel):
 
 class NavigateRequest(BaseModel):
     url: str | None = None
+    wait: bool | None = None  # None = default (wait for ready); False = return immediately after navigate
+    timeout: int | None = None  # wait_for_ready timeout in seconds (overrides default 3s); ignored if wait is False
 
 
 class TypeRequest(BaseModel):
@@ -789,7 +791,13 @@ class AgentSearchRequest(BaseModel):
 
 
 class AgentFlowStep(BaseModel):
-    """One step of a test flow."""
+    """One step of a test flow.
+
+    Action enum: navigate | click_text | click | type | submit | wait_text |
+    wait | eval | screenshot.  Field usage: navigate→url, click_text→text,
+    click→selector, type→selector+value, eval→js.  Alias: click → click_text
+    when ``text`` is set but ``selector`` is not.
+    """
 
     action: str  # navigate, click_text, click, type, submit, wait_text, wait, eval, screenshot
     url: str | None = None
@@ -1496,6 +1504,7 @@ async def _resolve_session_client() -> tuple[CDPClient, Session | None]:
             await chrome_mgr.launch()  # idempotent — reuses running Chrome
             sess = await session_registry.create(_local_cdp_http())
             _set_current_session(sess)
+            logger.info("Auto-minted session %s (tab %s) for cookie-less client — caller should reuse X-Session-ID", sess.session_id[:8], sess.tab_id[:8])
         except Exception as exc:
             logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
             sess = None
@@ -1603,12 +1612,18 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
             # navigate-style ops that carry a URL; interval is configurable
             # via settings.json ``domain_min_interval_sec`` (default 4.0s).
             if operation in ("navigate", "search_navigate") and args and isinstance(args[0], str):
-                raw_interval = settings_mgr.get("domain_min_interval_sec", 4.0)
-                try:
-                    interval = float(raw_interval) if raw_interval is not None else 4.0
-                except (TypeError, ValueError):
-                    interval = 4.0
-                waited = await domain_throttle.wait(args[0], interval)
+                # Localhost / 127.0.0.1 / ::1 never throttled (control plane, tests)
+                _url = str(args[0])
+                _is_local = any(h in _url for h in ("127.0.0.1", "localhost", "::1", "0.0.0.0"))
+                if _is_local:
+                    waited = 0.0
+                else:
+                    raw_interval = settings_mgr.get("domain_min_interval_sec", 4.0)
+                    try:
+                        interval = float(raw_interval) if raw_interval is not None else 4.0
+                    except (TypeError, ValueError):
+                        interval = 4.0
+                    waited = await domain_throttle.wait(args[0], interval)
                 if waited > 0:
                     logger.info(
                         "Domain throttle: waited %.2fs before navigate to %s",
@@ -2256,13 +2271,20 @@ async def connect(body: ConnectRequest | None = None):
 
 @app.post("/navigate")
 async def navigate(url: str | None = Query(default=None, description="Target URL to navigate to"),
+                   wait: bool | None = Query(default=None, description="Wait for ready after navigate (default true; ?wait=false skips the 3s wait)"),
+                   timeout: int | None = Query(default=None, description="Max seconds to wait for ready (default 3, ignored if wait=false)"),
                    body: NavigateRequest | None = None):
     """Navigate the current tab to *url*.
 
     The URL is accepted either as the ``?url=`` query parameter (legacy) OR
-    in the JSON body ``{"url": "..."}``.  If neither is provided → 422 with
+    in the JSON body ``{\"url\": \"...\"}``.  If neither is provided → 422 with
     a clear message (this used to be a bare 422 that confused callers into
     thinking the service was broken — see the 2026-08-11 agent incident).
+
+    Query/body ``wait`` and ``timeout`` control the post-navigate ready wait:
+    ``?wait=false`` returns immediately after ``Page.navigate`` (non-blocking,
+    useful when the caller will poll ``/wait/*`` itself); ``?timeout=5`` caps
+    the wait.  Body fields take precedence over query params when both are sent.
 
     Fix-3 (1-tab-per-session): cross-origin navigation can make Chrome create
     a fresh target.  When that happens the session ROAMS onto the new tab AND
@@ -2270,6 +2292,14 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
     """
     if url is None and body is not None:
         url = getattr(body, "url", None)
+    # Merge wait/timeout: body > query > default
+    eff_wait = body.wait if body is not None and body.wait is not None else wait
+    if eff_wait is None:
+        eff_wait = True
+    eff_timeout = body.timeout if body is not None and body.timeout is not None else timeout
+    if eff_timeout is None:
+        eff_timeout = 3
+    eff_timeout = max(1, min(int(eff_timeout), 30))
     if url is None:
         raise HTTPException(
             status_code=422,
@@ -2305,14 +2335,13 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
         # Refresh the client's tab cache so next discover_tabs picks up the new target
         sess.client._tabs_cache = []
         sess.client._tabs_cache_ts = 0
-    # Fix-2 (2026-08-12): auto-wait after navigate — guarantee the page is
-    # actually loaded (network idle + stable DOM) before returning, so the
-    # caller's next operation never races a half-loaded page and the session
-    # is guaranteed connected. Best-effort: never fail the navigate because
-    # the wait timed out (e.g. about:blank or data: URLs).
+    # Post-navigate ready wait (default 3s, was 8s — the 30s timeout on /navigate
+    # came from 8s wait + 4s domain throttle; localhost/127.0.0.1 is throttled at 0).
+    if not eff_wait:
+        return result
     try:
         wait_client = sess.client if sess is not None else client
-        ready = await wait_client.wait_for_ready(timeout=8, quiet_ms=400)
+        ready = await wait_client.wait_for_ready(timeout=eff_timeout, quiet_ms=400)
         if isinstance(result, dict):
             data = result.get("data")
             if isinstance(data, dict):
@@ -3188,7 +3217,7 @@ async def browser_status():
     return {"status": "ok", "operation": "browser_status", "result": result}
 
 
-@app.post("/screenshot")
+@app.api_route("/screenshot", methods=["GET", "POST"])
 async def screenshot():
     """
     Capture a screenshot of the current page.
@@ -3201,7 +3230,7 @@ async def screenshot():
     return await run_op("screenshot", client.screenshot)
 
 
-@app.post("/api/screenshot")
+@app.api_route("/api/screenshot", methods=["GET", "POST"])
 async def api_screenshot_alias():
     """API alias: /api/screenshot -> /screenshot"""
     return await screenshot()
@@ -4182,6 +4211,17 @@ async def agent_capabilities():
 async def agent_observe(body: AgentObserveRequest):
     """Observe the page as either the legacy semantic snapshot or a real AX tree."""
     target, _sess = await _resolve_session_client()
+    # 1a: warn when request had no session (auto-minted about:blank tab — hints cookie-less caller)
+    if _sess is not None and _get_current_session() is not None:
+        sess_now = _get_current_session()
+        if sess_now and sess_now.session_id == _sess.session_id and _sess.tab_id:
+            # Fresh auto-minted session: check if it's still about:blank (no navigate yet)
+            try:
+                url_now = await target._get_current_url()  # type: ignore[attr-defined]
+                if url_now in ("about:blank", "", None):
+                    logger.info("agent/observe on fresh about:blank tab %s (session %s) — caller should POST /session/new or reuse X-Session-ID", _sess.tab_id[:8], _sess.session_id[:8])
+            except Exception as exc:  # noqa: BLE001 — best-effort URL check
+                logger.debug("about:blank check failed: %s", exc)
     try:
         if body.mode.lower() in {"accessibility", "ax"}:
             if body.snapshot_id:
@@ -4811,17 +4851,21 @@ async def agent_run_flow(body: AgentFlowRequest):
                 r = await run_op("flow_navigate", client.navigate, step.url)
                 step_report["result"] = r.get("status")
                 if body.auto_wait and r.get("status") == "ok":
-                    await run_op("flow_navigate_wait", client.wait_for_ready, step.timeout or 20)
+                    await run_op("flow_navigate_wait", client.wait_for_ready, step.timeout or 5)
             elif step.action == "click_text":
                 r = await run_op("flow_click_text", client.click_by_text, step.text or "", step.timeout)
                 step_report["result"] = r.get("status")
                 if body.auto_wait and r.get("status") == "ok":
-                    await run_op("flow_click_wait", client.wait_for_ready, step.timeout or 20)
+                    await run_op("flow_click_wait", client.wait_for_ready, step.timeout or 5)
             elif step.action == "click":
-                r = await run_op("flow_click", client.click, step.selector or "")
+                # Alias: if `text` is set but no `selector`, treat as click_text (control plane sends {action:click, text:"..."})
+                if step.text and not step.selector:
+                    r = await run_op("flow_click_text", client.click_by_text, step.text, step.timeout)
+                else:
+                    r = await run_op("flow_click", client.click, step.selector or "")
                 step_report["result"] = r.get("status")
                 if body.auto_wait and r.get("status") == "ok":
-                    await run_op("flow_click_wait", client.wait_for_ready, step.timeout or 20)
+                    await run_op("flow_click_wait", client.wait_for_ready, step.timeout or 5)
             elif step.action == "type":
                 r = await run_op("flow_type", client.type_text, step.selector or "", step.value or "")
                 step_report["result"] = r.get("status")
