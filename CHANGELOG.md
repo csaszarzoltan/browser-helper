@@ -4,6 +4,18 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.29.0] — 2026-08-23
+
+#### Added (perf phase-2 — docs/perf-phase2.md)
+- **P1-4 evidence bundling:** `POST /agent/observe` accepts `include_console` / `include_network` / `include_screenshot` booleans or `?include=console,network,screenshot` (query) / `include_evidence` (body alias) — observation + console entries + network failures + screenshot in ONE round-trip (~500ms saved per journey).
+- **P2-8 keep-warm:** startup task mints a session at `BH_KEEP_WARM_URL` (default `http://127.0.0.1:8080/`) so the first agent journey skips the launch+navigate penalty. Disable with `BH_KEEP_WARM=0`.
+- **P2-9 service metrics:** `GET /service/metrics` returns p50/p95 latency per operation (500-sample ring, JSON body + Prometheus text in `X-Prometheus-Text`) — the real CDP-side numbers for `benchmarkE2ERunners()`.
+- **P1-5 fleet batch fast-path:** `/fleet/run-batch` mints each task's session directly on `task.url` (no about:blank→navigate detour) and reports per-task `elapsed_ms`.
+- **304-style snapshot cache:** `observe {"if_none_match_snapshot_id":"snap_..."}` → `{unchanged:true}` when the page fingerprint matches — verify steps skip node serialization entirely.
+
+#### Changed
+- Version 1.28.x → **1.29.0** (feature release: new observe parameters + metrics endpoint).
+
 ## [1.28.4] — 2026-08-23
 
 #### Changed
