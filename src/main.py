@@ -4316,9 +4316,27 @@ async def agent_observe(body: AgentObserveRequest):
 async def _resolve_agent_target(target: AgentTarget | None) -> dict:
     if target is None:
         return {}
+    # Fast-path: direct backend_node_id without snapshot (observe→act cache hit)
+    if target.backend_node_id is not None and not target.snapshot_id:
+        return {"backend_node_id": target.backend_node_id}
+    # Fast-path: ref without snapshot_id — caller sent stale/omitted snapshot_id;
+    # try to find the ref in the newest accessibility snapshot.
+    if target.ref and not target.snapshot_id:
+        for snap in reversed(list(ax_snapshots.values())):
+            node = next((n for n in snap.nodes if n.ref == target.ref), None)
+            if node:
+                return node.as_dict()
+        if target.backend_node_id is not None:
+            return {"backend_node_id": target.backend_node_id}
+        # fall through: will be caught as missing ref below
     if target.snapshot_id and target.ref:
         snap = ax_snapshots.get(target.snapshot_id)
         if not snap:
+            # snapshot_id expired/GC'd — try newest snapshot cache instead of 409
+            for s in reversed(list(ax_snapshots.values())):
+                node = next((n for n in s.nodes if n.ref == target.ref), None)
+                if node:
+                    return node.as_dict()
             raise StaleSnapshotError(f"Accessibility snapshot {target.snapshot_id!r} is missing")
         node = next((n for n in snap.nodes if n.ref == target.ref), None)
         if not node:
@@ -5373,7 +5391,12 @@ async def agent_flow_vlm(body: AgentFlowRequest, llm_prompt: str = Query(
     the image itself.
     """
     flow_result = await agent_run_flow(body)
-    if flow_result.get("status") != "ok":
+    # agent_run_flow returns api_success dict on success; api_error
+    # returns JSONResponse. Handle both shapes so this endpoint never
+    # crashes with "'JSONResponse' has no attribute 'get'".
+    if isinstance(flow_result, JSONResponse):
+        return flow_result
+    if not isinstance(flow_result, dict) or flow_result.get("status") != "ok":
         return flow_result
     try:
         sess = _get_current_session()
@@ -5387,7 +5410,8 @@ async def agent_flow_vlm(body: AgentFlowRequest, llm_prompt: str = Query(
         return flow_result
     except Exception as exc:
         logger.warning("VLM assessment failed: %s", exc, exc_info=True)
-        flow_result["data"]["vlm"] = {"status": "error", "error": str(exc)}
+        if isinstance(flow_result, dict) and isinstance(flow_result.get("data"), dict):
+            flow_result["data"]["vlm"] = {"status": "error", "error": str(exc)}
         return flow_result
 
 
