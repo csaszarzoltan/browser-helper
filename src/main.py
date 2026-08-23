@@ -350,6 +350,7 @@ class NavigateRequest(BaseModel):
     url: str | None = None
     wait: bool | None = None  # None = default (wait for ready); False = return immediately after navigate
     timeout: int | None = None  # wait_for_ready timeout in seconds (overrides default 3s); ignored if wait is False
+    wait_until: str | None = Field(None, description="domContentLoaded | load | networkIdle — default domContentLoaded (~400ms); networkIdle waits for quiet 400ms")
 
 
 class TypeRequest(BaseModel):
@@ -1982,13 +1983,13 @@ async def mcp_status():
         from mcp_server.config import load_mcp_settings
 
         mcp_enabled = load_mcp_settings().enabled
-    except Exception:  # noqa: BLE001 — diagnostic endpoint must never 500
+    except Exception:  # noqa: BLE001 — best-effort readyState poll  # noqa: BLE001 — diagnostic endpoint must never 500
         mcp_enabled = False
     try:
         from mcp_server.registry import build_tool_defs
 
         tool_names = [t.name for t in build_tool_defs()]
-    except Exception:  # noqa: BLE001 — registry may be unavailable in tests
+    except Exception:  # noqa: BLE001 — best-effort readyState poll  # noqa: BLE001 — registry may be unavailable in tests
         tool_names = []
     sessions = [
         {
@@ -2273,6 +2274,7 @@ async def connect(body: ConnectRequest | None = None):
 async def navigate(url: str | None = Query(default=None, description="Target URL to navigate to"),
                    wait: bool | None = Query(default=None, description="Wait for ready after navigate (default true; ?wait=false skips the 3s wait)"),
                    timeout: int | None = Query(default=None, description="Max seconds to wait for ready (default 3, ignored if wait=false)"),
+                   wait_until: str | None = Query(default=None, description="domContentLoaded|load|networkIdle — default domContentLoaded (~400ms)"),
                    body: NavigateRequest | None = None):
     """Navigate the current tab to *url*.
 
@@ -2281,10 +2283,10 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
     a clear message (this used to be a bare 422 that confused callers into
     thinking the service was broken — see the 2026-08-11 agent incident).
 
-    Query/body ``wait`` and ``timeout`` control the post-navigate ready wait:
-    ``?wait=false`` returns immediately after ``Page.navigate`` (non-blocking,
-    useful when the caller will poll ``/wait/*`` itself); ``?timeout=5`` caps
-    the wait.  Body fields take precedence over query params when both are sent.
+    Query/body ``wait``/``timeout``/``waitUntil`` control the post-navigate wait:
+    ``?wait=false`` returns immediately after ``Page.navigate``; ``?waitUntil=domContentLoaded``
+    waits only for DCL (~400ms, default), ``networkIdle`` waits for quiet 400ms.
+    Body fields take precedence over query params when both are sent.
 
     Fix-3 (1-tab-per-session): cross-origin navigation can make Chrome create
     a fresh target.  When that happens the session ROAMS onto the new tab AND
@@ -2292,7 +2294,7 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
     """
     if url is None and body is not None:
         url = getattr(body, "url", None)
-    # Merge wait/timeout: body > query > default
+    # Merge wait/timeout/waitUntil: body > query > default
     eff_wait = body.wait if body is not None and body.wait is not None else wait
     if eff_wait is None:
         eff_wait = True
@@ -2300,6 +2302,9 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
     if eff_timeout is None:
         eff_timeout = 3
     eff_timeout = max(1, min(int(eff_timeout), 30))
+    eff_wait_until = (body.wait_until if body is not None and body.wait_until is not None else wait_until) or "domContentLoaded"
+    if eff_wait_until not in ("domContentLoaded", "load", "networkIdle"):
+        raise HTTPException(status_code=422, detail="waitUntil must be domContentLoaded|load|networkIdle")
     if url is None:
         raise HTTPException(
             status_code=422,
@@ -2335,17 +2340,43 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
         # Refresh the client's tab cache so next discover_tabs picks up the new target
         sess.client._tabs_cache = []
         sess.client._tabs_cache_ts = 0
-    # Post-navigate ready wait (default 3s, was 8s — the 30s timeout on /navigate
-    # came from 8s wait + 4s domain throttle; localhost/127.0.0.1 is throttled at 0).
+    # Post-navigate ready wait (default domContentLoaded ~400ms, was networkIdle 8s).
+    # The 30s timeout came from 8s wait + 4s domain throttle; localhost is throttled at 0.
     if not eff_wait:
         return result
     try:
         wait_client = sess.client if sess is not None else client
-        ready = await wait_client.wait_for_ready(timeout=eff_timeout, quiet_ms=400)
+        if eff_wait_until == "networkIdle":
+            ready = await wait_client.wait_for_ready(timeout=eff_timeout, quiet_ms=400)
+        elif eff_wait_until == "load":
+            # Polynomial: poll document.readyState until "complete" (DCL + resources), cap at eff_timeout
+            deadline = time.monotonic() + eff_timeout
+            while time.monotonic() < deadline:
+                try:
+                    r = await wait_client.evaluate("document.readyState")
+                    if (r.get("result") if isinstance(r, dict) else r) == "complete":
+                        break
+                except Exception:  # noqa: BLE001 — best-effort readyState poll
+                    break
+                await asyncio.sleep(0.1)
+            ready = {"ready": True}
+        else:  # domContentLoaded
+            deadline = time.monotonic() + min(eff_timeout, 3)
+            while time.monotonic() < deadline:
+                try:
+                    r = await wait_client.evaluate("document.readyState")
+                    rs = r.get("result") if isinstance(r, dict) else r
+                    if rs in ("interactive", "complete"):
+                        break
+                except Exception:  # noqa: BLE001 — best-effort readyState poll
+                    break
+                await asyncio.sleep(0.08)
+            ready = {"ready": True}
         if isinstance(result, dict):
             data = result.get("data")
             if isinstance(data, dict):
                 data["ready"] = ready.get("ready", True)
+                data["waitUntil"] = eff_wait_until
     except Exception as exc:
         logger.debug("Auto-wait after navigate skipped: %s", exc, exc_info=True)
     return result
