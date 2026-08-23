@@ -778,6 +778,7 @@ class AgentActionRequest(BaseModel):
     pin_snapshot: bool = True
     auto_recover: bool = True
     observe_after: bool = True
+    include_observation: bool | None = Field(None, description="False skips the returning observation snapshot (fast path ~115ms); default mirrors observe_after")
 
 
 class AgentSearchRequest(BaseModel):
@@ -4537,7 +4538,7 @@ async def agent_act(body: AgentActionRequest):
             data["verified"] = bool(verification.get("found"))
             data["actual_text"] = verification.get("actual_text", "")
             data["verification_after"] = verification
-        if body.observe_after and action not in {"evaluate", "capture"}:
+        if body.observe_after and body.include_observation is not False and action not in {"evaluate", "capture"}:
             snap = await _capture_agent_snapshot(True, target=tc)
             data["observation"] = paginate_snapshot(snap, 4000, 60)
         _record_agent_step("act", body.model_dump(mode="json", exclude_none=True, by_alias=True))
@@ -4900,7 +4901,19 @@ async def agent_run_flow(body: AgentFlowRequest):
                 r = await run_op("flow_navigate", client.navigate, step.url)
                 step_report["result"] = r.get("status")
                 if body.auto_wait and r.get("status") == "ok":
-                    await run_op("flow_navigate_wait", client.wait_for_ready, step.timeout or 5)
+                    # Inherit the /navigate waitUntil=domContentLoaded default (~400ms
+                    # readyState poll) instead of the old wait_for_ready quiet-400ms
+                    # networkIdle-style scan (~6s on busy SPAs).
+                    deadline = time.monotonic() + min(step.timeout or 5, 5)
+                    while time.monotonic() < deadline:
+                        try:
+                            rs = await client.evaluate("document.readyState")
+                            val = rs.get("result") if isinstance(rs, dict) else rs
+                            if val in ("interactive", "complete"):
+                                break
+                        except Exception:  # noqa: BLE001 — best-effort ready poll
+                            break
+                        await asyncio.sleep(0.08)
             elif step.action == "click_text":
                 r = await run_op("flow_click_text", client.click_by_text, step.text or "", step.timeout)
                 step_report["result"] = r.get("status")
