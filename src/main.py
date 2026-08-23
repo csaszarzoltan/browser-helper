@@ -228,6 +228,33 @@ async def lifespan(application: FastAPI):
         logger.info("Chrome health watchdog started (every 300s)")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Chrome health watchdog startup failed: %s", exc)
+    # ── Keep-warm tab: pre-open the control-plane URL so the first agent
+    # journey doesn't pay the launch+navigate penalty (~400ms cold start).
+    warm_url = os.environ.get("BH_KEEP_WARM_URL", "http://127.0.0.1:8080/")
+    if os.environ.get("BH_KEEP_WARM", "1") != "0":
+        async def _keep_warm() -> None:
+            # Wait for Chrome to settle, then open the warm tab (idempotent —
+            # reuses an existing tab with the same URL if one is already open).
+            await asyncio.sleep(3)
+            for attempt in range(3):
+                try:
+                    tabs = await client.get_tabs()
+                    rows = tabs.get("data", []) if isinstance(tabs, dict) else []
+                    for row in rows:
+                        if str(row.get("url", "")).startswith(warm_url):
+                            logger.info("Keep-warm tab already open at %s", warm_url)
+                            return
+                    await chrome_mgr.launch()
+                    import httpx as _hx
+                    async with _hx.AsyncClient(timeout=5.0) as hx:
+                        await hx.post(f"http://127.0.0.1:{os.environ.get('BH_PORT', '8020')}/session/new", params={"url": warm_url})
+                    logger.info("Keep-warm session minted at %s", warm_url)
+                    return
+                except Exception as exc:  # noqa: BLE001 — warm-up is best-effort
+                    logger.debug("Keep-warm attempt %d failed: %s", attempt + 1, exc)
+                    await asyncio.sleep(2)
+        asyncio.create_task(_keep_warm())
+        logger.info("Keep-warm task started (target %s)", warm_url)
     yield
     # Shutdown
     # Stop the fleet health poller / release its HTTP client
@@ -743,6 +770,15 @@ class AgentObserveRequest(BaseModel):
     search_text: str | None = None
     auto_modal: bool = True
     include_hidden: bool = False
+    # P1-4 bundling — one round-trip for observation + evidence
+    include_console: bool = False
+    include_network: bool = False
+    include_screenshot: bool = False
+    # Back-compat: comma-separated include_evidence alias
+    include_evidence: str | None = Field(None, description="Comma list: console,network,screenshot — alias for the three booleans above")
+    # 304-style fingerprint cache: if the page fingerprint matches this id's
+    # fingerprint, return {unchanged:true} without re-serializing nodes.
+    if_none_match_snapshot_id: str | None = None
 
 
 class AgentTarget(BaseModel):
@@ -1661,6 +1697,7 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
             entry = log_operation(
                 operation, "success", elapsed, str(result)[:200], verification=verification
             )
+            _record_latency(operation, elapsed)
             await broadcast_state()
             return api_success(
                 operation,
@@ -1671,6 +1708,7 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
             elapsed = (time.monotonic() - start) * 1000
             logger.exception("Operation '%s' failed", operation)
             entry = log_operation(operation, "error", elapsed, str(exc))
+            _record_latency(f"{operation}:error", elapsed)
             await broadcast_state()
             status = 504 if isinstance(exc, TimeoutError) else 503 if "connect" in str(exc).lower() else 400
             return api_error(operation, "operation_failed", str(exc), status)
@@ -3945,11 +3983,63 @@ async def javascript_enable():
 # REST endpoints — new: performance metrics
 # ---------------------------------------------------------------------------
 
+# P2-9: op-latency ring for p50/p95 (benchmarkE2ERunners ground truth)
+_latency_ring: dict[str, list[float]] = {}
+
+
+def _record_latency(op: str, duration_ms: float) -> None:
+    ring = _latency_ring.setdefault(op, [])
+    ring.append(round(duration_ms, 2))
+    if len(ring) > 500:
+        del ring[: len(ring) - 500]
+
+
+def _latency_stats(op: str) -> dict[str, Any]:
+    ring = sorted(_latency_ring.get(op, []))
+    if not ring:
+        return {"count": 0}
+    def _pct(p: float) -> float:
+        idx = min(len(ring) - 1, max(0, round(p * (len(ring) - 1))))
+        return ring[idx]
+    return {
+        "count": len(ring),
+        "p50_ms": _pct(0.50),
+        "p95_ms": _pct(0.95),
+        "min_ms": ring[0],
+        "max_ms": ring[-1],
+    }
+
 
 @app.get("/metrics")
 async def get_metrics():
     """Get page performance metrics (timing, memory, etc.)."""
     return await run_op("get_performance_metrics", client.get_performance_metrics)
+
+
+@app.get("/service/metrics")
+async def service_metrics():
+    """BH service-level latency metrics (Prometheus text + JSON via ?format=json).
+
+    p50/p95 per operation — the real CDP-side numbers benchmarkE2ERunners()
+    should compare against Playwright.
+    """
+    ops = {op: _latency_stats(op) for op in sorted(_latency_ring)}
+    if "observe" in ops and isinstance(ops["observe"], dict):
+        pass
+    lines = [
+        "# HELP bh_op_duration_ms BH operation latency in milliseconds",
+        "# TYPE bh_op_duration_ms summary",
+    ]
+    for op, stats in ops.items():
+        if stats.get("count"):
+            lines.append(f'bh_op_duration_ms{{op="{op}",quantile="0.5"}} {stats["p50_ms"]}')
+            lines.append(f'bh_op_duration_ms{{op="{op}",quantile="0.95"}} {stats["p95_ms"]}')
+            lines.append(f'bh_op_duration_ms_count{{op="{op}"}} {stats["count"]}')
+    return JSONResponse(
+        content={"operations": ops},
+        media_type="application/json",
+        headers={"X-Prometheus-Text": "\n".join(lines)[:4000]},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4240,8 +4330,57 @@ async def agent_capabilities():
 
 
 @app.post("/agent/observe")
-async def agent_observe(body: AgentObserveRequest):
+async def agent_observe(body: AgentObserveRequest, include: str | None = Query(None, description="Comma list: console,network,screenshot — query alias for include_* booleans")):
     """Observe the page as either the legacy semantic snapshot or a real AX tree."""
+    # Query ?include= alias → merge into body booleans
+    if include:
+        parts = {p.strip().lower() for p in include.split(",") if p.strip()}
+        if "console" in parts:
+            body.include_console = True
+        if "network" in parts:
+            body.include_network = True
+        if "screenshot" in parts:
+            body.include_screenshot = True
+    # Body include_evidence comma alias
+    if body.include_evidence:
+        parts = {p.strip().lower() for p in body.include_evidence.split(",") if p.strip()}
+        if "console" in parts:
+            body.include_console = True
+        if "network" in parts:
+            body.include_network = True
+        if "screenshot" in parts:
+            body.include_screenshot = True
+    async def _gather_evidence(tgt) -> dict:
+        ev: dict[str, Any] = {}
+        if body.include_console:
+            try:
+                await tgt.start_console_monitoring()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("console monitoring in observe bundle: %s", exc)
+            entries = tgt.get_console_entries()
+            errors = [e for e in entries if e.get("level") in ("error", "exception")]
+            ev["console"] = {"count": len(entries), "errors": len(errors), "entries": entries[-50:]}
+        if body.include_network:
+            try:
+                await tgt.start_network_monitoring()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("network monitoring in observe bundle: %s", exc)
+            try:
+                nlog = await tgt.get_network_log()
+                entries = nlog.get("entries", []) if isinstance(nlog, dict) else []
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("network log in observe bundle: %s", exc)
+                entries = []
+            failures = [e for e in entries if isinstance(e.get("status"), int) and e["status"] >= 400]
+            ev["network"] = {"count": len(entries), "failures": failures[-20:], "failure_count": len(failures)}
+        if body.include_screenshot:
+            try:
+                shot = await tgt.screenshot(quality=60)
+                ev["screenshot"] = {"data": shot.get("data", ""), "format": shot.get("format", "jpeg"), "size": shot.get("size", 0)}
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("screenshot in observe bundle: %s", exc)
+                ev["screenshot"] = {"error": str(exc)}
+        return ev
     target, _sess = await _resolve_session_client()
     # 1a: warn when request had no session (auto-minted about:blank tab — hints cookie-less caller)
     if _sess is not None and _get_current_session() is not None:
@@ -4268,6 +4407,19 @@ async def agent_observe(body: AgentObserveRequest):
                     target=target,
                 )
             data = snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
+            # 304-style short-circuit: same fingerprint → skip node serialization
+            if body.if_none_match_snapshot_id:
+                ref_snap = ax_snapshots.get(body.if_none_match_snapshot_id)
+                if ref_snap is not None and ref_snap.fingerprint == snap.fingerprint:
+                    unchanged = {
+                        "unchanged": True,
+                        "snapshot_id": snap.snapshot_id,
+                        "matched_snapshot_id": body.if_none_match_snapshot_id,
+                        "fingerprint": snap.fingerprint,
+                        "page": snap.page if hasattr(snap, "page") else {},
+                    }
+                    _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope, "unchanged": True})
+                    return api_success("agent_observe", unchanged, meta={"trust_level": "untrusted_web_content", "mode": "accessibility", "not_modified": True})
             if body.since_snapshot_id:
                 old = ax_snapshots.get(body.since_snapshot_id)
                 if not old:
@@ -4285,6 +4437,9 @@ async def agent_observe(body: AgentObserveRequest):
                 if body.changed_only:
                     data["nodes"] = changed
             _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope})
+            if body.include_console or body.include_network or body.include_screenshot:
+                ev = await _gather_evidence(target)
+                data.update(ev)
             return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility"})
         if body.snapshot_id:
             snap = snapshot_store.get(body.snapshot_id)
@@ -4297,12 +4452,18 @@ async def agent_observe(body: AgentObserveRequest):
             data = ax_snap.as_dict(max_nodes=min(max(body.max_nodes, 1), 1000))
             data["fallback_from"] = "semantic"
             data["fallback_reason"] = f"search_text_not_found:{body.search_text}"
+            if body.include_console or body.include_network or body.include_screenshot:
+                ev = await _gather_evidence(target)
+                data.update(ev)
             _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope, "search_text": body.search_text})
             return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility", "fallback": True})
         data = paginate_snapshot(snap, body.max_chars, body.max_elements, body.cursor)
         if body.since_snapshot_id:
             old = snapshot_store.get(body.since_snapshot_id)
             data["diff"] = diff_snapshots(old, snap)
+        if body.include_console or body.include_network or body.include_screenshot:
+            ev = await _gather_evidence(target)
+            data.update(ev)
         _record_agent_step("observe", {"mode": "semantic"})
         return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "semantic"})
     except StaleSnapshotError as exc:

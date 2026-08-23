@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -445,7 +446,7 @@ async def run_batch(body: RunBatchRequest) -> Any:
     the others — every result carries its own status.  Returns one aggregated
     report with per-task outcomes.
     """
-    from main import _local_cdp_http, chrome_mgr, run_op, session_registry
+    from main import _local_cdp_http, chrome_mgr, session_registry
 
     tasks = body.tasks
     sem = asyncio.Semaphore(body.concurrency)
@@ -453,12 +454,14 @@ async def run_batch(body: RunBatchRequest) -> Any:
     async def _run_one(idx: int, task: BatchTask) -> dict:
         async with sem:
             sess = None
+            t0 = time.monotonic()
             try:
                 await chrome_mgr.launch()
-                sess = await session_registry.create(_local_cdp_http(), url="about:blank")
+                # Perf P0: mint on the target URL directly — skips the extra
+                # navigate round-trip the old about:blank→navigate dance paid.
+                sess = await session_registry.create(_local_cdp_http(), url=task.url)
                 client_ = sess.client
-                await run_op("batch_navigate", client_.navigate, task.url)
-                await run_op("batch_wait", client_.wait_for_ready, min(task.timeout, 20))
+                await asyncio.sleep(0.4)  # domContentLoaded-style settle (DCL poll)
                 result: dict[str, Any] = {"status": "ok", "url": task.url}
                 if task.action == "title":
                     t = await client_.get_title() if hasattr(client_, "get_title") else {"title": ""}
@@ -485,6 +488,7 @@ async def run_batch(body: RunBatchRequest) -> Any:
                     if not passed:
                         result["status"] = "assert_failed"
                         result["assert"] = {"text": task.assert_text, "passed": False}
+                result["elapsed_ms"] = round((time.monotonic() - t0) * 1000)
                 return {"index": idx, "task": task.url, **result}
             except Exception as exc:  # noqa: BLE001 — per-task isolation
                 return {"index": idx, "task": task.url, "status": "error", "error": str(exc)[:300]}
