@@ -4329,6 +4329,7 @@ async def agent_capabilities():
 @app.post("/agent/observe")
 async def agent_observe(body: AgentObserveRequest, include: str | None = Query(None, description="Comma list: console,network,screenshot — query alias for include_* booleans")):
     """Observe the page as either the legacy semantic snapshot or a real AX tree."""
+    _t0 = time.monotonic()
     # Query ?include= alias → merge into body booleans
     if include:
         parts = {p.strip().lower() for p in include.split(",") if p.strip()}
@@ -4437,6 +4438,7 @@ async def agent_observe(body: AgentObserveRequest, include: str | None = Query(N
             if body.include_console or body.include_network or body.include_screenshot:
                 ev = await _gather_evidence(target)
                 data.update(ev)
+            _record_latency("agent_observe", (time.monotonic() - _t0) * 1000)
             return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility"})
         if body.snapshot_id:
             snap = snapshot_store.get(body.snapshot_id)
@@ -4452,8 +4454,9 @@ async def agent_observe(body: AgentObserveRequest, include: str | None = Query(N
             if body.include_console or body.include_network or body.include_screenshot:
                 ev = await _gather_evidence(target)
                 data.update(ev)
-            _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope, "search_text": body.search_text})
-            return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility", "fallback": True})
+            _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope})
+            _record_latency("agent_observe", (time.monotonic() - _t0) * 1000)
+            return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility"})
         data = paginate_snapshot(snap, body.max_chars, body.max_elements, body.cursor)
         if body.since_snapshot_id:
             old = snapshot_store.get(body.since_snapshot_id)
@@ -4462,6 +4465,7 @@ async def agent_observe(body: AgentObserveRequest, include: str | None = Query(N
             ev = await _gather_evidence(target)
             data.update(ev)
         _record_agent_step("observe", {"mode": "semantic"})
+        _record_latency("agent_observe", (time.monotonic() - _t0) * 1000)
         return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "semantic"})
     except StaleSnapshotError as exc:
         return api_error("agent_observe", "stale_snapshot", str(exc), 409)
@@ -4508,6 +4512,7 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
 
 @app.post("/agent/act")
 async def agent_act(body: AgentActionRequest):
+    _t0 = time.monotonic()
     tc, _sess = await _resolve_session_client()
     action = body.action.lower().strip()
     pinned_kind: str | None = None
@@ -4700,6 +4705,7 @@ async def agent_act(body: AgentActionRequest):
             snap = await _capture_agent_snapshot(True, target=tc)
             data["observation"] = paginate_snapshot(snap, 4000, 60)
         _record_agent_step("act", body.model_dump(mode="json", exclude_none=True, by_alias=True))
+        _record_latency(f"agent_act:{action}", (time.monotonic() - _t0) * 1000)
         return api_success("agent_act", data)
     except StaleSnapshotError as exc:
         return api_error("agent_act", "stale_snapshot", str(exc), 409)
