@@ -31,7 +31,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -4017,15 +4017,14 @@ async def get_metrics():
 
 
 @app.get("/service/metrics")
-async def service_metrics():
-    """BH service-level latency metrics (Prometheus text + JSON via ?format=json).
+async def service_metrics(format: str | None = Query(None, description="'prometheus' returns Prometheus text exposition; default JSON")):
+    """BH service-level latency metrics.
 
-    p50/p95 per operation — the real CDP-side numbers benchmarkE2ERunners()
-    should compare against Playwright.
+    Default JSON ``{"operations": {...}}`` with p50/p95 per operation (500-sample
+    ring) — the real CDP-side numbers benchmarkE2ERunners() should compare
+    against Playwright.  ``?format=prometheus`` returns Prometheus text.
     """
     ops = {op: _latency_stats(op) for op in sorted(_latency_ring)}
-    if "observe" in ops and isinstance(ops["observe"], dict):
-        pass
     lines = [
         "# HELP bh_op_duration_ms BH operation latency in milliseconds",
         "# TYPE bh_op_duration_ms summary",
@@ -4035,11 +4034,9 @@ async def service_metrics():
             lines.append(f'bh_op_duration_ms{{op="{op}",quantile="0.5"}} {stats["p50_ms"]}')
             lines.append(f'bh_op_duration_ms{{op="{op}",quantile="0.95"}} {stats["p95_ms"]}')
             lines.append(f'bh_op_duration_ms_count{{op="{op}"}} {stats["count"]}')
-    return JSONResponse(
-        content={"operations": ops},
-        media_type="application/json",
-        headers={"X-Prometheus-Text": "\n".join(lines)[:4000]},
-    )
+    if (format or "").lower() == "prometheus":
+        return Response(content="\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+    return JSONResponse(content={"operations": ops, "prometheus": "\n".join(lines)})
 
 
 # ---------------------------------------------------------------------------
