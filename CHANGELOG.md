@@ -4,6 +4,18 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.30.0] — 2026-08-24
+
+#### Fixed (R1–R5 — 2026-08-23 log-elemzés alapján)
+- **R1 close_tab idempotens:** a Chrome `/json/close/{id}` 404 válasza (már zárt tab — LRU-evict verseny) most `{already_closed:true}` siker, nem exception. Megszüntette az 48 elemű `close_tab` ERROR-vihart cleanup-loopokból.
+- **R2 session cap elő-WARN:** a registry a cap 80%-ánál egyszer figyelmeztet (crossing-edge), és a systemd unit `BH_MAX_SESSIONS` értékét 20-ról 30-ra hoztuk (a kód B8-defaultja volt felülírva — ez okozta a 114 evictet).
+- **R3 keep-warm периодikus:** az egyszeri warm-session mintelést a reaper (TTL 30 perc) törölte; most `BH_KEEP_WARM_INTERVAL` (default 300s) szerint újramintel, amíg a tab nincs meg — a hidegindítás-büntetés véglegesen megszűnik.
+- **R4 WS task exception swallow:** a stealth-injector és a fetch-resume fire-and-forget `_send_command` taskjai done-callback-et kaptak — szándékos WS-zárnál nincs több „Task exception was never retrieved".
+- **R5 watchdog diagnosztika:** relaunch ELŐTT logolja a túlélő chrome processzek számát + össz-RSS-t, az utolsó operációt időbélyeggel és a sessionszámot — a csendes Chrome-halál (3×, OOM-nyom nélkül) kivizsgálhatóvá válik.
+
+#### Changed
+- Version 1.29.x → **1.30.0**.
+
 ## [1.29.0] — 2026-08-23
 
 #### Added (perf phase-2 — docs/perf-phase2.md)
