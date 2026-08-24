@@ -779,26 +779,38 @@ class CDPClient:
         # skip tab sync entirely (the remote WS stays bound to its target).
         if self._connection_type != "remote":
             try:
-                tabs = await self.discover_tabs()
-                pages = [t for t in tabs if t.get("type") == "page"]
-                # Find the page target matching our frame (by URL or newest)
                 frame_id = result.get("frameId", "")
                 target = None
-                if frame_id:
-                    for t in pages:
-                        if t.get("id") == frame_id or frame_id in t.get("id", ""):
-                            target = t
-                            break
-                if not target and pages:
-                    # Fallback: the active target is likely the new one
-                    for t in pages:
-                        if t.get("url", "").startswith("http") and url.split("/")[2] in t.get("url", ""):
-                            target = t
-                            break
-                if not target and pages:
-                    # Last resort: newest page target
-                    target = pages[-1]
+                # Chrome registers the (possibly new) page target ASYNC after
+                # Page.navigate returns — poll briefly instead of a single
+                # racy discover_tabs() call (v1.29.0 drift root cause).
+                for _attempt in range(6):
+                    tabs = []
+                    try:
+                        tabs = await self.discover_tabs()
+                    except (CDPError, OSError):
+                        tabs = []
+                    pages = [t for t in tabs if t.get("type") == "page"]
+                    target = None
+                    if frame_id:
+                        for t in pages:
+                            if t.get("id") == frame_id:
+                                target = t
+                                break
+                    if target is None:
+                        # URL-match fallback (same-tab navigations keep the tab id,
+                        # so this mostly hits when frameId is empty/unavailable).
+                        host = url.split("/")[2] if "://" in url else ""
+                        for t in pages:
+                            if host and t.get("url", "").startswith("http") and host in t.get("url", ""):
+                                target = t
+                                break
+                    if target is not None:
+                        break
+                    await asyncio.sleep(0.5)
 
+                # SAFETY: never blind-roam to an arbitrary "newest" tab — if the
+                # frame target cannot be identified, keep the session where it is.
                 if target and target["id"] != self._ws_tab_id:
                     logger.info("Navigate cross-origin: roaming %s -> %s", self._ws_tab_id[:8], target["id"][:8])
                     await self.connect_to_target(target["id"])

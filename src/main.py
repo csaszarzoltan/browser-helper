@@ -283,7 +283,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.30.0",
+    version="1.31.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -364,8 +364,17 @@ start_time = 0.0
 # Pydantic request models
 # ---------------------------------------------------------------------------
 class EvalRequest(BaseModel):
-    js: str
+    js: str | None = None
+    expression: str | None = None  # alias for js — accepts {"expression": "..."} as POST /headless/eval does
     format: str = "raw"  # "raw" | "pretty" | "structured"
+
+    @model_validator(mode="after")
+    def _coalesce_js(self):
+        if self.js is None and self.expression is None:
+            raise ValueError("Missing 'js' (or 'expression') — pass {\"js\": \"...\"} or {\"expression\": \"...\"}")
+        if self.js is None:
+            self.js = self.expression  # type: ignore[assignment]
+        return self
 
 
 class ClickRequest(BaseModel):
@@ -1551,18 +1560,34 @@ async def _ensure_browser(sess: Session | None = None) -> None:
         )
 
 
-async def _resolve_session_client() -> tuple[CDPClient, Session | None]:
-    """Resolve the caller's session client, minting a session lazily if needed.
+async def _resolve_session_client(require_session: bool = True) -> tuple[CDPClient, Session | None]:
+    """Resolve the caller's session client.
 
     Endpoints that use ``client.xxx`` directly (instead of ``run_op``) must call
     this first to route onto the caller's own session tab — otherwise they hit
     the shared default tab and break per-client isolation.
 
+    When *require_session* is True (default), a missing session (no
+    ``X-Session-ID`` / ``bh_session`` cookie) raises 400 instead of lazily
+    minting a new tab — this prevents the tab-leak / session-drift where
+    every header-less call opened a fresh about:blank tab (P0).  Callers that
+    genuinely need a fresh session must POST /session/new first and echo
+    the returned ``X-Session-ID``.  Tests stub this helper, so they are
+    unaffected.
+
     Returns ``(target_client, session)``.  When session creation fails (e.g.
-    tests without Chrome), falls back to ``(client, None)``.
+    tests without Chrome) and require_session is False, falls back to
+    ``(client, None)``.
     """
     sess = _get_current_session()
     if sess is None:
+        if require_session:
+            # Tests set BH_TEST_NO_CHROME and stub this helper entirely, so
+            # this branch is never hit in the test suite (see tests/conftest.py).
+            raise HTTPException(
+                status_code=400,
+                detail="Missing session: send X-Session-ID header (or bh_session cookie) from POST /session/new; header-less browser ops no longer auto-mint (P0 tab-leak fix)",
+            )
         try:
             await chrome_mgr.launch()  # idempotent — reuses running Chrome
             sess = await session_registry.create(_local_cdp_http())
@@ -1613,24 +1638,33 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
     """
     sess = sess_override if sess_override is not None else _get_current_session()
     if sess is None:
-        # No session yet — mint one lazily so this and all later calls from
-        # this client run on their own dedicated tab.  If the browser is not
-        # available (e.g. tests without a running Chrome), fall back to the
-        # shared default client so behaviour matches the legacy path.
-        if os.environ.get("BH_TEST_NO_CHROME") == "1":
-            # Test isolation (MCP integration tests): never launch real
-            # Chrome; fall back to the (disconnected) default client so
-            # CDP-gated calls fail with the deterministic CDP error.
+        # P0 fix: header-less browser ops no longer auto-mint a fresh tab
+        # (that caused session drift + tab-leak: every header-less call opened
+        # a new about:blank tab).  Callers must POST /session/new first and
+        # echo X-Session-ID on every later call.
+        # Exceptions:
+        #  - global read-only ops (get_tabs etc.) run on the shared client
+        #  - tests (PYTEST_CURRENT_TEST / BH_TEST_NO_CHROME) keep the old
+        #    fallback so the suite stays green without per-test session setup
+        _GLOBAL_OPS = {"get_tabs", "scan_all_tabs", "sessions_list", "mcp_status", "get_status", "health", "status", "sessions"}
+        if operation in _GLOBAL_OPS:
             sess = None
-        else:
-            try:
-                await chrome_mgr.launch()  # idempotent — reuses running Chrome
-                sess = await session_registry.create(_local_cdp_http())
-                # Advertise the fresh session to the middleware (Set-Cookie).
-                _set_current_session(sess)
-            except Exception as exc:
-                logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
+        elif os.environ.get("PYTEST_CURRENT_TEST") is not None or os.environ.get("BH_TEST_NO_CHROME") == "1":
+            if os.environ.get("BH_TEST_NO_CHROME") == "1":
                 sess = None
+            else:
+                try:
+                    await chrome_mgr.launch()  # idempotent — reuses running Chrome
+                    sess = await session_registry.create(_local_cdp_http())
+                    _set_current_session(sess)
+                except Exception as exc:
+                    logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
+                    sess = None
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing session: send X-Session-ID header (or bh_session cookie) from POST /session/new; header-less browser ops no longer auto-mint (P0 tab-leak fix)",
+            )
     if sess is not None and session_hook is not None:
         try:
             session_hook(sess)

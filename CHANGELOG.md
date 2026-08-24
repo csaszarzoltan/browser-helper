@@ -4,6 +4,16 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.31.0] — 2026-08-24
+### Fixed
+- **P0 REST session drift + tab-leak (`src/main.py`, `src/session_registry.py`)**: header-less browser ops (`/eval`, `/navigate`, `/click`…) no longer lazily mint a fresh `about:blank` tab — they now return `400 Missing session: send X-Session-ID` instead. Callers must `POST /session/new` once and echo `X-Session-ID` / `bh_session` on every later call. Global read-only ops (`/tabs`, `/sessions`, `/status`, …) still run on the shared client. Prevents the 11-tab `about:blank` accumulation and the `eval → ""` drift (direct CDP OK, BH REST empty) from 2026-08-24.
+- **P2 `/eval` payload alias (`src/main.py`)**: `EvalRequest` now accepts `{"js": "..."}` **or** `{"expression": "..."}` (alias as `POST /headless/eval` does) plus a clear validator message; `{"expression": ...}` no longer 422s silently.
+- **P1/P3 tab-GC (`src/session_registry.py`, `src/cdp_client.py`)**: navigate still polls 6×0.5s for the returned `frameId` (P1) and never blind-roams to an arbitrary newest tab; the periodic reaper now also sweeps orphan `about:blank` tabs so the tab count stays bounded even for long-lived sessions.
+- **P4 Dockerfile release block (`Dockerfile`)**: `LABEL image.version` bumped `1.30.0 → 1.31.0` so `scripts/release-validate.sh` is fully green again (`MINDEN ZÖLD v1.31.0, 47 tools`).
+- **Control-plane runner tab-leak (`AI_prod_engine/control_plane/runners/browser_helper_runner.py`)**: the E2E runner used a fresh `CookieJar` per request → one new tab per call. Now uses one global `CookieJar` + `X-Session-ID` cache with lazy `POST /session/new` (`_bh_ensure_session`) so the whole journey reuses a single session/tab.
+- **Navigate tab-drift root cause (`src/cdp_client.py`)**: after `Page.navigate`, Chrome registers a (possibly new) page target ASYNC — the old single racy `discover_tabs()` lookup missed it, so the session WS stayed on the stale `about:blank` tab while `/eval` hit an empty page (v1.29.x drift). `navigate()` now polls up to 6×0.5s for the returned `frameId` and roams only on an exact match.
+- **Blind-roam removed**: navigate never jumps to an arbitrary "newest" tab anymore; if the frame target cannot be identified, the session stays where it is.
+
 ## [1.30.0] — 2026-08-24
 
 #### Fixed (R1–R5 — 2026-08-23 log-elemzés alapján)

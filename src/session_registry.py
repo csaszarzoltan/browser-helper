@@ -298,11 +298,35 @@ class SessionRegistry:
     async def cleanup(self) -> int:
         """Reap sessions idle longer than TTL. Returns count reaped."""
         now = time.monotonic()
+        # P3: tombstone for GC debugging — reaped session ids kept so a later
+        # debug endpoint can list what was cleaned.  Bounded at 100.
+        if not hasattr(self, "_last_reaped"):
+            self._last_reaped: list[dict] = []
         stale = [sid for sid, s in self._sessions.items() if now - s.last_seen > self._ttl]
         for sid in stale:
+            tab = self._sessions.get(sid).tab_id[:8] if sid in self._sessions else "?"
             await self.destroy(sid)
+            self._last_reaped.append({"sid": sid[:12] + "…", "tab": tab, "at": now})
+            if len(self._last_reaped) > 100:
+                self._last_reaped = self._last_reaped[-100:]
         if stale:
             logger.info("Reaped %d stale session(s), %d remain", len(stale), len(self._sessions))
+        # P3: also reap orphan tabs (about:blank accumulation) while we're here.
+        # The per-create reap only runs on session creation; long-lived sessions
+        # that accumulate about:blank tabs (e.g. old cross-origin roam leftovers)
+        # need a periodic sweep too.  This is best-effort — never block the reaper.
+        try:
+            import os as _os
+            cdp_url = f"http://127.0.0.1:{_os.environ.get('CHROME_AUTO_PORT') or _os.environ.get('BH_PORT') or '9557'}"
+            # Use the first live session's cdp_http_url when available.
+            for _sess in self._sessions.values():
+                cdp_url = _sess.client.cdp_http_url
+                break
+            reaped_orphans = await self._reap_orphan_tabs(cdp_url)
+            if reaped_orphans:
+                logger.info("Periodic orphan-tab sweep: reaped %d about:blank orphan(s)", reaped_orphans)
+        except Exception as exc:  # noqa: BLE001 — best-effort sweep must never crash the reaper
+            logger.debug("orphan-tab sweep failed: %s", exc)
         return len(stale)
 
     async def close_all(self) -> None:
