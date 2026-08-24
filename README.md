@@ -16,6 +16,7 @@ accessibility snapshots — with every answer.
 | **Who it is for** | AI agents (Hermes, Claude Code, Codex CLI, Cursor), QA automation, scrapers |
 | **Interfaces** | REST API · 47-tool MCP server · WebSocket stream · GUI dashboard |
 | **Why fast** | Local CDP + compact payloads; measured **1.9–2.2× faster than Playwright** on the same E2E journey (~1641ms vs ~3163ms) |
+| **Killer feature** | The browser is **visible to you** — log in manually (Google, Perplexity, anything with CAPTCHA/bot-walls), and your agent reuses *your* logged-in session |
 | **License / status** | Personal-lab project, actively developed — releases every few days |
 
 ---
@@ -60,6 +61,16 @@ POST /agent/act {"action":"click","target":{"ref":"e11"}}
 
 Compact commands in, compact answers out — with optional evidence bundles
 (console/network/screenshot) when you *do* need the heavy stuff.
+
+**And the part that solves bot-walls:** because Browser Helper drives your *real,
+visible* Chrome, **you** can do the things bots can't. Open the browser window,
+log in by hand — Google, Perplexity, LinkedIn, whatever throws CAPTCHAs and
+"unusual activity" screens at automation. Solve the challenge once as a human;
+from then on your agent operates inside **your authenticated session**, with your
+cookies, in a browser that looks (and is) genuinely human-driven. The agent never
+sees or handles your password — it inherits the logged-in state. Sessions can
+also be exported/cloned (`/session/{sid}/export-cookies`, `/clone`) so other
+agents or machines reuse the same login.
 
 ## 30-second tour
 
@@ -316,6 +327,29 @@ State: `~/.browser-helper/fleet.db` (override `FLEET_DB_PATH`). See [Fleet secti
 | Keep-warm | Periodic warm session at `BH_KEEP_WARM_URL` so first calls stay fast |
 | Auth-session portability | `/session/{sid}/export-cookies`, `/import-cookies`, `/clone` |
 
+### Human login, agent reuse
+
+The most practical workflow for bot-protected services. The browser Chrome window
+is **visible on your desktop** — it's not a hidden headless instance:
+
+1. **You log in as a human.** Open the tab (dashboard, or just use Chrome directly),
+   go to Google / Perplexity / LinkedIn / your bank — solve the CAPTCHA, the 2FA,
+   the "prove you're not a robot" dance exactly once.
+2. **The agent inherits the session.** Every subsequent API call in that browser
+   profile carries your real cookies and login state. No password ever passes
+   through the API; the agent simply operates *while already logged in*.
+3. **The login survives.** Cookies persist in the Chrome profile; sessions can be
+   pinned, exported (`/session/{sid}/export-cookies`) or cloned
+   (`POST /session/{sid}/clone`) to share the authenticated state with other
+   agents or machines.
+4. **Detection sees a human.** Because the login itself was performed manually in a
+   real Chrome with a real fingerprint, services that block *bot sign-ups*
+   (Google's "This browser isn't secure", Perplexity's Cloudflare wall) never
+   trigger — automation only happens inside an already-trusted session.
+
+This is why Browser Helper drives your everyday visible Chrome rather than an
+isolated headless farm: the human does authentication, the machine does the work.
+
 ## Anti-detection toolkit
 
 For scraping scenarios that need to look human:
@@ -382,12 +416,13 @@ sessions), `src/mcp_server/registry.py::build_tool_defs()` (tool source of truth
 ## Use cases
 
 1. **AI agent browser control** — Hermes/LLM agents drive Chrome through compact REST/MCP calls instead of raw CDP
-2. **E2E testing without selectors** — semantic clicks by text/label/ref, deterministic waits, verified outcomes
-3. **Web scraping** — extraction, screenshots, PDFs, anti-detection profiles at scale
-4. **Session replay** — save/restore authenticated sessions, clone them across machines
-5. **Network debugging** — capture requests, block/mock patterns, inspect console errors
-6. **Multi-node fleets** — schedule parallel browsing across worker machines with failover
-7. **SPA deep-dives** — extract sub-tabs and iframe content in single calls
+2. **Agent behind a human login** — you sign in once (Google, Perplexity, anything with CAPTCHA/bot-walls); the agent works inside your authenticated session from then on — see [Human login, agent reuse](#human-login-agent-reuse)
+3. **E2E testing without selectors** — semantic clicks by text/label/ref, deterministic waits, verified outcomes
+4. **Web scraping** — extraction, screenshots, PDFs, anti-detection profiles at scale
+5. **Session replay** — save/restore authenticated sessions, clone them across machines
+6. **Network debugging** — capture requests, block/mock patterns, inspect console errors
+7. **Multi-node fleets** — schedule parallel browsing across worker machines with failover
+8. **SPA deep-dives** — extract sub-tabs and iframe content in single calls
 
 ## Documentation index
 
