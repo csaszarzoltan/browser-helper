@@ -4,6 +4,15 @@
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-2630%20passed-brightgreen)
 
+> ### 🔑 **You log in as a human. Your agent works as a machine.**
+>
+> Browser Helper drives your **real, visible Chrome** — not a hidden headless farm.
+> That means you can sign in by hand to Google, Perplexity, LinkedIn, or any
+> service that blocks bots with CAPTCHAs and "unusual activity" walls. Solve the
+> challenge once; from that moment your AI agent operates inside **your
+> authenticated session** — real cookies, real fingerprint, already trusted.
+> [See how it works ↓](#human-login-agent-reuse)
+
 **Fast, agent-first browser automation over the Chrome DevTools Protocol (CDP).**
 Browser Helper sits between your AI agents and Chrome: it speaks compact JSON over
 REST/MCP instead of megabytes of raw CDP traffic, keeps per-client browser sessions
