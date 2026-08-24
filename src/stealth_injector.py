@@ -116,7 +116,13 @@ class StealthInjector:
             except RuntimeError:
                 asyncio.run(cmd)
             else:
-                asyncio.create_task(cmd)
+                # R4: swallow the exception via done-callback — on intentional
+                # WS close the send fails with ConnectionClosedOK and asyncio
+                # would log "Task exception was never retrieved" (log noise).
+                _t = asyncio.create_task(cmd)
+                _t.add_done_callback(
+                    lambda t: t.exception() if not t.cancelled() else None
+                )
 
     async def verify(self, client) -> dict:
         """Check each patch's effect by evaluating JS in the page.

@@ -230,31 +230,30 @@ async def lifespan(application: FastAPI):
         logger.warning("Chrome health watchdog startup failed: %s", exc)
     # ── Keep-warm tab: pre-open the control-plane URL so the first agent
     # journey doesn't pay the launch+navigate penalty (~400ms cold start).
+    # R3: PERIODIC — the session reaper (TTL 30 min) kills the warm session,
+    # so a one-shot mint only protects the first 30 minutes.  Re-mint every
+    # BH_KEEP_WARM_INTERVAL seconds (default 300) whenever the tab is gone.
     warm_url = os.environ.get("BH_KEEP_WARM_URL", "http://127.0.0.1:8080/")
     if os.environ.get("BH_KEEP_WARM", "1") != "0":
         async def _keep_warm() -> None:
-            # Wait for Chrome to settle, then open the warm tab (idempotent —
-            # reuses an existing tab with the same URL if one is already open).
             await asyncio.sleep(3)
-            for attempt in range(3):
+            import httpx as _hx
+            while True:
                 try:
                     tabs = await client.get_tabs()
                     rows = tabs.get("data", []) if isinstance(tabs, dict) else []
-                    for row in rows:
-                        if str(row.get("url", "")).startswith(warm_url):
-                            logger.info("Keep-warm tab already open at %s", warm_url)
-                            return
+                    if any(str(row.get("url", "")).startswith(warm_url) for row in rows):
+                        await asyncio.sleep(int(os.environ.get("BH_KEEP_WARM_INTERVAL", "300")))
+                        continue
                     await chrome_mgr.launch()
-                    import httpx as _hx
                     async with _hx.AsyncClient(timeout=5.0) as hx:
                         await hx.post(f"http://127.0.0.1:{os.environ.get('BH_PORT', '8020')}/session/new", params={"url": warm_url})
-                    logger.info("Keep-warm session minted at %s", warm_url)
-                    return
+                    logger.info("Keep-warm session ensured at %s", warm_url)
                 except Exception as exc:  # noqa: BLE001 — warm-up is best-effort
-                    logger.debug("Keep-warm attempt %d failed: %s", attempt + 1, exc)
-                    await asyncio.sleep(2)
+                    logger.debug("Keep-warm cycle failed: %s", exc)
+                await asyncio.sleep(int(os.environ.get("BH_KEEP_WARM_INTERVAL", "300")))
         asyncio.create_task(_keep_warm())
-        logger.info("Keep-warm task started (target %s)", warm_url)
+        logger.info("Keep-warm task started (target %s, every %ss)", warm_url, os.environ.get("BH_KEEP_WARM_INTERVAL", "300"))
     yield
     # Shutdown
     # Stop the fleet health poller / release its HTTP client
@@ -1434,6 +1433,32 @@ async def _chrome_health_watchdog() -> None:
                     logger.info("Watchdog: launch already in progress — waiting instead of relaunching")
                     await asyncio.sleep(5.0)
                     continue
+                # R5 diagnostics: log WHY Chrome likely died — RSS of any
+                # surviving chrome processes, last operation + its time, and
+                # the session count at death.  Without this the "Chrome not
+                # running" mystery (3× on 2026-08-23, no OOM trace) is
+                # undebuggable from logs alone.
+                try:
+                    import subprocess as _sp
+
+                    ps_out = _sp.run(  # noqa: ASYNC221 — 5s-bounded, watchdog path only
+                        ["ps", "-eo", "rss,comm,args"], capture_output=True, text=True,
+                        timeout=5, check=False,
+                    ).stdout
+                    chrome_rss = [
+                        int(line.split()[0]) // 1024
+                        for line in ps_out.splitlines()
+                        if "chrome" in line.lower() and "grep" not in line
+                    ]
+                    total_mb = sum(chrome_rss)
+                    logger.warning(
+                        "Watchdog context: chrome procs alive=%d rss_total=%dMB; last_op=%s@%s; sessions=%d",
+                        len(chrome_rss), total_mb,
+                        state.get("last_operation"), state.get("last_operation_time"),
+                        session_registry.count,
+                    )
+                except Exception as exc_diag:  # noqa: BLE001 — diagnostics must never block relaunch
+                    logger.debug("watchdog diagnostics failed: %s", exc_diag)
                 logger.warning("Watchdog: Chrome not running, launching fresh instance: %s", exc)
                 try:
                     await chrome_mgr.launch()

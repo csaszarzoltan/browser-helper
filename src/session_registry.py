@@ -79,6 +79,17 @@ class SessionRegistry:
         session (or None when under the cap).
         """
         if len(self._sessions) < self._max_sessions:
+            # Early-warning at 80% capacity so operators see churn coming
+            # before eviction starts (rate-limited: only on crossing).
+            if len(self._sessions) >= int(self._max_sessions * 0.8):
+                if not getattr(self, "_cap_warned", False):
+                    self._cap_warned = True
+                    logger.warning(
+                        "Session count %d approaching cap %d — expect LRU eviction soon",
+                        len(self._sessions), self._max_sessions,
+                    )
+            else:
+                self._cap_warned = False
             return None
         victim_id = min(self._sessions, key=lambda sid: self._sessions[sid].last_seen)
         victim = self._sessions[victim_id]

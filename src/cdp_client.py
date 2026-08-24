@@ -472,9 +472,14 @@ class CDPClient:
                     res_type = params.get("resourceType", "")
                     # A válaszadás KÜLÖN task-ban fut, hogy a listener ne
                     # blokkolódjon (a _send_command a listener válaszaira várna
-                    # — holtpont).
-                    asyncio.ensure_future(
+                    # — holtpont).  R4: add done-callback that swallows the
+                    # exception (ConnectionClosedOK on intentional WS close)
+                    # so asyncio never logs "Task exception was never retrieved".
+                    _ft = asyncio.ensure_future(
                         self._handle_fetch_paused(rid, url, res_type)
+                    )
+                    _ft.add_done_callback(
+                        lambda t: t.exception() if not t.cancelled() else None
                     )
 
         except websockets.exceptions.ConnectionClosed:
@@ -3289,6 +3294,10 @@ class CDPClient:
         Uses the HTTP ``/json/close/{tab_id}`` endpoint which needs no
         WebSocket — so it works even when the WS connection is gone.
         Activates the current tab first (consistent tab-lifecycle order).
+
+        Idempotent: closing an already-closed tab (HTTP 404 from Chrome)
+        returns ``already_closed: True`` instead of raising — cleanup loops
+        racing LRU eviction must not log ERROR storms.
         """
         await self._activate_current()
         import httpx
@@ -3296,6 +3305,8 @@ class CDPClient:
         base = self.cdp_http_url.rstrip("/")
         async with httpx.AsyncClient(timeout=5.0) as hclient:
             resp = await hclient.get(f"{base}/json/close/{tab_id}")
+            if resp.status_code == 404:
+                return {"status": "ok", "tab_id": tab_id, "already_closed": True}
             resp.raise_for_status()
         return {"status": "ok", "tab_id": tab_id}
 
