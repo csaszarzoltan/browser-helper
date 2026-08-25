@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.32.0] — 2026-08-24
+### Fixed (BH 1.32 — 1.31 E2E-harness integrációs fájdalompontok)
+- **1. Sessions — X-Session-Auto opt-in + header OR cookie + stabil /session/new**: `POST /session/new` már `data`=`result`-ban is `session_id`-t ad (`api_success` mindkettőt írja); a middleware header-első (`X-Session-ID` || `bh_session`) — elég az egyik. 1.31 szigorú 400-ja `X-Session-Auto: true` headerrel (vagy `BH_SESSION_AUTO=1` env) visszakapcsolja a 1.30 auto-mintet (`run_op` + `_resolve_session_client` ContextVar flag). Tesztkörben (`PYTEST_CURRENT_TEST`/`BH_TEST_NO_CHROME`) változatlan fallback.
+- **2. Session isolation — runner ThreadPool x3 determinisztikussá**: `control_plane/runners/browser_helper_runner.py` globális `_bh_session_id` → `threading.local()` (`_bh_tls.sid` + `_bh_get_sid/_bh_set_sid`); `control_plane/api.py` BH invoker `list[str]` cache → `threading.local()` (`_bh_tls2`) — párhuzamos E2E worker nem lopja egymás tabját. 12/12 100% sorosan és x3-mal is.
+- **3. Observe séma fagyasztás (1.32)**: `/agent/observe` mostantól mindkét módban (`accessibility`/`semantic`) `nodes` **és** `elements` alias-t ad (mindkettő ugyanaz), `page.title`/`page.url` mindig jelen, `include`/`condensed`/`interactive_only` alias-ok stabilak — meglévő harness `nodes`/`elements` kód nem törik. `openapi.json` példák `pin_snapshot: bool` (nem snap string).
+- **4. Click selector + értelmes hiba**: `/agent/act click {"target":{"selector":"[data-view='research']"}}` már nem `Uncaught` — `ElementNotFoundError` `404` `target not found: selector ... (matches: N) — available candidates: [...]` formában, `AX` snapshot candidates-szal. `backend_node_id`/`text` ágnál is candidates.
+- **5. Envelope egységesítés + None-guard**: `action_failed`/`Uncaught`/`'NoneType' has no attribute 'get'` helyett `{status:"error", error:{code, message, details}}` + korrekt HTTP 400/404/503 + `trace` details `AttributeError/TypeError`-nál. `capture` screenshot: `{artifact, data, artifact_id, format}` — `data` vs `result.base64` keverés vége (`agent_api.md` is).
+- **6. Ergonomia**: új `GET|POST /page/visible-text?limit=10000` — gyors `innerText` idle-wait nélkül (a harness eddig `/eval {"js":"document.body.innerText"}` workaroundot használt). `/agent/console` + `/network/requests` válaszban `console_errors`/`failures`/`network_failures` alias-ok — `errors`/`failures`/`console_errors` bármelyike jó. `pin_snapshot: bool` docs javítva (nem snap string).
+
 ## [1.31.0] — 2026-08-24
 ### Fixed
 - **P0 REST session drift + tab-leak (`src/main.py`, `src/session_registry.py`)**: header-less browser ops (`/eval`, `/navigate`, `/click`…) no longer lazily mint a fresh `about:blank` tab — they now return `400 Missing session: send X-Session-ID` instead. Callers must `POST /session/new` once and echo `X-Session-ID` / `bh_session` on every later call. Global read-only ops (`/tabs`, `/sessions`, `/status`, …) still run on the shared client. Prevents the 11-tab `about:blank` accumulation and the `eval → ""` drift (direct CDP OK, BH REST empty) from 2026-08-24.

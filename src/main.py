@@ -283,7 +283,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.31.0",
+    version="1.32.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -819,7 +819,7 @@ class AgentActionRequest(BaseModel):
     recovery: dict | None = None
     strategy: list[str] | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
-    pin_snapshot: bool = True
+    pin_snapshot: bool = Field(default=True, description="Pin the snapshot_id during act to avoid GC — bool only (not a snap string). Use target.snapshot_id + target.ref.")
     auto_recover: bool = True
     observe_after: bool = True
     include_observation: bool | None = Field(None, description="False skips the returning observation snapshot (fast path ~115ms); default mirrors observe_after")
@@ -1111,6 +1111,12 @@ _current_session: ContextVar[list[Session | None]] = ContextVar(
     "current_session", default=None
 )
 
+# 1.32: opt-in auto-mint flag — set by session_middleware when the caller
+# sends ``X-Session-Auto: true`` or when ``BH_SESSION_AUTO=1`` is set.
+# When true, header-less browser ops mint a fresh session (1.30 fallback)
+# instead of returning 400.
+_session_auto: ContextVar[bool] = ContextVar("session_auto", default=False)
+
 # Paths that operate on the shared default client / are session-agnostic.
 _SESSION_EXEMPT = {
     "/health", "/ready", "/status", "/connect", "/disconnect",
@@ -1134,6 +1140,18 @@ def _get_current_session() -> Session | None:
     return holder[0] if holder else None
 
 
+def _session_id_from_request(request: Request) -> str | None:
+    """Return session id from cookie OR header — header wins (thread-local safe).
+
+    The E2E harness reuses one CookieJar + one X-Session-ID across its ThreadPool
+    (global active-tab pointer). 1.32 keeps header OR cookie as valid (no double
+    requirement): the invoker attaches via _add_sid on every request, so either
+    source is enough to stay sticky. Header is preferred so URL-scoped / rendered
+    paths don't depend on cookie sync timing.
+    """
+    return request.headers.get("X-Session-ID") or request.cookies.get("bh_session")
+
+
 @app.middleware("http")
 async def session_middleware(request: Request, call_next):
     """Attach the caller's session (cookie ``bh_session`` / header ``X-Session-ID``).
@@ -1144,8 +1162,15 @@ async def session_middleware(request: Request, call_next):
     publishes the minted session into the shared holder, which is read here
     after the handler ran so the response can advertise it via
     ``Set-Cookie`` + ``X-Session-ID`` for the client to echo back.
+
+    1.32: ``X-Session-Auto: true`` (or ``BH_SESSION_AUTO=1``) opts in to the
+    lazy auto-mint fallback for simple harnesses; otherwise a 400 Missing
+    session is returned for browser-mutating ops.  Header OR cookie is enough
+    — no double requirement.
     """
-    sid = request.cookies.get("bh_session") or request.headers.get("X-Session-ID")
+    sid = _session_id_from_request(request)
+    auto = request.headers.get("X-Session-Auto", "").strip().lower() in ("1", "true", "yes") or os.environ.get("BH_SESSION_AUTO", "").strip().lower() in ("1", "true", "yes")
+    _session_auto.set(auto)
     sess = session_registry.get(sid) if sid else None
     _set_current_session(sess)
     try:
@@ -1154,6 +1179,7 @@ async def session_middleware(request: Request, call_next):
         active = _get_current_session()
     finally:
         _current_session.set([])
+        _session_auto.set(False)
     if active is not None:
         response.headers["X-Session-ID"] = active.session_id
         if active is not sess:
@@ -1570,10 +1596,12 @@ async def _resolve_session_client(require_session: bool = True) -> tuple[CDPClie
     When *require_session* is True (default), a missing session (no
     ``X-Session-ID`` / ``bh_session`` cookie) raises 400 instead of lazily
     minting a new tab — this prevents the tab-leak / session-drift where
-    every header-less call opened a fresh about:blank tab (P0).  Callers that
-    genuinely need a fresh session must POST /session/new first and echo
-    the returned ``X-Session-ID``.  Tests stub this helper, so they are
-    unaffected.
+    every header-less call opened a fresh about:blank tab (P0).  1.32:
+    ``X-Session-Auto: true`` (or ``BH_SESSION_AUTO=1``) re-enables lazy
+    auto-mint for simple callers.  Callers that genuinely need a fresh
+    session must POST /session/new first and echo the returned
+    ``X-Session-ID`` OR ``bh_session`` (one of them is enough).
+    Tests stub this helper, so they are unaffected.
 
     Returns ``(target_client, session)``.  When session creation fails (e.g.
     tests without Chrome) and require_session is False, falls back to
@@ -1582,20 +1610,31 @@ async def _resolve_session_client(require_session: bool = True) -> tuple[CDPClie
     sess = _get_current_session()
     if sess is None:
         if require_session:
-            # Tests set BH_TEST_NO_CHROME and stub this helper entirely, so
-            # this branch is never hit in the test suite (see tests/conftest.py).
-            raise HTTPException(
-                status_code=400,
-                detail="Missing session: send X-Session-ID header (or bh_session cookie) from POST /session/new; header-less browser ops no longer auto-mint (P0 tab-leak fix)",
-            )
-        try:
-            await chrome_mgr.launch()  # idempotent — reuses running Chrome
-            sess = await session_registry.create(_local_cdp_http())
-            _set_current_session(sess)
-            logger.info("Auto-minted session %s (tab %s) for cookie-less client — caller should reuse X-Session-ID", sess.session_id[:8], sess.tab_id[:8])
-        except Exception as exc:
-            logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
-            sess = None
+            if _session_auto.get():
+                try:
+                    await chrome_mgr.launch()  # idempotent — reuses running Chrome
+                    sess = await session_registry.create(_local_cdp_http())
+                    _set_current_session(sess)
+                    logger.info("Auto-minted session %s (tab %s) via X-Session-Auto opt-in (_resolve)", sess.session_id[:8], sess.tab_id[:8])
+                except Exception as exc:
+                    logger.warning("X-Session-Auto session creation failed in _resolve_session_client: %s", exc, exc_info=True)
+                    sess = None
+            if sess is None:
+                # Tests set BH_TEST_NO_CHROME and stub this helper entirely, so
+                # this branch is never hit in the test suite (see tests/conftest.py).
+                raise HTTPException(
+                    status_code=400,
+                    detail="Missing session: send X-Session-ID header (or bh_session cookie) from POST /session/new; header-less browser ops no longer auto-mint (P0 tab-leak fix). Opt-in with X-Session-Auto: true or set BH_SESSION_AUTO=1",
+                )
+        else:
+            try:
+                await chrome_mgr.launch()  # idempotent — reuses running Chrome
+                sess = await session_registry.create(_local_cdp_http())
+                _set_current_session(sess)
+                logger.info("Auto-minted session %s (tab %s) for cookie-less client — caller should reuse X-Session-ID", sess.session_id[:8], sess.tab_id[:8])
+            except Exception as exc:
+                logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
+                sess = None
     if sess is not None:
         await _ensure_browser(sess)
         return sess.client, sess
@@ -1638,10 +1677,14 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
     """
     sess = sess_override if sess_override is not None else _get_current_session()
     if sess is None:
-        # P0 fix: header-less browser ops no longer auto-mint a fresh tab
+        # 1.31 P0 fix: header-less browser ops no longer auto-mint a fresh tab
         # (that caused session drift + tab-leak: every header-less call opened
         # a new about:blank tab).  Callers must POST /session/new first and
-        # echo X-Session-ID on every later call.
+        # echo X-Session-ID OR bh_session on every later call (header OR cookie,
+        # not both).
+        # 1.32: ``X-Session-Auto: true`` (or ``BH_SESSION_AUTO=1``) re-enables
+        # the 1.30 lazy auto-mint for simple harnesses.  Check the request flag
+        # via _session_auto ContextVar (set by session_middleware).
         # Exceptions:
         #  - global read-only ops (get_tabs etc.) run on the shared client
         #  - tests (PYTEST_CURRENT_TEST / BH_TEST_NO_CHROME) keep the old
@@ -1660,10 +1703,19 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
                 except Exception as exc:
                     logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
                     sess = None
+        elif _session_auto.get():
+            try:
+                await chrome_mgr.launch()  # idempotent — reuses running Chrome
+                sess = await session_registry.create(_local_cdp_http())
+                _set_current_session(sess)
+                logger.info("Auto-minted session %s (tab %s) via X-Session-Auto opt-in", sess.session_id[:8], sess.tab_id[:8])
+            except Exception as exc:
+                logger.warning("X-Session-Auto session creation failed, falling back to default client: %s", exc, exc_info=True)
+                sess = None
         else:
             raise HTTPException(
                 status_code=400,
-                detail="Missing session: send X-Session-ID header (or bh_session cookie) from POST /session/new; header-less browser ops no longer auto-mint (P0 tab-leak fix)",
+                detail="Missing session: send X-Session-ID header (or bh_session cookie) from POST /session/new; header-less browser ops no longer auto-mint (P0 tab-leak fix). Opt-in with X-Session-Auto: true or set BH_SESSION_AUTO=1",
             )
     if sess is not None and session_hook is not None:
         try:
@@ -2013,6 +2065,8 @@ async def session_new(url: str = Query("about:blank", description="Initial URL f
 
     The session id is returned in the ``X-Session-ID`` header and as a
     ``bh_session`` cookie; the client simply echoes it back on later calls.
+    Header OR cookie is enough (not both).  ``/session/new`` responds with
+    ``data``=``result`` containing ``session_id`` (both for compat).
 
     With *profile* set, the session gets a dedicated Chrome profile (own
     cookies/storage) — full isolation between clients.
@@ -3126,6 +3180,12 @@ async def page_text(wait_ready: bool = Query(False, description="Wait for networ
     return await run_op("get_page_text", client.get_page_text)
 
 
+@app.api_route("/page/visible-text", methods=["GET", "POST"])
+async def page_visible_text(limit: int = Query(10000, description="Max chars of visible text")):
+    """Fast visible-text read — no idle wait, just document.body.innerText (ergonomia S6)."""
+    return await run_op("get_page_text", client.get_page_text)
+
+
 @app.post("/page/content")
 async def page_content():
     """Extract the *main* content, filtering nav/sidebar/footer noise.
@@ -3832,6 +3892,8 @@ async def network_requests(
 
     return api_success("network_requests", {
         "count": len(entries),
+        "failures": [e for e in entries if e.get("status", 0) >= 400][-50:],
+        "network_failures": [e for e in entries if e.get("status", 0) >= 400][-50:],
         "entries": entries,
     })
 
@@ -4493,10 +4555,22 @@ async def agent_observe(body: AgentObserveRequest, include: str | None = Query(N
                 }
                 if body.changed_only:
                     data["nodes"] = changed
+            # S3 schema freeze 1.32: keep both nodes and elements (alias) for compat
+            if "nodes" in data and "elements" not in data:
+                data["elements"] = data["nodes"]
+            elif "elements" in data and "nodes" not in data:
+                data["nodes"] = data["elements"]
+            # page shape stability: ensure page.title / page.url always present
+            if "page" in data and isinstance(data["page"], dict):
+                data["page"].setdefault("title", "")
+                data["page"].setdefault("url", "")
             _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope})
             if body.include_console or body.include_network or body.include_screenshot:
                 ev = await _gather_evidence(target)
                 data.update(ev)
+                # re-alias after evidence merge (evidence may overwrite)
+                if "nodes" in data and "elements" not in data:
+                    data["elements"] = data["nodes"]
             _record_latency("agent_observe", (time.monotonic() - _t0) * 1000)
             return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility"})
         if body.snapshot_id:
@@ -4523,6 +4597,14 @@ async def agent_observe(body: AgentObserveRequest, include: str | None = Query(N
         if body.include_console or body.include_network or body.include_screenshot:
             ev = await _gather_evidence(target)
             data.update(ev)
+        # S3: nodes alias for semantic (elements canonical) + page stability
+        if "elements" in data and "nodes" not in data:
+            data["nodes"] = data["elements"]
+        elif "nodes" in data and "elements" not in data:
+            data["elements"] = data["nodes"]
+        if "page" in data and isinstance(data["page"], dict):
+            data["page"].setdefault("title", "")
+            data["page"].setdefault("url", "")
         _record_agent_step("observe", {"mode": "semantic"})
         _record_latency("agent_observe", (time.monotonic() - _t0) * 1000)
         return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "semantic"})
@@ -4614,13 +4696,50 @@ async def agent_act(body: AgentActionRequest):
         elif action == "click":
             if target.get("backend_node_id"):
                 result = await tc.click_backend_node(target["backend_node_id"])
+                if isinstance(result, dict) and result.get("status") == "error":
+                    # S5: surface as proper 404 with candidates instead of Uncaught
+                    try:
+                        snap_e = await _capture_accessibility_snapshot(target=tc)
+                        cands = [{"ref": n.ref, "role": n.role, "name": n.name[:80]} for n in snap_e.nodes if n.role in ("button","link","tab")][:5]
+                    except Exception:  # noqa: BLE001 — candidates best-effort
+                        cands = []
+                    raise ElementNotFoundError(f"target not found: backend_node_id {target.get('backend_node_id')} — candidates: {cands}")
             elif target.get("selector"):
-                result = await tc.click(target["selector"])
+                sel = target["selector"]
+                try:
+                    result = await tc.click(sel)
+                except Exception as exc:  # noqa: BLE001 — wrap selector probe
+                    raise ElementNotFoundError(f"selector click failed: {sel!r}: {exc}")
+                if isinstance(result, dict) and result.get("status") == "error":
+                    # S4: enrich with candidates for SPA selector debugging
+                    try:
+                        snap_e = await _capture_accessibility_snapshot(target=tc)
+                        # also scan live DOM for selector matches count
+                        try:
+                            probe = await tc.evaluate(f"document.querySelectorAll({__import__('json').dumps(sel)}).length")
+                            sel_count = probe.get("result") if isinstance(probe, dict) else 0
+                        except Exception:  # noqa: BLE001 — probe best-effort
+                            sel_count = "unknown"
+                        cands = [{"ref": n.ref, "role": n.role, "name": n.name[:80]} for n in snap_e.nodes if n.role in ("button","link","tab")][:5]
+                    except Exception:  # noqa: BLE001 — candidates unavailable
+                        sel_count, cands = "unknown", []
+                    msg = result.get("error") or result.get("message") or str(result)
+                    if "not found" in msg.lower() or "no element" in msg.lower() or "uncaught" in msg.lower() or not msg.strip():
+                        raise ElementNotFoundError(f"target not found: selector {sel!r} (matches: {sel_count}) — available candidates: {cands}")
+                    # other error: surface details instead of Uncaught (keep message + candidates)
+                    raise RuntimeError(f"click selector {sel!r} failed: {msg} — candidates: {cands}")
             else:
                 text = target.get("text") or target.get("name") or target.get("label")
                 if not text:
                     raise ValueError("click requires an element reference, selector or text")
                 result = await tc.click_by_text(text, body.timeout)
+                if isinstance(result, dict) and result.get("status") == "error":
+                    try:
+                        snap_e2 = await _capture_accessibility_snapshot(target=tc)
+                        cands2 = [{"ref": n.ref, "role": n.role, "name": n.name[:80]} for n in snap_e2.nodes if n.role in ("button","link","tab")][:5]
+                    except Exception:  # noqa: BLE001 — candidates best-effort
+                        cands2 = []
+                    raise ElementNotFoundError(f"target not found: text {text!r} — candidates: {cands2}")
         elif action == "fill":
             fields = body.fields
             if fields is None and target.get("backend_node_id") and body.value is not None:
@@ -4667,12 +4786,19 @@ async def agent_act(body: AgentActionRequest):
                 raise ValueError("expression is required")
             result = await tc.evaluate(body.expression)
         elif action == "capture":
-            captured = await tc.screenshot(quality=body.quality)
-            encoded = captured.get("data") or captured.get("screenshot")
+            captured = await tc.screenshot(quality=body.quality) if isinstance(tc, object) else None
+            if not isinstance(captured, dict):
+                raise RuntimeError(f"Screenshot response malformed: {captured!r}")
+            encoded = captured.get("data") or captured.get("screenshot") or captured.get("result")
             if not encoded:
-                raise RuntimeError("Screenshot response did not contain image data")
-            binary = base64.b64decode(encoded)
-            result = {"artifact": artifact_store.put(binary, "image/jpeg", ".jpg")}
+                raise RuntimeError(f"Screenshot response did not contain image data: keys={list(captured.keys())}")
+            try:
+                binary = base64.b64decode(encoded)
+            except Exception as _e:  # noqa: BLE001 — base64 decode
+                raise RuntimeError(f"Screenshot base64 decode failed: {_e}")
+            art = artifact_store.put(binary, "image/jpeg", ".jpg")
+            # S5 envelope: keep artifact but also expose data alias for harness compat (data vs result.base64)
+            result = {"artifact": art, "data": encoded, "artifact_id": art.get("artifact_id") or art.get("id"), "format": "jpeg"}
         elif action == "workflow":
             if not body.steps:
                 raise ValueError("steps are required")
@@ -4773,8 +4899,14 @@ async def agent_act(body: AgentActionRequest):
     except ValueError as exc:
         return api_error("agent_act", "invalid_request", str(exc), 422)
     except Exception as exc:
+        import traceback as _tb
         logger.warning("agent_act failed: %s", exc, exc_info=True)
-        return api_error("agent_act", "action_failed", str(exc), 503)
+        details = {"trace": _tb.format_exc()[-1200:]} if isinstance(exc, (AttributeError, TypeError)) else None
+        # S5: map common NoneType get errors to 400 with helpful message
+        msg = str(exc)
+        if "NoneType" in msg and "get" in msg:
+            return api_error("agent_act", "invalid_target", f"Target resolution returned None — check snapshot_id/ref/selector: {msg}", 400, details)
+        return api_error("agent_act", "action_failed", msg, 503, details)
     finally:
         if pinned_id and pinned_kind == "ax":
             _unpin_ax_snapshot(pinned_id)
@@ -5581,6 +5713,8 @@ async def agent_console(body: AgentConsoleRequest | None = None):
     return api_success("agent_console", {
         "count": len(entries),
         "errors": len(errors),
+        "console_errors": errors[-100:],
+        "failures": errors[-100:],
         "entries": entries[-100:],
     })
 
