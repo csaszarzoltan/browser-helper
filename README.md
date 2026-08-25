@@ -93,7 +93,7 @@ curl -s -X POST "http://localhost:8000/session/new?url=https://example.com"
 # 3. Observe the page as an accessibility tree
 curl -s -X POST http://localhost:8000/agent/observe \
   -H 'Content-Type: application/json' \
-  -H 'X-Session-ID: <your-session-id>' \
+  -H 'X-Session-ID (or `bh_session` cookie — one is enough; `X-Session-Auto: true` restores 1.30 auto-mint): <your-session-id>' \
   -d '{"mode":"accessibility","max_nodes":50,"include_console":true}'
 
 # 4. Act on what you saw — click by ref, skip the return-snapshot for speed

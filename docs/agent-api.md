@@ -1,6 +1,16 @@
-# LLM Agent API
+# LLM Agent API — Browser Helper 1.32
 
 Browser Helper 1.0 provides a compact, deterministic interface for LLM agents. The low-level REST API remains available, while agents normally need only capability discovery, observation, action, and artifact retrieval.
+
+## 1.32 — Session & ergonomia (what changed in 1.32)
+
+- **Session:** `POST /session/new` → `{session_id}` in `data` **and** `result` (both). Every later call send `X-Session-ID: <id>` **OR** `bh_session` cookie — one is enough (header wins). Header-less browser ops return `400 Missing session… Opt-in with X-Session-Auto: true` unless `X-Session-Auto: true` (or `BH_SESSION_AUTO=1` env) is set — then 1.30 lazy auto-mint is restored.
+- **Isolation:** one `session_id` = one tab. `ThreadPool x3` with one sid per thread → each worker observes/clicks its own tab (`12/12` serial and `x3` parallel). Use `POST /session/{id}/clone` / `export-cookies` / `import-cookies` for auth-clone.
+- **Observe frozen 1.32:** `POST /agent/observe` returns `nodes` **and** `elements` (alias, same list), `page: {title, url}` always present. `mode: accessibility|semantic`, `condensed|interactive_only|include` stable; `nodes: [{role, name, element_id, visible, enabled}]`.
+- **Click selector:** `POST /agent/act {"action":"click","target":{"selector":"[data-view='research']"}}` works; on miss `404 element_not_found` with `available candidates` (AX snapshot + `matches: N`). `text`/`role+name` still works, but selector replaces the `HUNGARIAN_NAV` map.
+- **Envelope:** every error `{status:"error", error:{code,message,details}}` with proper `HTTP 400/404/409/422/503/504` (`Uncaught`/`NoneType.get` → `400/404` + `trace`).
+- **Capture:** `POST /agent/act {"action":"capture"}` → `data: {artifact, data: base64, artifact_id, format: jpeg}` (not `result.base64`). `GET /artifacts/{id}` still serves the bytes.
+- **Ergonomia:** `GET|POST /page/visible-text?limit=10000` — fast `innerText` without `wait_ready` idle-wait. `POST /agent/console` returns `count+errors+console_errors+failures+entries`; `GET /network/requests` returns `count+failures+network_failures+entries` — tolerant aliases. `pin_snapshot: bool` only (`target.snapshot_id` holds the snap string).
 
 ## Unified response envelope
 
