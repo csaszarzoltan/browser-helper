@@ -75,6 +75,24 @@ _TOOL_CAPABILITY = {
     # C9+C10: rate_limiter_status + dialog_handle
     "rate_limiter_status": "browser.core",
     "dialog_handle": "browser.core",
+    # 6× E2E recorder/validation (v1.34 — 6 csoportos validációs csomag)
+    "browser_get_accessibility_tree": "agent.semantic",
+    "browser_find_semantic_elements": "agent.semantic",
+    "browser_get_page_structure": "agent.semantic",
+    "browser_navigate": "browser.core",
+    "browser_interact": "browser.core",
+    "browser_upload_file": "browser.core",
+    "browser_download_file": "browser.core",
+    "browser_get_console_logs": "agent.testing",
+    "browser_get_network_activity": "browser.core",
+    "browser_wait_for_condition": "agent.testing",
+    "browser_take_screenshot": "browser.core",
+    "browser_highlight_elements": "agent.testing",
+    "browser_start_recorder": "agent.flow",
+    "browser_record_step": "agent.flow",
+    "browser_export_playwright_spec": "agent.flow",
+    "browser_inject_storage_state": "diagnostics.cookies",
+    "browser_reset_session": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -398,14 +416,168 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         },
     },
     # C9+C10: rate_limiter_status + dialog_handle
-    "rate_limiter_status": {"type": "object", "properties": {}},
+    "rate_limiter_status": { "type": "object", "properties": {} },
     "dialog_handle": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "description": "accept|dismiss — dialog action"},
-            "prompt_text": {"type": "string", "description": "Prompt text when accepting a prompt() dialog (optional)"},
+            "action": { "type": "string", "description": "accept|dismiss — dialog action" },
+            "prompt_text": { "type": "string", "description": "Prompt text when accepting a prompt() dialog (optional)" },
         },
         "required": ["action"],
+    },
+    # 6× E2E recorder/validation — group 1: a11y
+    "browser_get_accessibility_tree": {
+        "type": "object",
+        "properties": {
+            "token_limit": { "type": "integer", "description": "Max tokens of serialized ARIA tree (default 6000, capped 20000)" },
+            "max_nodes": { "type": "integer", "description": "Max AX nodes to return (default 250, capped 1000)" },
+            "interactive_only": { "type": "boolean", "description": "Only interactive (focusable/clickable) nodes (default false)" },
+            "scope": { "type": "string", "description": "page|dialog|viewport (default page)" },
+            "include_hidden": { "type": "boolean", "description": "Include aria-hidden nodes (default false)" },
+        },
+    },
+    "browser_find_semantic_elements": {
+        "type": "object",
+        "properties": {
+            "query": { "type": "string", "description": "Accessible name / role filter substring (e.g. 'Login', 'submit')" },
+            "role": { "type": "string", "description": "Optional ARIA role filter (button, link, textbox, …)" },
+            "max_results": { "type": "integer", "description": "Max candidates to return (default 20, capped 100)" },
+            "suggest_locator": { "type": "boolean", "description": "Include Playwright getByRole/getByLabel/getByTestId suggestion per element (default true)" },
+        },
+    },
+    "browser_get_page_structure": {
+        "type": "object",
+        "properties": {
+            "include_iframes": { "type": "boolean", "description": "Include iframe list (default true)" },
+            "max_chars": { "type": "integer", "description": "Max visible-text chars (default 6000, capped 20000)" },
+        },
+    },
+    # group 2: deterministic interactions
+    "browser_navigate": {
+        "type": "object",
+        "properties": {
+            "url": { "type": "string", "description": "Target URL to navigate to" },
+            "wait_until": { "type": "string", "description": "domContentLoaded|load|networkIdle (default domContentLoaded)" },
+            "settle": { "type": "boolean", "description": "Extra SPA settle: wait for network-idle + readyState=complete after load (maps/maps-heavy pages, default false)" },
+            "timeout": { "type": "integer", "description": "Max seconds for the whole navigation (default 10, clamped 1-30)" },
+        },
+        "required": ["url"],
+    },
+    "browser_interact": {
+        "type": "object",
+        "properties": {
+            "selector": { "type": "string", "description": "CSS selector of the target" },
+            "action": { "type": "string", "description": "click|fill|press|select|type (default click). 'type' and 'fill' are aliases" },
+            "text": { "type": "string", "description": "Text to type/fill or key name for press (Enter, Escape, …)" },
+            "option": { "type": "string", "description": "Option value/text for select" },
+            "wait_visible": { "type": "boolean", "description": "Wait until the selector is visible before acting (default true — actionability check)" },
+            "wait_ms": { "type": "integer", "description": "Max wait for visibility (default 8000, clamped 0-30000)" },
+            "scroll_into_view": { "type": "boolean", "description": "Scroll the element into view before acting (default true)" },
+        },
+        "required": ["selector"],
+    },
+    "browser_upload_file": {
+        "type": "object",
+        "properties": {
+            "selector": { "type": "string", "description": "CSS selector of <input type=file>" },
+            "path": { "type": "string", "description": "Sandbox file to upload (absolute path under /tmp/bh-upload-sandbox or the browser sandbox dir)" },
+            "filename": { "type": "string", "description": "Optional override filename reported to the page (default: basename of path)" },
+        },
+        "required": ["selector", "path"],
+    },
+    "browser_download_file": {
+        "type": "object",
+        "properties": {
+            "url": { "type": "string", "description": "URL to download (navigates the tab)" },
+            "timeout": { "type": "integer", "description": "Max seconds to wait (default 30)" },
+        },
+        "required": ["url"],
+    },
+    # group 3: diagnostics
+    "browser_get_console_logs": {
+        "type": "object",
+        "properties": {
+            "level": { "type": "string", "description": "error|warning|info|all (default error)" },
+            "since": { "type": "number", "description": "Only entries with timestamp >= this (unix seconds)" },
+            "limit": { "type": "integer", "description": "Max entries (default 50, capped 200)" },
+        },
+    },
+    "browser_get_network_activity": {
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Filter by URL path substring (e.g. '/api/')" },
+            "method": { "type": "string", "description": "Filter by HTTP method" },
+            "status_min": { "type": "integer", "description": "Minimum HTTP status (e.g. 400 for failures)" },
+            "since": { "type": "number", "description": "Only entries with timestamp >= this" },
+            "limit": { "type": "integer", "description": "Max entries (default 100, capped 500)" },
+        },
+    },
+    "browser_wait_for_condition": {
+        "type": "object",
+        "properties": {
+            "js": { "type": "string", "description": "JS expression returning truthy when ready, e.g. \"window.map && window.map.loaded() === true\"" },
+            "selector": { "type": "string", "description": "Alternative: CSS selector to wait for (mutually exclusive with js)" },
+            "visible": { "type": "boolean", "description": "For selector mode: wait until visible (default true)" },
+            "timeout": { "type": "integer", "description": "Max seconds to wait (default 10, clamped 1-60)" },
+        },
+    },
+    # group 4: visual proof
+    "browser_take_screenshot": {
+        "type": "object",
+        "properties": {
+            "scope": { "type": "string", "description": "viewport|full|element (default viewport)" },
+            "selector": { "type": "string", "description": "Required when scope=element — CSS selector of the component" },
+            "quality": { "type": "integer", "description": "JPEG quality 1-100 (default 80)" },
+        },
+    },
+    "browser_highlight_elements": {
+        "type": "object",
+        "properties": {
+            "selectors": { "type": "array", "items": { "type": "string" }, "description": "CSS selectors to highlight (1-10)" },
+            "duration_ms": { "type": "integer", "description": "Overlay lifetime in ms (default 4000, clamped 500-30000)" },
+        },
+        "required": ["selectors"],
+    },
+    # group 5: Playwright spec export
+    "browser_start_recorder": {
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "description": "Human recording name (default rec_<hex>)" },
+            "ac": { "type": "string", "description": "Gherkin acceptance criterion id to associate (e.g. AC-042)" },
+        },
+    },
+    "browser_record_step": {
+        "type": "object",
+        "properties": {
+            "step": { "type": "string", "description": "Human step description (e.g. \"Click Login\")" },
+            "selector": { "type": "string", "description": "Stable selector/locator used (Playwright locator string)" },
+            "action": { "type": "string", "description": "click|fill|press|select|navigate|assert…" },
+            "value": { "type": "string", "description": "Optional value/expected text" },
+        },
+        "required": ["step"],
+    },
+    "browser_export_playwright_spec": {
+        "type": "object",
+        "properties": {
+            "suite_name": { "type": "string", "description": "describe() title (default: recording name)" },
+            "recording_id": { "type": "string", "description": "Recording id to export (default: active recording)" },
+            "stop_recording": { "type": "boolean", "description": "Stop the recording after export (default true)" },
+        },
+    },
+    # group 6: session/state isolation
+    "browser_inject_storage_state": {
+        "type": "object",
+        "properties": {
+            "cookies": { "type": "array", "items": { "type": "object" }, "description": "Cookie list {name, value, domain?, path?, sameSite?, expires?}" },
+            "origins": { "type": "array", "items": { "type": "object" }, "description": "localStorage origins [{origin, localStorage:[{name,value}]}]" },
+            "tenant": { "type": "string", "description": "Optional e2e tenant id injected into localStorage['tenant'] (e.g. demo-e2e-$RUN_ID)" },
+        },
+    },
+    "browser_reset_session": {
+        "type": "object",
+        "properties": {
+            "scope": { "type": "string", "description": "cookies|storage|all (default all)" },
+        },
     },
 }
 

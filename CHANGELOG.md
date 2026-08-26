@@ -4,6 +4,39 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.34.0] — 2026-08-26
+### Added — 6 csoportos E2E validációs csomag (47 → 64 MCP eszköz)
+
+17 új MCP eszköz a 6 kért csoportban — a harness ezzel törékenység + hallucináció nélkül éri el
+a validált E2E teszteket:
+
+**1. Szemantikus DOM & A11y (3)**
+- \`browser_get_accessibility_tree\` — token-optimalizált ARIA fa (szerep/n név/állapot, nem nyers HTML; 20000 char limit, scope page|dialog).
+- \`browser_find_semantic_elements\` — interaktív elemek térképe → Playwright-stabil lokátor-javaslatok (\`getByRole|getByLabel|getByTestId\`) törékeny CSS helyett.
+- \`browser_get_page_structure\` — tömör oldalszerkezet: forms + buttons + dialogs (+ iframes), visible_text_len.
+
+**2. Determinisztikus interakciók (4)**
+- \`browser_navigate\` — \`domContentLoaded|load|networkIdle\` + extra \`settle\` (SPA idle barrier) térképes felületekhez.
+- \`browser_interact\` — click/fill/press/select **egy hívásban** actionability check-kel (wait_visible + scroll_into_view, 0–30000 ms).
+- \`browser_upload_file\` / \`browser_download_file\` — sandboxed file I/O (\`/tmp/bh-upload-sandbox\` vagy \`~/.browser-helper/uploads\`) + artifact store.
+
+**3. Diagnosztika (3)**
+- \`browser_get_console_logs\` — JS hibák + stack trace szint szerint (error|warning|info|all).
+- \`browser_get_network_activity\` — 4xx/5xx + timings + payloads, szűrhető path/method/status_min/since szerint.
+- \`browser_wait_for_condition\` — DOM/útvonal/JS predicate (\`window.map.loaded() === true\`) egy hívásban (mutually exclusive js|selector).
+
+**4. Vizuális bizonyítás (2)**
+- \`browser_take_screenshot\` — viewport|full|element (selector + minőség).
+- \`browser_highlight_elements\` — piros overlay (1–10 selector, 0.5–30s), a következő screenshot vizuálisan igazolja a célzást.
+
+**5. Playwright kódexport (3)**
+- \`browser_start_recorder\` / \`browser_record_step\` — Gherkin AC-hoz kötött felderítés-rögzítés.
+- \`browser_export_playwright_spec\` — tiszta TypeScript \`.spec.ts\` explicit \`.click()/.fill()/.toBeVisible()\` + artifact.
+
+**6. Session izoláció (2)**
+- \`browser_inject_storage_state\` — JWT/cookies + localStorage origins + tenant (\`demo-e2e-\$RUN_ID\`) injektálás a redundáns login kihagyásához.
+- \`browser_reset_session\` — cache/cookie/storage teljes törlés (scope cookies|storage|all).
+
 ## [1.33.0] — 2026-08-25
 ### Added (gap-analysis P0–P2 — docs/gap-analysis-testing-info.md)
 - **P0-1 wait+click egy hívásban:** `POST /agent/act` új `wait_until_visible` (bool) + `wait_ms` (0–30000, default 5000) mezők — SPA hydration után determinisztikus click; timeout → 404 `not visible after Nms`; sikernél `data.wait_until_visible.waited_ms`.

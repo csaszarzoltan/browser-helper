@@ -94,6 +94,23 @@ EXPECTED_TOOLS = [
     # C9+C10: rate_limiter_status + dialog_handle
     "rate_limiter_status",
     "dialog_handle",
+    "browser_get_accessibility_tree",
+    "browser_find_semantic_elements",
+    "browser_get_page_structure",
+    "browser_navigate",
+    "browser_interact",
+    "browser_upload_file",
+    "browser_download_file",
+    "browser_get_console_logs",
+    "browser_get_network_activity",
+    "browser_wait_for_condition",
+    "browser_take_screenshot",
+    "browser_highlight_elements",
+    "browser_start_recorder",
+    "browser_record_step",
+    "browser_export_playwright_spec",
+    "browser_inject_storage_state",
+    "browser_reset_session",
 ]
 
 # tool -> required parameter names (spec §8.1: exact required params)
@@ -149,6 +166,23 @@ EXPECTED_REQUIRED_PARAMS = {
     # C9+C10: rate_limiter_status + dialog_handle
     "rate_limiter_status": [],
     "dialog_handle": ["action"],
+    "browser_get_accessibility_tree": [],
+    "browser_find_semantic_elements": [],
+    "browser_get_page_structure": [],
+    "browser_navigate": ["url"],
+    "browser_interact": ["selector"],
+    "browser_upload_file": ["selector", "path"],
+    "browser_download_file": ["url"],
+    "browser_get_console_logs": [],
+    "browser_get_network_activity": [],
+    "browser_wait_for_condition": [],
+    "browser_take_screenshot": [],
+    "browser_highlight_elements": ["selectors"],
+    "browser_start_recorder": [],
+    "browser_record_step": ["step"],
+    "browser_export_playwright_spec": [],
+    "browser_inject_storage_state": [],
+    "browser_reset_session": [],
 }
 
 # tool -> (capability_id, expected status)
@@ -204,6 +238,23 @@ EXPECTED_CAPABILITY = {
     # C9+C10: rate_limiter_status + dialog_handle
     "rate_limiter_status": ("browser.core", "ready"),
     "dialog_handle": ("browser.core", "ready"),
+    "browser_get_accessibility_tree": ("agent.semantic", "ready"),
+    "browser_find_semantic_elements": ("agent.semantic", "ready"),
+    "browser_get_page_structure": ("agent.semantic", "ready"),
+    "browser_navigate": ("browser.core", "ready"),
+    "browser_interact": ("browser.core", "ready"),
+    "browser_upload_file": ("browser.core", "ready"),
+    "browser_download_file": ("browser.core", "ready"),
+    "browser_get_console_logs": ("agent.testing", "ready"),
+    "browser_get_network_activity": ("browser.core", "ready"),
+    "browser_wait_for_condition": ("agent.testing", "ready"),
+    "browser_take_screenshot": ("browser.core", "ready"),
+    "browser_highlight_elements": ("agent.testing", "ready"),
+    "browser_start_recorder": ("agent.flow", "ready"),
+    "browser_record_step": ("agent.flow", "ready"),
+    "browser_export_playwright_spec": ("agent.flow", "ready"),
+    "browser_inject_storage_state": ("diagnostics.cookies", "ready"),
+    "browser_reset_session": ("browser.core", "ready"),
 }
 
 TOOL_MODULES = {
@@ -256,6 +307,23 @@ TOOL_MODULES = {
     "wait_network_idle": "tools",
     "rate_limiter_status": "tools",
     "dialog_handle": "tools",
+    "browser_get_accessibility_tree": "tools",
+    "browser_find_semantic_elements": "tools",
+    "browser_get_page_structure": "tools",
+    "browser_navigate": "tools",
+    "browser_interact": "tools",
+    "browser_upload_file": "tools",
+    "browser_download_file": "tools",
+    "browser_get_console_logs": "tools",
+    "browser_get_network_activity": "tools",
+    "browser_wait_for_condition": "tools",
+    "browser_take_screenshot": "tools",
+    "browser_highlight_elements": "tools",
+    "browser_start_recorder": "tools",
+    "browser_record_step": "tools",
+    "browser_export_playwright_spec": "tools",
+    "browser_inject_storage_state": "tools",
+    "browser_reset_session": "tools",
 }
 
 
@@ -840,7 +908,7 @@ class TestBehavioralFleet:
 class TestBehavioralFastMCP:
     """Real FastMCP server integration (spec §8.3)."""
 
-    def test_mcp_server_constructs_and_registers_12_tools(self):
+    def test_mcp_server_constructs_and_registers_tools(self):
         _require_pkg("mcp", "mcp SDK")
         from mcp_server.server import MCPServer
 

@@ -1116,3 +1116,739 @@ async def dialog_handle(
         return tool_result("dialog_handle", result)
     except Exception as exc:  # noqa: BLE001
         return tool_error("dialog_handle", "failed", str(exc))
+
+# ── 6× E2E validation — thin MCP wrappers over the REST engine ──
+
+# ── Group 1: semantic DOM & a11y ────────────────────────────────
+
+async def browser_get_accessibility_tree(
+    token_limit: int = 6000,
+    max_nodes: int = 250,
+    interactive_only: bool = False,
+    scope: str = "page",
+    include_hidden: bool = False,
+    ctx = None,
+) -> str:
+    """Token-optimized ARIA a11y tree (roles/names/states, not raw HTML) (capability ``agent.semantic``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_get_accessibility_tree scope={scope} max_nodes={max_nodes}")
+    try:
+        from main import _capture_accessibility_snapshot
+        target, _ = await _target()
+        snap = await _capture_accessibility_snapshot(
+            scope=scope, interactive_only=interactive_only, include_hidden=include_hidden, target=target
+        )
+        data = snap.as_dict(max_nodes=min(max(1, int(max_nodes)), 1000))
+        txt = data.get("text", "") or ""
+        limit = min(max(int(token_limit), 100), 20000) * 4
+        if len(txt) > limit:
+            data["text"] = txt[:limit]
+            data["truncated"] = True
+        return tool_result("browser_get_accessibility_tree", data)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_get_accessibility_tree", "observation_failed", str(exc))
+
+
+def _suggest_playwright_locator(node: object) -> str:
+    role = (getattr(node, "role", "") or "").lower()
+    name = (getattr(node, "name", "") or "").strip()
+    esc = name.replace("'", r"\'")
+    if role and name:
+        return f"getByRole('{role}', {{ name: '{esc}' }})"
+    if name:
+        return f"getByLabel('{esc}')"
+    if role:
+        return f"getByRole('{role}')"
+    return ""
+
+
+async def browser_find_semantic_elements(
+    query: str | None = None,
+    role: str | None = None,
+    max_results: int = 20,
+    suggest_locator: bool = True,
+    ctx = None,
+) -> str:
+    """Map interactive elements to Playwright-stable locators (capability ``agent.semantic``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_find_semantic_elements query={query!r} role={role}")
+    try:
+        from main import _capture_accessibility_snapshot
+        target, _ = await _target()
+        snap = await _capture_accessibility_snapshot(scope="page", include=None, target=target)
+        q = (query or "").casefold()
+        r = (role or "").casefold()
+        cands = []
+        for n in snap.nodes:
+            nm = (getattr(n, "name", "") or "").casefold()
+            ro = (getattr(n, "role", "") or "").casefold()
+            if r and ro != r:
+                continue
+            if q and q not in nm and q not in ro:
+                continue
+            item = {
+                "role": n.role,
+                "name": n.name,
+                "ref": getattr(n, "ref", None),
+                "backend_node_id": getattr(n, "backend_node_id", None),
+                "selector_hint": getattr(n, "selector_hint", "") or n.name[:80],
+            }
+            if suggest_locator:
+                item["suggested_locator"] = _suggest_playwright_locator(n)
+            cands.append(item)
+            if len(cands) >= min(max(1, int(max_results)), 100):
+                break
+        return tool_result("browser_find_semantic_elements", {"count": len(cands), "elements": cands, "snapshot_id": snap.snapshot_id})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_find_semantic_elements", "discovery_failed", str(exc))
+
+
+async def browser_get_page_structure(
+    include_iframes: bool = True,
+    max_chars: int = 6000,
+    ctx = None,
+) -> str:
+    """Concise page structure: forms + buttons + dialogs (+ optional iframes) (capability ``agent.semantic``, READY)."""
+    if ctx is not None:
+        ctx.info("browser_get_page_structure")
+    try:
+        target, _ = await _target()
+        from main import _capture_accessibility_snapshot as _cap_ax
+        from main import _capture_agent_snapshot, discover_forms, paginate_snapshot
+        snap_sem = await _capture_agent_snapshot(condensed=True, target=target)
+        page = paginate_snapshot(snap_sem, max_chars=int(min(max(int(max_chars), 500), 20000)), max_elements=80, cursor=None)
+        ax = await _cap_ax(scope="page", target=target)
+        forms = discover_forms(ax)
+        dialogs = [n.as_dict() for n in ax.nodes if (getattr(n, "role", "") or "").lower() in ("dialog", "alertdialog")]
+        iframes = []
+        if include_iframes:
+            try:
+                tmp = await target.evaluate("JSON.stringify([...document.querySelectorAll('iframe')].map((f,i)=>({index:i,src:f.src,title:f.title})))")
+                raw = tmp.get("result", "[]") if isinstance(tmp, dict) else "[]"
+                import json as _j
+                iframes = _j.loads(raw) if isinstance(raw, str) else raw
+            except Exception:  # noqa: BLE001
+                iframes = []
+        return tool_result("browser_get_page_structure", {
+            "forms": forms,
+            "buttons": page.get("elements", [])[:40],
+            "dialogs": dialogs[:10],
+            "iframes": iframes if include_iframes else [],
+            "visible_text_len": len(page.get("text", "")),
+            "snapshot_id": ax.snapshot_id,
+        })
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_get_page_structure", "discovery_failed", str(exc))
+
+
+# ── Group 2: deterministic interactions ─────────────────────────
+
+_NEGOTIATE = {"domContentLoaded", "load", "networkIdle"}
+
+
+async def browser_navigate(
+    url: str,
+    wait_until: str | None = None,
+    settle: bool = False,
+    timeout: int = 10,
+    ctx = None,
+) -> str:
+    """Navigate with load strategy (capability ``browser.core``, READY). *settle* additionally waits for SPA idle."""
+    if ctx is not None:
+        ctx.info(f"browser_navigate {url} wait_until={wait_until} settle={settle}")
+    try:
+        target, run_op = await _target()
+        if wait_until and wait_until not in _NEGOTIATE:
+            return tool_error("browser_navigate", "invalid_wait_until", "must be domContentLoaded|load|networkIdle")
+        res = await run_op("navigate", target.navigate, url)
+        if settle:
+            try:
+                tout = min(max(int(timeout), 1), 30)
+                extra = await run_op("navigate_settle", target.wait_for_network_idle, tout, 800)  # type: ignore[arg-type]
+                if isinstance(res, dict):
+                    d = res.get("data") or {}
+                    d["settle"] = extra if isinstance(extra, dict) else {}
+            except Exception:  # noqa: BLE001
+                pass
+        return tool_result("browser_navigate", res.get("data", res) if isinstance(res, dict) else res)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_navigate", "navigation_failed", str(exc))
+
+
+async def browser_interact(
+    selector: str,
+    action: str = "click",
+    text: str | None = None,
+    option: str | None = None,
+    wait_visible: bool = True,
+    wait_ms: int = 8000,
+    scroll_into_view: bool = True,
+    ctx = None,
+) -> str:
+    """One-call click/fill/press/select with actionability checks (capability ``browser.core``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_interact {action} {selector}")
+    try:
+        al = (action or "click").lower().strip()
+        if al in {"type", "fill"}:
+            al = "fill"
+        if al not in {"click", "fill", "press", "select"}:
+            return tool_error("browser_interact", "invalid_action", "action must be click|fill|press|select")
+        target, run_op = await _target()
+        if wait_visible:
+            tout = min(max(int(wait_ms), 0), 30000)
+            if tout:
+                sec = max(1, tout // 1000)
+                ww = await run_op("browser_interact_wait", target.wait_for_element, selector, sec, True)  # type: ignore[arg-type]
+                inner = (ww or {}).get("result", {}) if isinstance(ww, dict) else {}
+                if isinstance(inner, dict) and inner.get("status") != "ok":
+                    return tool_error("browser_interact", "not_actionable", f"selector {selector!r} not visible after {tout}ms")
+        if scroll_into_view:
+            try:
+                await target.evaluate(f"document.querySelector({__import__('json').dumps(selector)})?.scrollIntoView({{block:'center', behavior:'instant'}})")
+            except Exception:  # noqa: BLE001
+                pass
+        if al == "click" and text and action == "press":
+            al = "press"
+        if al == "click":
+            out = await run_op("click", target.click, selector)
+        elif al == "fill":
+            if text is None:
+                return tool_error("browser_interact", "missing_text", "fill requires text/value")
+            out = await run_op("type", target.type_text, selector, text)
+        elif al == "press":
+            key = text.strip() if (selector and text and text.strip()) else (text or selector)
+            out = await run_op("press_key", target.press_key, key, selector if selector != key else None)
+        elif al == "select":
+            if text is None and option is None:
+                return tool_error("browser_interact", "missing_option", "select requires option / text")
+            out = await run_op("select", target.form_select, "label", selector, option or text or "")
+        else:
+            return tool_error("browser_interact", "unknown_action", al)
+        return tool_result("browser_interact", out.get("data", out) if isinstance(out, dict) else out)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_interact", "interaction_failed", str(exc))
+
+
+async def browser_upload_file(
+    selector: str,
+    path: str,
+    filename: str | None = None,
+    ctx = None,
+) -> str:
+    """Upload a sandboxed file via <input type=file> (capability ``browser.core``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_upload_file {selector} <- {path}")
+    try:
+        from pathlib import Path as _P
+        sb = _P("/tmp/bh-upload-sandbox").resolve()
+        alt = (_P.home() / ".browser-helper" / "uploads").resolve()
+        p = _P(path).resolve()
+        if not (p.is_relative_to(sb) or p.is_relative_to(alt)):
+            return tool_error("browser_upload_file", "bad_path", "file must be inside /tmp/bh-upload-sandbox or ~/.browser-helper/uploads")
+        if not p.exists():
+            return tool_error("browser_upload_file", "not_found", f"file does not exist: {path}")
+        files_arg = [str(p)]
+        target, run_op = await _target()
+        if filename and filename.strip():
+            import shutil as _sh
+            import tempfile as _tmp
+            suffix = _P(filename).suffix or _P(path).suffix
+            base_dir = str(sb if sb.exists() else alt)
+            _P(base_dir).mkdir(parents=True, exist_ok=True)
+            with _tmp.NamedTemporaryFile(delete=False, dir=base_dir, suffix=suffix or None) as tmp:
+                _sh.copyfile(str(p), tmp.name)
+                renamed = _P(tmp.name).parent / filename
+                try:
+                    _P(tmp.name).rename(renamed)
+                except Exception:
+                    renamed = _P(tmp.name)
+                files_arg = [str(renamed)]
+        out = await run_op("upload_files", target.upload_files, selector, files_arg)
+        return tool_result("browser_upload_file", out.get("data", out) if isinstance(out, dict) else out)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_upload_file", "upload_failed", str(exc))
+
+
+async def browser_download_file(
+    url: str,
+    timeout: int = 30,
+    ctx = None,
+) -> str:
+    """Download a URL into the artifact store via the browser (sandboxed) (capability ``browser.core``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_download_file {url}")
+    try:
+        import mimetypes as _mime
+        import tempfile as _tmp
+        target, run_op = await _target()
+        with _tmp.TemporaryDirectory(prefix="bh-dl-") as dl_dir:
+            raw = await run_op("download", target.download_file, url, dl_dir, int(timeout))
+            if not isinstance(raw, dict) or raw.get("status") != "ok":
+                return tool_error("browser_download_file", "download_failed", str((raw or {}).get("error", raw)))
+            path = raw["path"]
+            mime = _mime.guess_type(path)[0] or "application/octet-stream"
+            from pathlib import Path as _P
+            def _read() -> bytes:
+                with open(path, "rb") as f:
+                    return f.read()
+            import asyncio as _aio
+            blob = await _aio.to_thread(_read)
+            from main import artifact_store
+            rec = artifact_store.put(blob, mime, suffix=_P(path).suffix or None, metadata={"source_url": url, "name": raw["name"]})
+        return tool_result("browser_download_file", {"artifact": rec, "file_name": raw["name"], "size_bytes": raw["size_bytes"]})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_download_file", "download_failed", str(exc))
+
+
+# ── Group 3: diagnostics ─────────────────────────────────────
+
+async def browser_get_console_logs(
+    level: str = "error",
+    since: float | None = None,
+    limit: int = 50,
+    ctx = None,
+) -> str:
+    """Fetch browser console logs with stack traces by level (capability ``agent.testing``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_get_console_logs level={level}")
+    try:
+        target, _ = await _target()
+        try:
+            await target.start_console_monitoring()
+        except Exception:  # noqa: BLE001
+            pass
+        if (level or "error").lower() == "all":
+            entries = target.console_entries if hasattr(target, "console_entries") else []
+        elif (level or "error").lower() == "error":
+            entries = target.get_console_entries("error") if hasattr(target, "get_console_entries") else []
+        else:
+            lv = (level or "").lower()
+            all_e = target.get_console_entries("error") + target.get_console_entries("warning") if hasattr(target, "get_console_entries") else []
+            entries = [e for e in all_e if (e.get("level", "") or "").lower() == lv]
+            if not entries:
+                entries = target.get_console_entries(level) if hasattr(target, "get_console_entries") else []
+        if since is not None:
+            entries = [e for e in entries if e.get("timestamp", 0) >= float(since)]
+        entries = (entries or [])[-min(max(1, int(limit)), 200):]
+        return tool_result("browser_get_console_logs", {"count": len(entries), "entries": entries})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_get_console_logs", "failed", str(exc))
+
+
+async def browser_get_network_activity(
+    path: str | None = None,
+    method: str | None = None,
+    status_min: int | None = None,
+    since: float | None = None,
+    limit: int = 100,
+    ctx = None,
+) -> str:
+    """Failed requests, api timings, payloads — filtered CDP network log (capability ``browser.core``, READY)."""
+    if ctx is not None:
+        ctx.info("browser_get_network_activity")
+    try:
+        target, _ = await _target()
+        try:
+            await target.start_network_monitoring()
+        except Exception:  # noqa: BLE001
+            pass
+        raw = await target.get_network_log()
+        entries = raw.get("entries", []) if isinstance(raw, dict) else []
+        if path:
+            entries = [e for e in entries if path in e.get("url", "")]
+        if method:
+            m = method.upper()
+            entries = [e for e in entries if (e.get("method", "") or "").upper() == m]
+        if status_min is not None:
+            entries = [e for e in entries if (e.get("status") or 0) >= int(status_min)]
+        if since is not None:
+            entries = [e for e in entries if e.get("timestamp", 0) >= float(since)]
+        entries = entries[-min(max(1, int(limit)), 500):]
+        return tool_result("browser_get_network_activity", {"count": len(entries), "entries": entries})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_get_network_activity", "failed", str(exc))
+
+
+async def browser_wait_for_condition(
+    js: str | None = None,
+    selector: str | None = None,
+    visible: bool = True,
+    timeout: int = 10,
+    ctx = None,
+) -> str:
+    """Wait for a JS predicate or a selector (capability ``agent.testing``, READY)."""
+    if not js and not selector:
+        return tool_error("browser_wait_for_condition", "invalid_params", "one of js or selector is required")
+    if js and selector:
+        return tool_error("browser_wait_for_condition", "invalid_params", "js and selector are mutually exclusive")
+    if ctx is not None:
+        ctx.info(f"browser_wait_for_condition {('js' if js else 'selector')}")
+    try:
+        target, _ = await _target()
+        tout = min(max(int(timeout), 1), 60)
+        if js:
+            poll_js = f"""(async function() {{
+  const deadline = Date.now() + {tout * 1000};
+  const poll = 200;
+  while (Date.now() < deadline) {{
+    try {{ const r = {js}; if (r) return JSON.stringify({{status:"ok", js_truthy:true}}); }} catch(e) {{}}
+    await new Promise(r => setTimeout(r, poll));
+  }}
+  return JSON.stringify({{status:"error", error:"timeout after {tout}s"}});
+}})();"""
+            out = await target.evaluate(poll_js)
+            raw = out.get("result", "{}") if isinstance(out, dict) else "{}"
+            import json as _j
+            data = _j.loads(raw) if isinstance(raw, str) else raw
+            if data.get("status") == "error":
+                return tool_error("browser_wait_for_condition", "timeout", data.get("error", "timeout"))
+            return tool_result("browser_wait_for_condition", data)
+        out = await target.wait_for_element(selector, tout, bool(visible))
+        inner = (out or {}).get("result", {}) if isinstance(out, dict) else {}
+        if isinstance(inner, dict) and inner.get("status") == "error":
+            return tool_error("browser_wait_for_condition", "timeout", inner.get("error", "timeout"))
+        return tool_result("browser_wait_for_condition", out)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_wait_for_condition", "failed", str(exc))
+
+
+# ── Group 4: visual proof ────────────────────────────────────
+
+async def browser_take_screenshot(
+    scope: str = "viewport",
+    selector: str | None = None,
+    quality: int = 80,
+    ctx = None,
+) -> str:
+    """Screenshots: viewport, full page, or a single component (capability ``browser.core``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_take_screenshot scope={scope}")
+    try:
+        target, run_op = await _target()
+        sc = (scope or "viewport").lower().strip()
+        if sc not in {"viewport", "full", "element"}:
+            return tool_error("browser_take_screenshot", "invalid_scope", "scope must be viewport|full|element")
+        if sc == "element":
+            if not selector:
+                return tool_error("browser_take_screenshot", "missing_selector", "selector required when scope=element")
+            out = await run_op("element_screenshot", target.element_screenshot, selector, int(quality))
+        elif sc == "full":
+            out = await run_op("full_screenshot", target.full_screenshot, int(quality))
+        else:
+            out = await run_op("screenshot", target.screenshot, int(quality))
+        if not isinstance(out, dict):
+            return tool_error("browser_take_screenshot", "failed", str(out))
+        data = out.get("data", out) if isinstance(out, dict) else out
+        return tool_result("browser_take_screenshot", data)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_take_screenshot", "failed", str(exc))
+
+
+async def browser_highlight_elements(
+    selectors: list[str],
+    duration_ms: int = 4000,
+    ctx = None,
+) -> str:
+    """Draw transient highlight overlays around selectors (capability ``agent.testing``, READY)."""
+    if not selectors or not isinstance(selectors, list):
+        return tool_error("browser_highlight_elements", "invalid_params", "selectors must be a non-empty list")
+    if len(selectors) > 10:
+        return tool_error("browser_highlight_elements", "too_many", "at most 10 selectors")
+    if ctx is not None:
+        ctx.info(f"browser_highlight_elements {len(selectors)} targets")
+    try:
+        target, _ = await _target()
+        import json as _j
+        dur = min(max(int(duration_ms), 500), 30000)
+        boots = r"""
+((selectors, dur) => {
+  document.querySelectorAll('[data-bh-highlight]').forEach(e => e.remove());
+  const styleId = 'bh-highlight-style';
+  if (!document.getElementById(styleId)) {
+    const s = document.createElement('style');
+    s.id = styleId;
+    s.textContent = '[data-bh-highlight]{position:absolute;border:3px solid #ff2d2d;box-shadow:0 0 0 2px rgba(255,45,45,.35), inset 0 0 0 2px #ff2d2d;pointer-events:none;z-index:2147483646;border-radius:6px;}';
+    document.head.appendChild(s);
+  }
+  let count = 0;
+  for (const sel of selectors) {
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      const d = document.createElement('div');
+      d.setAttribute('data-bh-highlight','1');
+      const scY = window.scrollY, scX = window.scrollX;
+      d.style.left = (r.left + scX) + 'px';
+      d.style.top = (r.top + scY) + 'px';
+      d.style.width = r.width + 'px';
+      d.style.height = r.height + 'px';
+      document.documentElement.appendChild(d);
+      count++;
+    }
+  }
+  setTimeout(() => document.querySelectorAll('[data-bh-highlight]').forEach(e=>e.remove()), dur);
+  return JSON.stringify({status:'ok', selectors, highlighted: count, duration_ms: dur});
+})(SELECTORS, DUR);
+"""
+        js = boots.replace("SELECTORS", _j.dumps(list(selectors))).replace("DUR", str(dur))
+        out = await target.evaluate(js)
+        raw = out.get("result", "{}") if isinstance(out, dict) else "{}"
+        import json as _j2
+        data = _j2.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(data, dict) and data.get("status") == "error":
+            return tool_error("browser_highlight_elements", "highlight_failed", str(data.get("error")))
+        return tool_result("browser_highlight_elements", data if isinstance(data, dict) else {"raw": data})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_highlight_elements", "failed", str(exc))
+
+
+# ── Group 5: Playwright spec export ──────────────────────────
+
+_RECORD_AC: dict[str, str] = {}
+
+
+async def browser_start_recorder(
+    name: str | None = None,
+    ac: str | None = None,
+    ctx = None,
+) -> str:
+    """Start recording browser steps (capability ``agent.flow``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_start_recorder {name or '-'} ac={ac}")
+    try:
+        from main import AgentRecordRequest, agent_record
+        resp = await agent_record(AgentRecordRequest(start=True, name=name))
+        raw = getattr(resp, "body", None)
+        data = None
+        if raw is not None:
+            import json as _j
+            body = raw if isinstance(raw, (bytes, bytearray)) else (raw if isinstance(raw, (str,)) else None)
+            if body is not None:
+                try:
+                    data = _j.loads(body if isinstance(body, str) else body.decode())
+                except Exception:
+                    data = None
+        if data is None:
+            import main as _m
+            rid = getattr(_m, "active_recording_id", None)
+            for k, v in getattr(_m, "agent_recordings", {}).items():
+                if k == rid:
+                    data = {"status": "ok", "data": v}
+                    break
+        inner = (data or {}).get("data", data) if isinstance(data, dict) else {}
+        redisc = inner.get("recording_id") if isinstance(inner, dict) else None
+        if isinstance(inner, dict) and redisc:
+            if ac:
+                _RECORD_AC[redisc] = str(ac)
+        return tool_result("browser_start_recorder", inner if isinstance(inner, dict) else {"raw": inner})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_start_recorder", "record_start_failed", str(exc))
+
+
+async def browser_record_step(
+    step: str,
+    selector: str | None = None,
+    action: str | None = None,
+    value: str | None = None,
+    ctx = None,
+) -> str:
+    """Append one human-annotated step to the active recording (capability ``agent.flow``, READY)."""
+    if not step or not isinstance(step, str):
+        return tool_error("browser_record_step", "invalid_step", "step must be a non-empty description")
+    if ctx is not None:
+        ctx.info(f"browser_record_step: {step}")
+    try:
+        import main as _m
+        rid = getattr(_m, "active_recording_id", None)
+        if not rid or rid not in getattr(_m, "agent_recordings", {}):
+            return tool_error("browser_record_step", "no_active_recording", "call browser_start_recorder first")
+        rec = _m.agent_recordings[rid]
+        rec.setdefault("steps", []).append({
+            "step": step, "selector": selector, "action": action or "step", "value": value,
+            "ac": _RECORD_AC.get(rid),
+        })
+        return tool_result("browser_record_step", {"recording_id": rid, "step_index": len(rec["steps"]), "step": step})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_record_step", "record_failed", str(exc))
+
+
+def _render_playwright_spec(recording: dict, suite_name: str | None = None) -> str:
+    import re as _re
+    name = suite_name or recording.get("name") or recording.get("recording_id") or "recorded"
+    safe_suite = _re.sub(r"[^A-Za-z0-9_\- ]+", "_", str(name))[:80] or "recorded"
+    ac = ""
+    for st in recording.get("steps", []):
+        if st.get("ac"):
+            ac = str(st["ac"]).strip()
+            break
+    lines: list[str] = []
+    lines.append("import { test, expect } from '@playwright/test';")
+    lines.append("")
+    if ac:
+        lines.append(f"// {ac}")
+    lines.append(f"test.describe('{safe_suite}', () => {{")
+    test_title = ac or (recording.get("name") or "recorded flow")
+    title_esc = str(test_title).replace("'", r"\'")
+    lines.append(f"  test('{title_esc}', async ({{ page }}) => {{")
+    seen_navigate = False
+    for st in recording.get("steps", []):
+        act = (st.get("action") or st.get("kind") or "step").lower()
+        sel = st.get("selector") or st.get("target", {}) or ""
+        val = st.get("value")
+        step = st.get("step") or act
+        step_esc = str(step).replace("'", r"\'")
+        sel_s = str(sel).replace("'", r"\'") if sel else ""
+        if act in ("navigate", "goto") and sel_s and sel_s.startswith("http"):
+            lines.append(f"    // {step_esc}")
+            lines.append(f"    await page.goto('{sel_s}');")
+            seen_navigate = True
+        elif act == "click" and sel_s:
+            lines.append(f"    // {step_esc}")
+            if sel_s.startswith("[data-testid"):
+                import re as _re2
+                m = _re2.search(r"data-testid=['\"]([^'\"]+)", sel_s)
+                tid = m.group(1) if m else sel_s
+                lines.append(f"    await page.getByTestId('{tid}').click();")
+            elif sel_s.startswith("getBy"):
+                lines.append(f"    await page.{sel_s}.click();")
+            else:
+                lines.append(f"    await page.locator('{sel_s}').click();")
+        elif act in ("fill", "type") and sel_s:
+            v = (val or "").replace("'", r"\'")
+            lines.append(f"    // {step_esc}")
+            if sel_s.startswith("getBy"):
+                lines.append(f"    await page.{sel_s}.fill('{v}');")
+            else:
+                lines.append(f"    await page.locator('{sel_s}').fill('{v}');")
+        elif act == "assert" and sel_s:
+            lines.append(f"    // {step_esc}")
+            lines.append(f"    await expect(page.locator('{sel_s}')).toBeVisible();")
+        else:
+            lines.append(f"    // {step_esc} ({act})")
+            if sel_s:
+                lines.append(f"    //   selector: {sel_s}")
+            if val:
+                lines.append(f"    //   value: {(val or '')[:80]}")
+    if seen_navigate is False:
+        lines.append("    // (no explicit navigate recorded — add page.goto(...) for the entry URL)")
+    lines.append("  });")
+    lines.append("});")
+    lines.append("")
+    return "\n".join(lines)
+
+
+async def browser_export_playwright_spec(
+    suite_name: str | None = None,
+    recording_id: str | None = None,
+    stop_recording: bool = True,
+    ctx = None,
+) -> str:
+    """Export a recording as a Playwright TypeScript .spec.ts (capability ``agent.flow``, READY)."""
+    if ctx is not None:
+        ctx.info("browser_export_playwright_spec")
+    try:
+        import main as _m
+        rid = str(recording_id).strip() if recording_id else getattr(_m, "active_recording_id", None)
+        if not rid or rid not in getattr(_m, "agent_recordings", {}):
+            return tool_error("browser_export_playwright_spec", "no_recording", "no such recording — call browser_start_recorder first")
+        rec = dict(_m.agent_recordings[rid])
+        spec = _render_playwright_spec(rec, suite_name)
+        from main import artifact_store
+        art = artifact_store.put(spec.encode("utf-8"), "text/x.typescript", ".ts", metadata={"recording_id": rid, "suite_name": suite_name or rec.get("name", rid)})
+        if stop_recording:
+            _m.active_recording_id = None
+        return tool_result("browser_export_playwright_spec", {"suite_name": suite_name or rec.get("name", rid), "recording_id": rid, "artifact": art, "spec": spec})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_export_playwright_spec", "export_failed", str(exc))
+
+
+# ── Group 6: session & state isolation ────────────────────
+
+async def browser_inject_storage_state(
+    cookies: list[dict] | None = None,
+    origins: list[dict] | None = None,
+    tenant: str | None = None,
+    ctx = None,
+) -> str:
+    """Inject JWT/cookies + localStorage state — skip redundant logins (capability ``diagnostics.cookies``, READY)."""
+    if ctx is not None:
+        ctx.info(f"browser_inject_storage_state tenant={tenant or '-'}")
+    try:
+        target, _ = await _target()
+        cookies = cookies or []
+        counts: dict[str, int] = {"cookies": 0, "origins": 0}
+        for c in cookies:
+            nm = c.get("name"); val = c.get("value")
+            if not nm or val is None:
+                continue
+            try:
+                await target.set_cookies([{
+                    "name": str(nm), "value": str(val),
+                    "domain": c.get("domain"), "path": c.get("path") or "/",
+                    "sameSite": c.get("sameSite"), "expires": c.get("expires"),
+                    "httpOnly": c.get("httpOnly"), "secure": c.get("secure"),
+                }])
+                counts["cookies"] += 1
+            except Exception:  # noqa: BLE001
+                pass
+        for origin_entry in (origins or []):
+            items = origin_entry.get("localStorage") or origin_entry.get("local_storage") or []
+            for kv in items:
+                nm = kv.get("name"); val = kv.get("value")
+                if not nm or val is None:
+                    continue
+                try:
+                    import json as _j
+                    await target.evaluate(f"localStorage.setItem({_j.dumps(str(nm))}, {_j.dumps(str(val))})")
+                    counts["origins"] += 1
+                except Exception:  # noqa: BLE001
+                    pass
+        if tenant and str(tenant).strip():
+            try:
+                import json as _j
+                await target.evaluate(f"localStorage.setItem('tenant', {_j.dumps(str(tenant).strip())})")
+                counts["origins"] += 1
+            except Exception:  # noqa: BLE001
+                pass
+        return tool_result("browser_inject_storage_state", {"injected": counts, "tenant": tenant})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_inject_storage_state", "injection_failed", str(exc))
+
+
+async def browser_reset_session(
+    scope: str = "all",
+    ctx = None,
+) -> str:
+    """Clear cache / cookies / storage between tests (capability ``browser.core``, READY)."""
+    sc = (scope or "all").lower().strip()
+    if sc not in {"cookies", "storage", "all"}:
+        return tool_error("browser_reset_session", "invalid_scope", "scope must be cookies|storage|all")
+    if ctx is not None:
+        ctx.info(f"browser_reset_session scope={sc}")
+    try:
+        target, _ = await _target()
+        done: dict[str, bool] = {}
+        if sc in ("cookies", "all"):
+            try:
+                await target.clear_browser_cookies()  # type: ignore[attr-defined]
+                done["cookies"] = True
+            except AttributeError:
+                await target._send_command("Network.clearBrowserCookies")
+                done["cookies"] = True
+            except Exception as exc:  # noqa: BLE001
+                return tool_error("browser_reset_session", "clear_cookies_failed", str(exc))
+        if sc in ("storage", "all"):
+            try:
+                await target.evaluate("localStorage.clear(); sessionStorage.clear();")
+                done["storage"] = True
+            except Exception as exc:  # noqa: BLE001
+                return tool_error("browser_reset_session", "clear_storage_failed", str(exc))
+        if sc == "all":
+            try:
+                await target.clear_browser_cache()  # type: ignore[attr-defined]
+                done["cache"] = True
+            except Exception:  # noqa: BLE001
+                done["cache"] = False
+        return tool_result("browser_reset_session", {"scope": sc, "cleared": done})
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("browser_reset_session", "failed", str(exc))

@@ -1,6 +1,6 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.33.0-blue)
+![Version](https://img.shields.io/badge/version-1.34.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Tests](https://img.shields.io/badge/tests-2630%20passed-brightgreen)
 
@@ -23,7 +23,7 @@ accessibility snapshots — with every answer.
 |---|---|
 | **What it is** | A lightweight FastAPI proxy that drives your real Chrome via CDP |
 | **Who it is for** | AI agents (Hermes, Claude Code, Codex CLI, Cursor), QA automation, scrapers |
-| **Interfaces** | REST API · 47-tool MCP server · WebSocket stream · GUI dashboard |
+| **Interfaces** | REST API · 64-tool MCP server · WebSocket stream · GUI dashboard |
 | **Why fast** | Local CDP + compact payloads; measured **1.9–2.2× faster than Playwright** on the same E2E journey (~1641ms vs ~3163ms) |
 | **Killer feature** | The browser is **visible to you** — log in manually (Google, Perplexity, anything with CAPTCHA/bot-walls), and your agent reuses *your* logged-in session |
 | **License / status** | Personal-lab project, actively developed — releases every few days |
@@ -37,7 +37,7 @@ accessibility snapshots — with every answer.
 - [Install & run](#install--run)
 - [The four interfaces](#the-four-interfaces)
   - [REST API](#rest-api)
-  - [MCP server (47 tools)](#mcp-server-47-tools)
+  - [MCP server (64 tools)](#mcp-server-64-tools)
   - [WebSocket streaming](#websocket-streaming)
   - [GUI dashboard](#gui-dashboard)
 - [Built for AI agents](#built-for-ai-agents)
@@ -195,7 +195,7 @@ Unset = open API. Placeholder values (`changeme`, `your-token`, …) are rejecte
 
 Full reference: [docs/api-reference.md](docs/api-reference.md) · Agent contracts: [docs/agent-api.md](docs/agent-api.md).
 
-### MCP server (47 tools)
+### MCP server (64 tools)
 
 Ships a [Model Context Protocol](https://modelcontextprotocol.io) server exposing the
 same engine as **47 MCP tools** — for Claude Code, Codex CLI, Cursor, Windsurf, any MCP client.
@@ -412,7 +412,7 @@ Your machine                        Remote server (AI agents)
 │  │ + MCP + dashboard │   │        │                          │
 │  └───────────────────┘   │        └──────────────────────────┘
 └──────────────────────────┘
-     src/main.py (REST)      src/mcp_server/ (47 tools)
+     src/main.py (REST)      src/mcp_server/ (64 tools)
      src/cdp_client.py       src/fleet/ (orchestration)
      src/session_registry.py src/anti_detection/
 ```
@@ -441,7 +441,7 @@ sessions), `src/mcp_server/registry.py::build_tool_defs()` (tool source of truth
 | [API Reference](docs/api-reference.md) | Complete endpoint docs with examples |
 | [LLM Agent API](docs/agent-api.md) | Stable refs, observations, actions, artifacts |
 | [Agent Navigation Engine](docs/agent-navigation-engine.md) | AX-tree observation, semantic forms, execute-task |
-| [MCP Server](docs/mcp-server.md) | Transports, client configs, full 47-tool reference |
+| [MCP Server](docs/mcp-server.md) | Transports, client configs, full 64-tool reference |
 | [Perf roadmap](docs/perf-prioritized.md) · [Phase 2](docs/perf-phase2.md) | Speed design + benchmarks |
 | [Tab Auto-Activation](docs/tab-auto-activation.md) | How transparent tab activation works |
 | [Condensed Snapshot](docs/condensed-snapshot.md) · [Checkbox Operations](docs/checkbox-operations.md) · [Screenshot Confirmation](docs/screenshot-confirmation.md) | Feature guides |
@@ -460,7 +460,7 @@ ruff check src/                                  # lint (must pass before commit
 pytest tests/test_mcp_server.py tests/test_agent_api.py tests/test_agent_highlevel.py -o addopts='' -q
                                                  # core suite (~69 tests, <20s)
 pytest -q                                        # full suite (slow; use timeout)
-bash scripts/release-validate.sh                 # release gate: version + 47 tools + docs consistency
+bash scripts/release-validate.sh                 # release gate: version + 64 tools + docs consistency
 ```
 
 Release process: feature branch → FF-merge to main → version bump
