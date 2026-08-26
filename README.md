@@ -198,7 +198,7 @@ Full reference: [docs/api-reference.md](docs/api-reference.md) · Agent contract
 ### MCP server (64 tools)
 
 Ships a [Model Context Protocol](https://modelcontextprotocol.io) server exposing the
-same engine as **47 MCP tools** — for Claude Code, Codex CLI, Cursor, Windsurf, any MCP client.
+same engine as **64 MCP tools** — for Claude Code, Codex CLI, Cursor, Windsurf, any MCP client.
 In-process, no HTTP self-calls, no LLM in the middle.
 
 ```bash
@@ -219,9 +219,14 @@ bh mcp --http --port 8765    # streamable HTTP (Cursor, Windsurf, remote clients
 ```
 
 Tool families: browser core (`navigate`, `click`, `type`, `screenshot`, `get_tabs`, …),
-agent semantics (`observe`, `run_flow`, `flow_vlm`, `assert`, `wait_for`, …),
+agent semantics (`observe`, `run_flow`, `assert`, `wait_for`, …),
 fleet read-only views, persistent memory (`memory_remember/recall/forget/list`),
-diagnostics. Every tool mirrors a REST endpoint and returns the standard envelope.
+diagnostics, plus **6 E2E groups** (`browser_get_accessibility_tree`, `browser_find_semantic_elements`,
+`browser_navigate`+`settle`, `browser_interact`+actionability, `browser_upload_file`,
+`browser_get_console_logs`, `browser_wait_for_condition`, `browser_take_screenshot`,
+`browser_highlight_elements`, `browser_start_recorder`→`browser_export_playwright_spec`,
+`browser_inject_storage_state`, `browser_reset_session`, … — 17 browser_ tools).
+Every tool mirrors a REST/CDP primitive and returns the standard envelope.
 
 Details & client configs: [docs/mcp-server.md](docs/mcp-server.md).
 

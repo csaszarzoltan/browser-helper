@@ -173,7 +173,7 @@ class ToolDef:
 | `fleet_status()` | `workflow.local` (fleet capability) | READY | `get_fleet_coordinator().pool.list_sessions()` + `registry.snapshot()` — see §5.9 | `GET /fleet/sessions` (fleet/api.py:391) |
 | `fleet_queue()` | `workflow.local` (fleet capability) | READY | `get_fleet_coordinator().queue.peek()` + `queue.size()` — see §5.9 | (no dedicated REST read; mirrors the queue tier of `POST /fleet/session` 202-responses) |
 
-All 47 tools are READY-backed (37 browser/fleet + 4 memory + 6 agent testing). No EXPERIMENTAL capability maps to a tool this cycle:
+All 64 tools are READY-backed (37 browser/fleet + 4 memory + 6 agent testing + 17 E2E validation). No EXPERIMENTAL capability maps to a tool this cycle:
 `anti_detection.compositor` and `behavioral.scroll` are EXPERIMENTAL and must **not** be
 exposed (their modules contain explicit `NotImplementedError` paths — registry `reason`
 fields). If a later cycle ships them, adding a tool is a one-line registry extension.
@@ -468,7 +468,7 @@ The pre-tester builds `tests/test_mcp_server.py` against this spec. Mandatory as
 
 ### 8.1 Registry/derivation unit tests (no `mcp` SDK needed)
 
-- `build_tool_defs()` returns the full registry-derived surface (47 tools as of v1.28.0; the count grows as capabilities are added — §4.3 lists the v1.21.0 baseline).
+- `build_tool_defs()` returns the full registry-derived surface (64 tools as of v1.34.0; the count grows as capabilities are added — §4.3 lists the v1.21.0 baseline).
 - Every tool's `capability_id` exists in `CapabilityRegistry.default()`; every backing
   capability is READY or EXPERIMENTAL; **no** UNAVAILABLE capability appears.
 - `ToolDefRegistry` rejects duplicate names and rejects a UNAVAILABLE `ToolDef`

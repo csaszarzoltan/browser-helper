@@ -12,6 +12,66 @@ Browser Helper 1.0 provides a compact, deterministic interface for LLM agents. T
 - **Capture:** `POST /agent/act {"action":"capture"}` → `data: {artifact, data: base64, artifact_id, format: jpeg}` (not `result.base64`). `GET /artifacts/{id}` still serves the bytes.
 - **Ergonomia:** `GET|POST /page/visible-text?limit=10000` — fast `innerText` without `wait_ready` idle-wait. `POST /agent/console` returns `count+errors+console_errors+failures+entries`; `GET /network/requests` returns `count+failures+network_failures+entries` — tolerant aliases. `pin_snapshot: bool` only (`target.snapshot_id` holds the snap string).
 
+## 1.34 — 6 csoportos E2E validációs csomag (64 MCP eszköz)
+
+17 új MCP tool a 6 funkciócsoportban — autonóm agentek törékenység/hallucináció mentes E2E tesztjeihez:
+
+### Group 1: Semantic DOM & A11y
+- **`browser_get_accessibility_tree`** — Token-optimalizált ARIA fa: `{role, name, visible, actions}`, max 6000 token (cap 20000). Scope: `page|dialog|viewport`. Nem nyers HTML — az LLM kontextusa biztonságban.
+- **`browser_find_semantic_elements`** — Interaktív elemek → Playwright-stabil lokátorok: `getByRole('button', { name: 'Login' })`, `getByLabel(...)`, `getByTestId(...)`. Query + role filter. Sérülékeny `.class` CSS selectorok helyett.
+- **`browser_get_page_structure`** — Tömör áttekintés: forms + buttons + dialogs + iframes. Snapshot_id a következő művelethez.
+
+### Group 2: Determinisztikus Interakciók
+- **`browser_navigate`** — `domContentLoaded|load|networkIdle` + `settle` (SPA idle barrier térképes felületekhez).
+- **`browser_interact`** — Click/fill/press/select **egy hívásban**: `wait_visible` (actionability), `scroll_into_view`, `wait_ms` (0–30000). Nincs kétlépéses `wait`+`click`.
+- **`browser_upload_file`** — CDP `DOM.setFileInputFiles`, sandbox: `/tmp/bh-upload-sandbox` VAGY `~/.browser-helper/uploads`. Filename override.
+- **`browser_download_file`** — Browser letöltés → artifact store, `GET /artifacts/{id}`-vel.
+
+### Group 3: Diagnosztika
+- **`browser_get_console_logs`** — `level: error|warning|info|all`, `since`, `limit`. Stack trace mellékelve.
+- **`browser_get_network_activity`** — `path`, `method`, `status_min` (pl. 400), `since`, `limit`. 4xx/5xx + timings + payload.
+- **`browser_wait_for_condition`** — JS predicate (`window.map.loaded() === true`) VAGY CSS selector, 1–60s timeout. Mutually exclusive.
+
+### Group 4: Vizuális Bizonyítás
+- **`browser_take_screenshot`** — `viewport|full|element` + `selector` + `quality`. Artifact record.
+- **`browser_highlight_elements`** — 1–10 selector, 3px piros overlay, `duration_ms` (500–30000). A következő screenshot vizuálisan igazolja a célzást.
+
+### Group 5: Playwright Kódexport
+- **`browser_start_recorder`** — Recording név + Gherkin AC (`AC-042`).
+- **`browser_record_step`** — Step + selector + action + value. Lépések szinkronban a felderítéssel.
+- **`browser_export_playwright_spec`** — Tiszta TypeScript `.spec.ts`: explicit `.click()`, `.fill()`, `expect().toBeVisible()`. Artifact + inline spec.
+
+### Group 6: Session Izoláció
+- **`browser_inject_storage_state`** — Cookies + localStorage origins + tenant (`demo-e2e-$RUN_ID`). Redundáns login kihagyása.
+- **`browser_reset_session`** — `scope: cookies|storage|all`. `Network.clearBrowserCookies` + `localStorage.clear()` + `sessionStorage.clear()`.
+
+### Használat
+```python
+# A11y: token-optimalizált fakivonat (nem nyers HTML!)
+tree = mcp_browser_helper_browser_get_accessibility_tree({"max_nodes": 100, "interactive_only": True})
+
+# Interakció: actionability-checked click (egy hívásban)
+mcp_browser_helper_browser_interact({"selector": "#login", "action": "click", "wait_visible": True})
+
+# Diagnosztika: JS predicate várakozás
+mcp_browser_helper_browser_wait_for_condition({"js": "window.__APP__?.ready", "timeout": 15})
+
+# Vizuális: overlay + screenshot bizonyítás
+mcp_browser_helper_browser_highlight_elements({"selectors": ["#login"], "duration_ms": 5000})
+mcp_browser_helper_browser_take_screenshot({"scope": "element", "selector": "#login"})
+
+# Recorder → Playwright spec
+mcp_browser_helper_browser_start_recorder({"name": "login-flow", "ac": "AC-042"})
+mcp_browser_helper_browser_record_step({"step": "Click login", "selector": "getByRole('button', { name: 'Login' })", "action": "click"})
+mcp_browser_helper_browser_export_playwright_spec({"suite_name": "Login Flow"})
+
+# Session: JWT + tenant injektálás (skip login)
+mcp_browser_helper_browser_inject_storage_state({"cookies": [{"name":"jwt","value":"..."}], "tenant": "demo-e2e-$RUN_ID"})
+
+# Session: teljes törlés következő teszt előtt
+mcp_browser_helper_browser_reset_session({"scope": "all"})
+```
+
 ## Unified response envelope
 
 Successful JSON responses use:

@@ -26,7 +26,7 @@ bh mcp                                  # stdio (default)
 On startup you see:
 
 ```
-Browser Helper MCP server — transport=stdio tools=32 host=127.0.0.1 port=8765
+Browser Helper MCP server — transport=stdio tools=64 host=127.0.0.1 port=8765
 ```
 
 The server then speaks JSON-RPC over stdin/stdout. Stdio is the transport for local, single-process agents. **No port is bound** in stdio mode — the port/host settings are ignored.
@@ -166,6 +166,58 @@ Each maps 1:1 to the engine call behind a REST endpoint (same `main.run_op` + `c
 | `rate_limiter_status` | — | `browser.core` | `domain_throttle` state + interval | `GET /rate_limiter/status` |
 | `dialog_handle` | `action` (str, required), `prompt_text` (str, opt) | `browser.core` | `Page.handleJavaScriptDialog` | `POST /dialog/handle` |
 
+### 6. E2E validation wrappers — `src/mcp_server/tools.py` (v1.34 — 17 browser_ tools)
+
+Thin MCP wrappers over the already-tested REST/CDP primitives — no new CDP surface is duplicated; wrappers
+compose only stable engine calls so REST + MCP always see the same truth.
+
+#### 1. Semantic DOM & A11y
+
+| Tool | Parameters | Capability | Engine binding | REST mirror |
+|------|-----------|------------|----------------|-------------|
+| `browser_get_accessibility_tree` | `token_limit` (int, opt), `max_nodes` (int, opt), `interactive_only` (bool), `scope` (str), `include_hidden` (bool) | `agent.semantic` | `_capture_accessibility_snapshot` + token budget | `POST /agent/observe` (accessibility) |
+| `browser_find_semantic_elements` | `query` (str, opt), `role` (str, opt), `max_results` (int), `suggest_locator` (bool) | `agent.semantic` | `AX snapshot` → `getByRole/getByLabel` suggestion | `POST /agent/observe` + locator heuristic |
+| `browser_get_page_structure` | `include_iframes` (bool), `max_chars` (int) | `agent.semantic` | `_capture_agent_snapshot` + `discover_forms` | `POST /agent/observe` + `POST /agent/forms/discover` |
+
+#### 2. Deterministic Interactions
+
+| Tool | Parameters | Capability | Engine binding | REST mirror |
+|------|-----------|------------|----------------|-------------|
+| `browser_navigate` | `url` (str, req), `wait_until` (str), `settle` (bool), `timeout` (int) | `browser.core` | `client.navigate` + optional `wait_for_network_idle` | `POST /navigate` |
+| `browser_interact` | `selector` (str, req), `action` (str), `text` (str), `option` (str), `wait_visible` (bool), `wait_ms` (int), `scroll_into_view` (bool) | `browser.core` | `wait_for_element` + `click/type_text/press_key/form_select` | `POST /agent/act` |
+| `browser_upload_file` | `selector` (str, req), `path` (str, req), `filename` (str) | `browser.core` | `DOM.setFileInputFiles` (sandbox-gated `/tmp/bh-upload-sandbox` or `~/.browser-helper/uploads`) | `POST /upload` |
+| `browser_download_file` | `url` (str, req), `timeout` (int) | `browser.core` | `client.download_file` + `artifact_store.put` | `POST /page/download` |
+
+#### 3. Diagnostics
+
+| Tool | Parameters | Capability | Engine binding | REST mirror |
+|------|-----------|------------|----------------|-------------|
+| `browser_get_console_logs` | `level` (str), `since` (float), `limit` (int) | `agent.testing` | `get_console_entries(level)` | `POST /agent/console` |
+| `browser_get_network_activity` | `path` (str), `method` (str), `status_min` (int), `since` (float), `limit` (int) | `browser.core` | `get_network_log` + filters | `GET /network/requests` |
+| `browser_wait_for_condition` | `js` (str), `selector` (str), `visible` (bool), `timeout` (int) | `agent.testing` | `evaluate` poll OR `wait_for_element` | `POST /wait/js` / `POST /wait/visible` |
+
+#### 4. Visual Proof
+
+| Tool | Parameters | Capability | Engine binding | REST mirror |
+|------|-----------|------------|----------------|-------------|
+| `browser_take_screenshot` | `scope` (str: viewport\|full\|element), `selector` (str), `quality` (int) | `browser.core` | `client.{screenshot,full_screenshot,element_screenshot}` | `POST /screenshot` |
+| `browser_highlight_elements` | `selectors` (str[], req 1-10), `duration_ms` (int 500-30000) | `agent.testing` | `evaluate` DOM overlay (red 3px border, auto-remove) | `POST /eval` (overlay JS) |
+
+#### 5. Playwright Spec Export
+
+| Tool | Parameters | Capability | Engine binding | REST mirror |
+|------|-----------|------------|----------------|-------------|
+| `browser_start_recorder` | `name` (str), `ac` (str, e.g. AC-042) | `agent.flow` | `POST /agent/record` (start) | `POST /agent/record` |
+| `browser_record_step` | `step` (str, req), `selector` (str), `action` (str), `value` (str) | `agent.flow` | `agent_recordings[rid].steps.append` | `POST /agent/record` steps |
+| `browser_export_playwright_spec` | `suite_name` (str), `recording_id` (str), `stop_recording` (bool) | `agent.flow` | `_render_playwright_spec` + `artifact_store.put` | `POST /agent/record/stop` + generated .spec.ts |
+
+#### 6. Session Isolation
+
+| Tool | Parameters | Capability | Engine binding | REST mirror |
+|------|-----------|------------|----------------|-------------|
+| `browser_inject_storage_state` | `cookies` (dict[]), `origins` (dict[]), `tenant` (str) | `diagnostics.cookies` | `Network.setCookie` per cookie + `localStorage.setItem` per origin | `POST /session/{id}/import-cookies` |
+| `browser_reset_session` | `scope` (str: cookies\|storage\|all) | `browser.core` | `Network.clearBrowserCookies` + `localStorage.clear()` | `POST /session/reset` |
+
 ### Fleet tools — `src/mcp_server/fleet_tools.py`
 
 All three are **read-only** — they use the same `get_fleet_coordinator()` singleton the REST router uses, and call only read methods (no register/unregister/allocate/release/sweep).
@@ -241,7 +293,7 @@ src/mcp_server/
 ├── config.py          # MCPSettings dataclass + MCPTransport enum + load_mcp_settings()
 ├── registry.py        # ToolDef + ToolDefRegistry (capability-derived, status-filtered)
 ├── server.py          # MCPServer: FastMCP lifecycle + tool registration + run()
-├── tools.py           # 9 browser tool handlers (navigate, click, type, …)
+├── tools.py           # 47 browser tool handlers (navigate, click, type, …) + 17 E2E validation wrappers
 ├── fleet_tools.py     # 3 read-only fleet handlers
 ├── serialization.py   # envelope normalization (json_dumps, tool_result, tool_error)
 └── cli.py             # argparse main() + Click mcp command + entry-point app
@@ -291,7 +343,20 @@ Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`
 
 ### The agent sees only 64 tools
 
-47 is the correct count for v1.28.0 (37 browser/fleet + 4 persistent memory + 6 agent testing). The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
+64 is the correct count for v1.34.0 (28 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation = 64). The 17 new E2E tools cover 6 functional groups for autonomous agent test creation and validation. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
+
+**v1.34 E2E validation groups (17 new tools):**
+
+| Group | Tools | Purpose |
+|-------|-------|---------|
+| 1. Semantic DOM & A11y | `browser_get_accessibility_tree`, `browser_find_semantic_elements`, `browser_get_page_structure` | Token-optimized ARIA tree, Playwright-stable locator discovery, structured page overview |
+| 2. Deterministic Interactions | `browser_navigate`, `browser_interact`, `browser_upload_file`, `browser_download_file` | Load strategies + SPA settle, actionability-checked click/fill/press/select, sandboxed file I/O |
+| 3. Diagnostics | `browser_get_console_logs`, `browser_get_network_activity`, `browser_wait_for_condition` | Console errors + stack traces, 4xx/5xx + timings, JS/selector waits |
+| 4. Visual Proof | `browser_take_screenshot`, `browser_highlight_elements` | Viewport/full/element screenshots, transient overlay proof (red border) |
+| 5. Playwright Spec Export | `browser_start_recorder`, `browser_record_step`, `browser_export_playwright_spec` | Gherkin AC-linked recording, TypeScript .spec.ts artifact |
+| 6. Session Isolation | `browser_inject_storage_state`, `browser_reset_session` | JWT/cookie + localStorage + tenant injection, cookie/storage/cache reset |
+
+See `docs/gap-analysis-133-implementation.md` for full implementation details.
 
 ### stdio mode hangs / "port already in use"
 
@@ -325,8 +390,8 @@ export PATH="$PWD/.venv/bin:$PATH"
 
 python -m browser_helper.mcp --help            # exits 0, prints transports
 bh mcp --help                                  # Click help (entry point)
-python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 47
-python -m pytest tests/test_mcp_server.py -q   # 55 tests: interface, engine binding, fleet reads, FastMCP
+python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 64
+python -m pytest tests/test_mcp_server.py -q   # 64 tests: interface, engine binding, fleet reads, FastMCP
 ```
 
 ---
