@@ -283,7 +283,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.32.0",
+    version="1.33.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -823,6 +823,8 @@ class AgentActionRequest(BaseModel):
     auto_recover: bool = True
     observe_after: bool = True
     include_observation: bool | None = Field(None, description="False skips the returning observation snapshot (fast path ~115ms); default mirrors observe_after")
+    wait_until_visible: bool = Field(default=False, description="If true, wait until selector is visible before click (single-call SPA hydration, P0-1)")
+    wait_ms: int = Field(default=5000, ge=0, le=30000, description="Max wait for visibility when wait_until_visible=true (ms)")
 
 
 class AgentSearchRequest(BaseModel):
@@ -1117,6 +1119,10 @@ _current_session: ContextVar[list[Session | None]] = ContextVar(
 # instead of returning 400.
 _session_auto: ContextVar[bool] = ContextVar("session_auto", default=False)
 
+# 1.33 P2-1: per-request trace id — set by session_middleware, read by
+# log_operation so every entry carries the caller's journey correlation id.
+_current_trace: ContextVar[str | None] = ContextVar("current_trace", default=None)
+
 # Paths that operate on the shared default client / are session-agnostic.
 _SESSION_EXEMPT = {
     "/health", "/ready", "/status", "/connect", "/disconnect",
@@ -1167,10 +1173,18 @@ async def session_middleware(request: Request, call_next):
     lazy auto-mint fallback for simple harnesses; otherwise a 400 Missing
     session is returned for browser-mutating ops.  Header OR cookie is enough
     — no double requirement.
+
+    1.33 (P2-1): every request gets a ``trace_id`` — echoed from an incoming
+    ``X-Trace-ID`` or minted (``tr_`` + uuid8) — attached to every
+    log_operation entry so ``GET /logs?trace_id=...`` can correlate a full
+    observe→act→assert journey. The response always carries ``X-Trace-ID``.
     """
     sid = _session_id_from_request(request)
     auto = request.headers.get("X-Session-Auto", "").strip().lower() in ("1", "true", "yes") or os.environ.get("BH_SESSION_AUTO", "").strip().lower() in ("1", "true", "yes")
     _session_auto.set(auto)
+    # P2-1 structured logging: propagate or mint a trace id for this request
+    trace_id = request.headers.get("X-Trace-ID") or f"tr_{uuid.uuid4().hex[:12]}"
+    _current_trace.set(trace_id)
     sess = session_registry.get(sid) if sid else None
     _set_current_session(sess)
     try:
@@ -1180,6 +1194,8 @@ async def session_middleware(request: Request, call_next):
     finally:
         _current_session.set([])
         _session_auto.set(False)
+        _current_trace.set(None)
+    response.headers["X-Trace-ID"] = trace_id
     if active is not None:
         response.headers["X-Session-ID"] = active.session_id
         if active is not sess:
@@ -1243,13 +1259,19 @@ def log_operation(
     *,
     verification: str = "unverified",
 ) -> dict[str, Any]:
-    """Append an operation entry to the ring buffer and update global state."""
+    """Append an operation entry to the ring buffer and update global state.
+
+    P2-1: entries carry the request-scoped ``trace_id`` (from the
+    ``X-Trace-ID`` header or minted by session_middleware) so a whole
+    observe→act→assert journey is correlatable via ``GET /logs?trace_id=``.
+    """
     entry = {
         "timestamp": datetime.now(_UTC).isoformat(),
         "operation": operation,
         "status": status,
         "duration_ms": round(duration_ms, 2),
         "details": details,
+        "trace_id": _current_trace.get(),
     }
     run = run_store.record(
         operation, status, duration_ms, details, verification=verification
@@ -2946,10 +2968,20 @@ class WaitForRequest(BaseModel):
 class AssertRequest(BaseModel):
     """DOM assertion: kind × condition, with optional expected value."""
 
-    kind: str = Field("selector", description="selector|text|url")
-    value: str = Field(..., description="CSS selector, text substring, or URL substring")
+    kind: str = Field("selector", description="selector|text|url|network")
+    value: str | None = Field(None, description="CSS selector, text substring, or URL substring (required for DOM kinds)")
     condition: str = Field("exists", description="exists|not_exists|count|contains")
     expected: int | str | None = Field(None, description="Expected count (int) or substring (str)")
+    # P1-2 network assertion: kind="network" checks the collected CDP request log
+    url_pattern: str | None = Field(None, description="kind=network — URL substring/regex to match")
+    status_min: int = Field(400, ge=100, le=600, description="kind=network — count requests with status >= this")
+    max_count: int = Field(0, ge=0, description="kind=network — assertion fails when failure count exceeds this")
+
+    @model_validator(mode="after")
+    def _require_value_for_dom_kinds(self):
+        if self.kind != "network" and not self.value:
+            raise ValueError("'value' is required for kind=selector|text|url (only kind=network may omit it)")
+        return self
 
 
 class WaitJsRequest(BaseModel):
@@ -3014,7 +3046,41 @@ async def assert_dom(body: AssertRequest):
 
     On a failed assertion returns HTTP 409 with the mismatch details —
     the caller's test can fail deterministically instead of guessing.
+
+    P1-2: ``kind="network"`` asserts on the collected CDP request log —
+    counts requests whose status >= *status_min* and whose URL matches
+    *url_pattern* (substring). Fails with 409 when the failure count
+    exceeds *max_count*.
     """
+    if body.kind == "network":
+        target, _sess = await _resolve_session_client()
+        try:
+            await target.start_network_monitoring()
+        except Exception as exc:  # noqa: BLE001 — monitoring may already be active
+            logger.debug("start_network_monitoring (assert network): %s", exc)
+        nlog = await target.get_network_log()
+        entries = nlog.get("entries", []) if isinstance(nlog, dict) else []
+        failures = []
+        for e in entries:
+            st = e.get("status") or 0
+            url = e.get("url", "")
+            if isinstance(st, int) and st >= body.status_min and (not body.url_pattern or str(body.url_pattern) in url):
+                failures.append({"url": url, "status": st, "method": e.get("method", "")})
+        passed = len(failures) <= int(body.max_count)
+        data = {
+            "kind": "network",
+            "url_pattern": body.url_pattern,
+            "status_min": body.status_min,
+            "max_count": body.max_count,
+            "failure_count": len(failures),
+            "failures": failures[-20:],
+            "passed": passed,
+        }
+        if not passed:
+            return api_error("assert", "assertion_failed",
+                             f"Assertion failed: {len(failures)} network failures (>= {body.status_min}) exceed max_count={body.max_count}",
+                             409, details=data)
+        return api_success("assert", {"result": data})
     res = await run_op("assert", client.assert_elements,
                        body.kind, body.value, body.condition, body.expected)
     data = res.get("data", {}) if isinstance(res, dict) else {}
@@ -3970,6 +4036,150 @@ async def session_restore(body: SessionRestoreRequest):
     return await run_op("session_restore", client.session_restore, body.session)
 
 
+# ─── 1.33 P2-2: named auth profiles (persist + reuse) ─────────────
+
+_AUTH_PROFILE_DIR = Path.home() / ".browser-helper" / "auth-profiles"
+
+
+class AuthProfileSaveRequest(BaseModel):
+    """Save the current session's auth state (cookies+storage) under a name."""
+
+    name: str = Field(..., min_length=1, max_length=64, description="Profile name, e.g. 'production' or 'google-main'")
+
+
+class AuthProfileRestoreRequest(BaseModel):
+    """Restore a named auth profile onto the caller's session."""
+
+    name: str = Field(..., min_length=1, description="Profile name to restore")
+
+
+def _auth_profile_path(name: str) -> Path:
+    safe = "".join(c for c in name if c.isalnum() or c in "-_.")
+    if not safe:
+        raise ValueError("invalid profile name")
+    return _AUTH_PROFILE_DIR / f"{safe}.json"
+
+
+@app.post("/session/auth-profile/{name}")
+async def auth_profile_save(name: str):
+    """Save the current session's full auth state (cookies+localStorage+sessionStorage) as a named profile.
+
+    The bundle is written to ``~/.browser-helper/auth-profiles/<name>.json`` and
+    survives BH restarts — one manual login, unlimited test runs.
+    """
+    target, _sess = await _resolve_session_client()
+    try:
+        saved = await target.session_save()
+        if not isinstance(saved, dict) or saved.get("status") != "ok":
+            raise RuntimeError(f"session_save failed: {saved!r}"[:200])
+        path = _auth_profile_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "name": name,
+            "saved_at": datetime.now(_UTC).isoformat(),
+            "session": saved.get("data") or saved,
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return api_success("auth_profile_save", {
+            "name": name,
+            "path": str(path),
+            "bytes": path.stat().st_size,
+        })
+    except ValueError as exc:
+        return api_error("auth_profile_save", "invalid_name", str(exc), 422)
+    except Exception as exc:
+        logger.warning("auth profile save failed: %s", exc, exc_info=True)
+        return api_error("auth_profile_save", "save_failed", str(exc), 503)
+
+
+@app.post("/session/auth-profile/{name}/restore")
+async def auth_profile_restore(name: str):
+    """Restore a named auth profile onto the caller's current session tab."""
+    path = _auth_profile_path(name)
+    if not path.exists():
+        return api_error("auth_profile_restore", "profile_not_found",
+                         f"Auth profile {name!r} not found (looked at {path})", 404)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        sess_bundle = payload.get("session")
+        if not isinstance(sess_bundle, dict):
+            raise TypeError("corrupt profile: no session bundle")
+        result = await run_op("session_restore", client.session_restore, sess_bundle)
+        data = result.get("data", {}) if isinstance(result, dict) else {}
+        return api_success("auth_profile_restore", {
+            "name": name,
+            "restored": True,
+            "saved_at": payload.get("saved_at"),
+            "result": data,
+        })
+    except Exception as exc:
+        logger.warning("auth profile restore failed: %s", exc, exc_info=True)
+        return api_error("auth_profile_restore", "restore_failed", str(exc), 503)
+
+
+@app.get("/session/auth-profiles")
+async def auth_profile_list():
+    """List saved auth profiles (name, saved_at, size)."""
+    items = []
+    if _AUTH_PROFILE_DIR.exists():
+        for p in sorted(_AUTH_PROFILE_DIR.glob("*.json")):
+            try:
+                payload = json.loads(p.read_text(encoding="utf-8"))
+                items.append({
+                    "name": payload.get("name") or p.stem,
+                    "saved_at": payload.get("saved_at"),
+                    "bytes": p.stat().st_size,
+                })
+            except Exception:  # noqa: BLE001 — corrupt file listed best-effort
+                items.append({"name": p.stem, "bytes": p.stat().st_size})
+    return api_success("auth_profiles", {"count": len(items), "profiles": items})
+
+
+# ─── 1.33 P2-3: geolocation mock (location-aware app testing) ─────
+
+
+class GeoMockRequest(BaseModel):
+    """Override navigator.geolocation via CDP Emulation.setGeolocationOverride."""
+
+    lat: float = Field(..., ge=-90, le=90, description="Latitude")
+    lng: float = Field(..., ge=-180, le=180, description="Longitude")
+    accuracy: float = Field(100, gt=0, description="Accuracy in meters")
+
+
+@app.post("/geo/mock")
+async def geo_mock(body: GeoMockRequest):
+    """Set a geolocation override for the session's tab.
+
+    Location-aware apps (weather, maps, payment) see *lat/lng* from
+    ``navigator.geolocation`` — no real GPS needed.
+    """
+    target, _sess = await _resolve_session_client()
+    try:
+        await target._send_command("Emulation.setGeolocationOverride", {
+            "latitude": body.lat,
+            "longitude": body.lng,
+            "accuracy": body.accuracy,
+        })
+        return api_success("geo_mock", {
+            "lat": body.lat, "lng": body.lng, "accuracy": body.accuracy, "active": True,
+        })
+    except Exception as exc:
+        logger.warning("geo mock failed: %s", exc, exc_info=True)
+        return api_error("geo_mock", "geo_mock_failed", str(exc), 503)
+
+
+@app.post("/geo/mock/clear")
+async def geo_mock_clear():
+    """Remove the geolocation override — back to real location."""
+    target, _sess = await _resolve_session_client()
+    try:
+        await target._send_command("Emulation.clearGeolocationOverride", {})
+        return api_success("geo_mock_clear", {"active": False})
+    except Exception as exc:
+        logger.warning("geo mock clear failed: %s", exc, exc_info=True)
+        return api_error("geo_mock_clear", "geo_mock_clear_failed", str(exc), 503)
+
+
 # ---------------------------------------------------------------------------
 # REST endpoints — new: health
 # ---------------------------------------------------------------------------
@@ -4158,6 +4368,38 @@ async def service_metrics(format: str | None = Query(None, description="'prometh
     if (format or "").lower() == "prometheus":
         return Response(content="\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
     return JSONResponse(content={"operations": ops, "prometheus": "\n".join(lines)})
+
+
+# ─── 1.33 P2-1: structured log search ─────────────────────────────
+
+
+@app.get("/logs")
+async def logs_search(
+    trace_id: str | None = Query(None, description="Correlate one journey: X-Trace-ID value"),
+    op: str | None = Query(None, description="Filter by operation name (exact, e.g. 'navigate')"),
+    status: str | None = Query(None, description="Filter: success|error|incomplete"),
+    since: str | None = Query(None, description="Only entries at/after this ISO timestamp"),
+    limit: int = Query(100, ge=1, le=100, description="Max entries (newest last)"),
+):
+    """Search the operation log — journey correlation via trace_id.
+
+    Every entry carries the request's ``X-Trace-ID`` (echoed in the
+    response header of every BH call), so a full observe→act→assert
+    journey is reconstructable with ``GET /logs?trace_id=<id>``.
+    """
+    entries = list(operation_log)
+    if trace_id:
+        entries = [e for e in entries if e.get("trace_id") == trace_id]
+    if op:
+        entries = [e for e in entries if e.get("operation") == op]
+    if status:
+        entries = [e for e in entries if e.get("status") == status]
+    if since:
+        entries = [e for e in entries if str(e.get("timestamp", "")) >= since]
+    return api_success("logs_search", {
+        "count": len(entries[-limit:]),
+        "entries": entries[-limit:],
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -4706,10 +4948,28 @@ async def agent_act(body: AgentActionRequest):
                     raise ElementNotFoundError(f"target not found: backend_node_id {target.get('backend_node_id')} — candidates: {cands}")
             elif target.get("selector"):
                 sel = target["selector"]
+                # P0-1: single-call SPA hydration — wait until visible before click
+                if body.wait_until_visible:
+                    waited = await tc.wait_for_element(sel, max(1, (body.wait_ms or 5000) // 1000), True)
+                    inner = waited.get("result", {}) if isinstance(waited, dict) else {}
+                    if isinstance(inner, dict) and inner.get("status") != "ok":
+                        raise ElementNotFoundError(f"selector {sel!r} not visible after {body.wait_ms}ms — wait_until_visible=true timed out")
                 try:
                     result = await tc.click(sel)
                 except Exception as exc:  # noqa: BLE001 — wrap selector probe
                     raise ElementNotFoundError(f"selector click failed: {sel!r}: {exc}")
+                if isinstance(result, dict) and result.get("status") == "error" and body.auto_recover:
+                    # P0-2 drift gate: auto_recover → re-wait + one bounded retry before failing.
+                    # Recovery marker is stored in the click result (data is built later).
+                    try:
+                        retried = await tc.wait_for_element(sel, max(1, min(body.timeout, 5)), True)
+                        inner_r = retried.get("result", {}) if isinstance(retried, dict) else {}
+                        if isinstance(inner_r, dict) and inner_r.get("status") == "ok":
+                            result = await tc.click(sel)
+                            if isinstance(result, dict) and result.get("status") != "error":
+                                result["auto_recovered"] = {"selector": sel, "attempt": 2}
+                    except Exception:  # noqa: BLE001 — recovery best-effort, never blocks the 404 path
+                        logger.debug("auto_recover selector retry failed for %r", sel)
                 if isinstance(result, dict) and result.get("status") == "error":
                     # S4: enrich with candidates for SPA selector debugging
                     try:
@@ -4845,6 +5105,9 @@ async def agent_act(body: AgentActionRequest):
         else:
             return api_error("agent_act", "unknown_action", f"Unknown action: {action}", 422)
         data = {"action": action, "result": result}
+        # P0-1: surface wait timing when wait_until_visible was used
+        if body.wait_until_visible and target.get("selector"):
+            data["wait_until_visible"] = {"selector": target["selector"], "waited_ms": round((time.monotonic() - _t0) * 1000)}
         if before_ax is not None:
             after_ax = await _capture_accessibility_snapshot(target=tc)
             verification = validate_expectations(before_ax, after_ax, body.expect)

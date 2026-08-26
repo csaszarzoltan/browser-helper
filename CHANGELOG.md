@@ -4,6 +4,19 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.33.0] — 2026-08-25
+### Added (gap-analysis P0–P2 — docs/gap-analysis-testing-info.md)
+- **P0-1 wait+click egy hívásban:** `POST /agent/act` új `wait_until_visible` (bool) + `wait_ms` (0–30000, default 5000) mezők — SPA hydration után determinisztikus click; timeout → 404 `not visible after Nms`; sikernél `data.wait_until_visible.waited_ms`.
+- **P0-2 drift gate:** selector-click hibánál `auto_recover` (default true) bounded re-wait + retry (`result.auto_recovered={selector,attempt:2}`); csak utána jön a 404+candidates.
+- **P1-2 network assertion:** `POST /assert {"kind":"network","url_pattern":...,"status_min":400,"max_count":0}` — CDP request-logból számolja a hibákat, túllépésnél 409 + `details.failures[]`. DOM-kindsnál a `value` továbbra is kötelező (422).
+- **P2-1 structured logging:** minden request kap trace-id-t (bejövő `X-Trace-ID` echo vagy mintelt `tr_...`, válasz mindig viszi); log-bejegyzések `trace_id`-vel; új `GET /logs?trace_id=&op=&status=&since=&limit=` journey-keresés.
+- **P2-2 named auth profiles:** `POST /session/auth-profile/{name}` (save cookies+localStorage+sessionStorage), `POST /session/auth-profile/{name}/restore`, `GET /session/auth-profiles` — bundle `~/.browser-helper/auth-profiles/*.json`, restart-túlélő; missing→404.
+- **P2-3 geolocation mock:** `POST /geo/mock {lat,lng,accuracy}` + `/geo/mock/clear` (CDP Emulation override) — location-aware appok determinisztikus tesztje.
+- **Harness (AI_prod_engine):** `BrowserHelperAdapter.observe_evidence()` (3→1 kör), `.assert_dom()`; invoker `read_visible_text` → `/page/visible-text` fast-path (/eval fallback).
+
+### Fixed
+- `tests/test_parallel_session_isolation.py` `_Client`: session-mint `/session/new` + `X-Session-ID` echo (BH 1.31+ session-guard), tesztlogika változatlan.
+
 ## [1.32.0] — 2026-08-24
 ### Fixed (BH 1.32 — 1.31 E2E-harness integrációs fájdalompontok)
 - **1. Sessions — X-Session-Auto opt-in + header OR cookie + stabil /session/new**: `POST /session/new` már `data`=`result`-ban is `session_id`-t ad (`api_success` mindkettőt írja); a middleware header-első (`X-Session-ID` || `bh_session`) — elég az egyik. 1.31 szigorú 400-ja `X-Session-Auto: true` headerrel (vagy `BH_SESSION_AUTO=1` env) visszakapcsolja a 1.30 auto-mintet (`run_op` + `_resolve_session_client` ContextVar flag). Tesztkörben (`PYTEST_CURRENT_TEST`/`BH_TEST_NO_CHROME`) változatlan fallback.

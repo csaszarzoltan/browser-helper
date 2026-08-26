@@ -23,28 +23,50 @@ PROXY_Q = "https://www.google.com/search?q={q}"
 
 
 class _Client:
-    """Cookie-jar aware BH client (1 session per instance)."""
+    """Cookie-jar + X-Session-ID aware BH client (1 isolated session/tab per instance).
+
+    BH 1.31+ requires an explicit session for browser ops (P0 tab-leak fix):
+    every instance mints its own session via POST /session/new and echoes the
+    returned X-Session-ID on every later call (header OR cookie — 1.32 spec).
+    """
 
     def __init__(self):
         self.jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.jar)
         )
+        self.sid: str | None = None
+        # Mint an isolated session (own tab) up front.
+        req = urllib.request.Request(
+            f"{BH}/session/new?url=about:blank", data=b"", method="POST",
+        )
+        with self.opener.open(req, timeout=30) as resp:
+            body = json.loads(resp.read().decode())
+        self.sid = (
+            resp.headers.get("X-Session-ID")
+            or (body.get("data") or {}).get("session_id")
+            or (body.get("result") or {}).get("session_id")
+        )
+        assert self.sid, f"no session id from /session/new: {body}"
 
     def post(self, path, data=None, timeout=60):
+        headers = {"Content-Type": "application/json"}
+        if self.sid:
+            headers["X-Session-ID"] = self.sid
         req = urllib.request.Request(
             f"{BH}{path}",
             data=json.dumps(data).encode() if data is not None else b"",
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST" if data is not None or path.startswith("/agent") else "GET",
         )
         with self.opener.open(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
 
     def navigate(self, url, timeout=60):
+        headers = {"X-Session-ID": self.sid} if self.sid else {}
         return json.loads(self.opener.open(
             urllib.request.Request(f"{BH}/navigate?url={urllib.parse.quote(url)}",
-                                   data=b"", method="POST"),
+                                   data=b"", method="POST", headers=headers),
             timeout=timeout,
         ).read().decode())
 
