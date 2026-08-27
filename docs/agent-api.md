@@ -1,4 +1,4 @@
-# LLM Agent API — Browser Helper 1.32
+# LLM Agent API — Browser Helper 1.35
 
 Browser Helper 1.0 provides a compact, deterministic interface for LLM agents. The low-level REST API remains available, while agents normally need only capability discovery, observation, action, and artifact retrieval.
 
@@ -13,6 +13,23 @@ Browser Helper 1.0 provides a compact, deterministic interface for LLM agents. T
 - **Ergonomia:** `GET|POST /page/visible-text?limit=10000` — fast `innerText` without `wait_ready` idle-wait. `POST /agent/console` returns `count+errors+console_errors+failures+entries`; `GET /network/requests` returns `count+failures+network_failures+entries` — tolerant aliases. `pin_snapshot: bool` only (`target.snapshot_id` holds the snap string).
 
 ## 1.35 — P0–P2 bulk & locale (68 MCP eszköz — 64 + 4 új)
+
+**P0 — nélkülük nem váltja ki (kötelező):**
+- **`P0-1 BH_SESSION_AUTO=1` — nincs több 400 Missing session** — `WorkingDirectory /home/zoltan/browser-helper`, systemd `Environment=BH_SESSION_AUTO=1` default. MCP stdio első browser tool auto-mint (nincs kézi `POST /session/new` + `X-Session-ID`). `run_op` + `_resolve_session_client` + `_mcp_session` mind `BH_SESSION_AUTO` fallback.
+- **`P0-3 navigate {wait_until, storageState}` — addInitScript parity** — `NavigateRequest.origins` + alias `storageState: [{origin, localStorage:[{name:"receiptlens.locale",value:"fr"}]}]` → `Page.addScriptToEvaluateOnNewDocument` **navigate előtt** (first paint látja). MCP `browser_navigate {origins, storage_state}`. Body: `{"url":"https://example.com","storageState":[{"origin":"https://example.com","localStorage":[{"name":"fr","value":"..."}]}]}`.
+- **`P0-4 POST /agent/expect` — polling (nem wait_js hack)** — `{selector|ref, condition:"visible|hidden|exists|gone|text:Scan", timeout:5000, poll:100}` auto-retry, `selector XOR ref`, `422/409/504`. Kiváltja a `wait_js` `innerText.includes` hacket.
+- **`P0-5 POST /agent/bundle` — trace.zip + screenshot + console + network** — `{retain:always|on-failure, include:[screenshot,console,network,trace]}` → artifact store (Playwright retain-on-failure analóg).
+
+**P0-2 bulk:** `POST /fleet/run-batch` → `workers` (alias concurrency, max 100 task was 50), `retries 0–3` (`flaky:true`), `timeoutPerTest` (alias `timeoutPerTest`), `shard "1/2"`, `reporter:{html,json,junit}` artifactek, `BatchTask.id` (US-007-01), `passed/flaky/failed`. MCP `fleet_run_batch` mirror. 1 hívás → 52 test párhuzamosan.
+
+**P1 — hogy tényleg 2× gyorsabb legyen:**
+- **`P1-1 Headless BH`** — `run.py --headless=new --display :99` CI (VNC nélkül), `CHROME_HEADLESS` env → `chrome_manager.launch --headless=new`. P1-1 Headless BH — `run.py --headless=new --display :99` VNC nélkül, CI-ben (most csak :1 látható) teljesítve.
+- **`P1-2 Test discovery`** — `browser_discover_tests {pattern:"e2e/us_*.spec.ts", root}` → `{files:[{path, us_id:US-007, display_name}]}` glob + BDD gate.
+- **`P1-3 Recorder → spec`** — `browser_export_batch_spec {recordings:[id|dict], suite_name}` → N recording merge egy `.spec.ts` artifact. P1-3 Recorder → spec már van (`browser_export_playwright_spec`) — bővítve bulk batch kimenetre teljesítve.
+
+**P2 — nice to have:**
+- **`P2-1 Visual diff locale`** — `browser_visual_diff_locale {url, locales:[en,fr], storage_key:"receiptlens.locale", h1_selector:"h1"}` — locale-onként friss session + `addScript` → screenshot + `ScreenshotDiffEngine` pixel-diff (`Scan` vs `Numérisez`).
+- **`P2-2 Rate limiter hybrid`** — `browser_rate_hybrid_idle {url?, timeout, quiet_ms}` — `wait_for_network_idle` + `domain_throttle.snapshot()`.
 
 17 új MCP tool a 6 funkciócsoportban — autonóm agentek törékenység/hallucináció mentes E2E tesztjeihez:
 

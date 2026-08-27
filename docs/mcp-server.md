@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **68 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory + 6 agent testing + 17 additional E2E validation).
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **68 tools** derived from the capability registry (37 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery).
 
 ---
 
@@ -166,7 +166,7 @@ Each maps 1:1 to the engine call behind a REST endpoint (same `main.run_op` + `c
 | `rate_limiter_status` | — | `browser.core` | `domain_throttle` state + interval | `GET /rate_limiter/status` |
 | `dialog_handle` | `action` (str, required), `prompt_text` (str, opt) | `browser.core` | `Page.handleJavaScriptDialog` | `POST /dialog/handle` |
 
-### 6. E2E validation wrappers — `src/mcp_server/tools.py` (v1.34 — 17 browser_ tools)
+### 6. E2E validation wrappers — `src/mcp_server/tools.py` + `src/mcp_server/discovery_tools.py` (v1.35 — 21 browser_/discovery_ tools)
 
 Thin MCP wrappers over the already-tested REST/CDP primitives — no new CDP surface is duplicated; wrappers
 compose only stable engine calls so REST + MCP always see the same truth.
@@ -293,8 +293,9 @@ src/mcp_server/
 ├── config.py          # MCPSettings dataclass + MCPTransport enum + load_mcp_settings()
 ├── registry.py        # ToolDef + ToolDefRegistry (capability-derived, status-filtered)
 ├── server.py          # MCPServer: FastMCP lifecycle + tool registration + run()
-├── tools.py           # 47 browser tool handlers (navigate, click, type, …) + 17 E2E validation wrappers
-├── fleet_tools.py     # 3 read-only fleet handlers
+├── tools.py           # 47 browser tool handlers (navigate, click, type, …) + 17 E2E validation wrappers (→21 in v1.35)
+├── fleet_tools.py     # 3 fleet handlers (fleet_nodes, fleet_status, fleet_queue) + bulk fleet_run_batch
+├── discovery_tools.py # 4 discovery/bulk/locale wrappers (discover_tests, export_batch_spec, visual_diff_locale, rate_hybrid_idle)
 ├── serialization.py   # envelope normalization (json_dumps, tool_result, tool_error)
 └── cli.py             # argparse main() + Click mcp command + entry-point app
 src/browser_helper/
@@ -343,7 +344,7 @@ Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`
 
 ### The agent sees only 68 tools
 
-68 is the correct count for v1.35.0 (28 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery = 68). The 4 new P0–P2 tools cover bulk scheduling, test discovery & export, and locale-aware visual proof. The 17 E2E tools cover 6 functional groups; the 4 new tools add `agent.testing` + `agent.flow` + `browser.core`. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`, `agent.flow`); EXPERIMENTAL (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones never surface.
+68 is the correct count for v1.35.0 (37 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery = 68). The 4 new P0–P2 tools cover bulk scheduling, test discovery & export, and locale-aware visual proof. The 17 E2E tools cover 6 functional groups; the 4 new tools add `agent.testing` + `agent.flow` + `browser.core`. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`, `agent.flow`); EXPERIMENTAL (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones never surface.
 
 **v1.35 bulk/locale/discovery (4 new tools):**
 
