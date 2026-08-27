@@ -91,28 +91,38 @@ async def fleet_queue(ctx: Context | None = None) -> str:
 
 
 async def fleet_run_batch(tasks: list[dict], concurrency: int = 4,
+                          workers: int | None = None, retries: int = 0,
+                          timeoutPerTest: int | None = None, shard: str | None = None,
+                          reporter: str | None = None,
                           ctx: Context | None = None) -> str:
-    """Run N independent browsing tasks in parallel (capability ``workflow.local``, READY).
+    """Run N independent browsing tasks in bulk (capability ``workflow.local``, READY).
 
-    Each task: {url, action?, assert_selector?, assert_text?, timeout?}.
-    Tasks run in isolated session tabs up to *concurrency* at a time; one
-    failing task does not affect the others.  Returns an aggregated report.
+    P0-2 bulk executor: 1 call → 100 tests in parallel (workers/concurrency),
+    retries (flaky detection), per-test timeout, sharding (1/2), reporters
+    (html/junit/json artifacts). Returns passed/flaky/failed aggregation.
     """
+    eff_concurrency = int(workers) if workers is not None else int(concurrency)
 
     if ctx is not None:
-        ctx.info(f"fleet_run_batch tasks={len(tasks or [])} concurrency={concurrency}")
+        ctx.info(f"fleet_run_batch tasks={len(tasks or [])} concurrency={eff_concurrency} retries={retries} shard={shard} reporter={reporter}")
     if not tasks:
         return tool_error("fleet_run_batch", "invalid_params", "tasks is required")
     try:
-        # Route through the REST handler so the batch logic lives in one place.
         from fastapi.testclient import TestClient
 
         import main
 
+        payload: dict[str, object] = {"tasks": tasks, "concurrency": eff_concurrency}
+        if retries:
+            payload["retries"] = int(retries)
+        if timeoutPerTest is not None:
+            payload["timeoutPerTest"] = int(timeoutPerTest)
+        if shard:
+            payload["shard"] = str(shard)
+        if reporter:
+            payload["reporter"] = str(reporter)
         with TestClient(main.app) as c:
-            resp = c.post("/fleet/run-batch", json={
-                "tasks": tasks, "concurrency": concurrency,
-            })
+            resp = c.post("/fleet/run-batch", json=payload)
             body = resp.json()
             if resp.status_code != 200:
                 return tool_error("fleet_run_batch", "batch_failed",

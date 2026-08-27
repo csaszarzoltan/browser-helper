@@ -111,6 +111,10 @@ EXPECTED_TOOLS = [
     "browser_export_playwright_spec",
     "browser_inject_storage_state",
     "browser_reset_session",
+    "browser_discover_tests",
+    "browser_export_batch_spec",
+    "browser_visual_diff_locale",
+    "browser_rate_hybrid_idle",
 ]
 
 # tool -> required parameter names (spec §8.1: exact required params)
@@ -183,6 +187,10 @@ EXPECTED_REQUIRED_PARAMS = {
     "browser_export_playwright_spec": [],
     "browser_inject_storage_state": [],
     "browser_reset_session": [],
+    "browser_discover_tests": [],
+    "browser_export_batch_spec": [],
+    "browser_visual_diff_locale": ["url"],
+    "browser_rate_hybrid_idle": [],
 }
 
 # tool -> (capability_id, expected status)
@@ -255,6 +263,10 @@ EXPECTED_CAPABILITY = {
     "browser_export_playwright_spec": ("agent.flow", "ready"),
     "browser_inject_storage_state": ("diagnostics.cookies", "ready"),
     "browser_reset_session": ("browser.core", "ready"),
+    "browser_discover_tests": ("agent.testing", "ready"),
+    "browser_export_batch_spec": ("agent.flow", "ready"),
+    "browser_visual_diff_locale": ("agent.testing", "ready"),
+    "browser_rate_hybrid_idle": ("browser.core", "ready"),
 }
 
 TOOL_MODULES = {
@@ -324,6 +336,10 @@ TOOL_MODULES = {
     "browser_export_playwright_spec": "tools",
     "browser_inject_storage_state": "tools",
     "browser_reset_session": "tools",
+    "browser_discover_tests": "discovery_tools",
+    "browser_export_batch_spec": "discovery_tools",
+    "browser_visual_diff_locale": "discovery_tools",
+    "browser_rate_hybrid_idle": "discovery_tools",
 }
 
 
@@ -359,6 +375,14 @@ def _load_tool_handlers() -> dict[str, object]:
             name: getattr(mcp_server.memory.tools, name)
             for name in EXPECTED_TOOLS
             if TOOL_MODULES[name] == "memory.tools"
+        }
+    )
+    import mcp_server.discovery_tools
+    handlers.update(
+        {
+            name: getattr(mcp_server.discovery_tools, name)
+            for name in EXPECTED_TOOLS
+            if TOOL_MODULES[name] == "discovery_tools"
         }
     )
     return handlers

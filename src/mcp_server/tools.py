@@ -48,6 +48,13 @@ async def _mcp_session():
     if sess is not None and sess.session_id in session_registry._sessions:
         _set_current_session(sess)
         return sess, (lambda op, method, *a, **kw: run_op(op, method, *a, sess_override=sess, **kw))
+    # P0-1: MCP stdio has no HTTP middleware — force auto-mint so the first
+    # browser tool never 400s with "Missing session". Mirrors BH_SESSION_AUTO=1.
+    try:
+        from main import _session_auto as _mcp_auto
+        _mcp_auto.set(True)
+    except Exception:
+        pass
     # No session cached yet — let run_op mint it lazily on the first browser
     # op (it launches Chrome and waits for the warm-up itself, avoiding the
     # double-launch race). session_hook caches the minted session so every
@@ -1251,15 +1258,44 @@ async def browser_navigate(
     wait_until: str | None = None,
     settle: bool = False,
     timeout: int = 10,
+    origins: list[dict] | None = None,
+    storage_state: list[dict] | dict | None = None,
     ctx = None,
 ) -> str:
-    """Navigate with load strategy (capability ``browser.core``, READY). *settle* additionally waits for SPA idle."""
+    """Navigate with load strategy (capability ``browser.core``, READY). P0-3: origins / storageState before paint."""
     if ctx is not None:
-        ctx.info(f"browser_navigate {url} wait_until={wait_until} settle={settle}")
+        ctx.info(f"browser_navigate {url} wait_until={wait_until} settle={settle} origins={bool(origins or storage_state)}")
     try:
         target, run_op = await _target()
         if wait_until and wait_until not in _NEGOTIATE:
             return tool_error("browser_navigate", "invalid_wait_until", "must be domContentLoaded|load|networkIdle")
+        # P0-3: normalize storage_state alias
+        payload_origins = origins
+        if storage_state is not None:
+            if isinstance(storage_state, dict) and "origins" in storage_state:
+                ss = storage_state["origins"]
+                if isinstance(ss, list):
+                    payload_origins = (payload_origins or []) + ss
+            elif isinstance(storage_state, list):
+                payload_origins = (payload_origins or []) + storage_state
+        # Inject via addScript before navigate so first paint sees the value
+        if payload_origins:
+            import json as _j
+            parts: list[str] = []
+            for _o in payload_origins if isinstance(payload_origins, list) else []:
+                if not isinstance(_o, dict):
+                    continue
+                for _kv in (_o.get("localStorage") or _o.get("local_storage") or []):
+                    _k = _kv.get("name") if isinstance(_kv, dict) else None
+                    _v = _kv.get("value") if isinstance(_kv, dict) else None
+                    if _k is None or _v is None:
+                        continue
+                    parts.append(f"try{{localStorage.setItem({_j.dumps(str(_k))},{_j.dumps(str(_v))});}}catch(e){{}}")
+            if parts:
+                try:
+                    await target.add_script_to_evaluate_on_new_document("".join(parts))
+                except Exception:
+                    pass
         res = await run_op("navigate", target.navigate, url)
         if settle:
             try:

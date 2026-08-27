@@ -4,6 +4,25 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.35.0] — 2026-08-26
+### Added — P0–P2 bulk & locale csomag (64 → 68 MCP eszköz)
+**P0 400-fix:** `BH_SESSION_AUTO=1` systemd default (Environment=), MCP stdio auto-mint (első browser tool sosem 400-oz) — `run_op` + `_resolve_session_client` + `_mcp_session` mind honolják az env-et (ContextVar mellé fallback).
+**P0-3 navigate storageState:** `NavigateRequest.origins` + alias `storageState` (`[{origin,localStorage:[{name,value}]}]`) — `POST /navigate {url, storageState}` egyetlen kérésben injektál `receiptlens.locale=fr` típusú locale/friss kulcsot `Page.addScriptToEvaluateOnNewDocument` scripttel *before paint* (Playwright parity). Példa body lent.
+**P0-4 POST /agent/expect:** polling API `POST /agent/expect {selector|ref, condition: visible|hidden|exists|gone|text:Scan, timeout:5000, poll:100}` auto-retry 100ms-onként typós pollig — kiváltja a kézi `wait_js` + `innerText.includes` hackeket. `selector` XOR `ref` (AX ref = observe snapshot refje), 422/409/504 mapping.
+**P0-5 POST /agent/bundle:** per-test `trace.zip` + screenshot + console + network bundle — `POST /agent/bundle {retain: always|on-failure, include: [screenshot,console,network,trace]}` JSON trace artifact `artifact_store`-ben (Playwright retain-on-failure analog).
+**P0-2 Bulk executor:** `POST /fleet/run-batch` bővítve: `workers` alias (concurrency), `retries=0..3` (flaky retry + `flaky:true`), `timeoutPerTest` per-test `wait_for`, `shard` `1/2` slice, `reporter:{html,json,junit}` aggregated artifactek (passed/flaky/failed), 100 taskig (was 50), `BatchTask.id` stable test id (US-007-01). MCP `fleet_run_batch` mirror ugyanezekkel a paraméterekkel.
+
+**P1 gyorsaság:** `run.py` most fogadja `--headless=new` + `--display :99` CI módhoz (`CHROME_HEADLESS` env → `chrome_manager.launch` headless, VNC nélkül). Fleet `run_batch` 1 hívás → 100 párhuzamos teszt.
+**P1-2 discovery:** új MCP `browser_discover_tests` — glob `e2e/us_*.spec.ts` → `{path, us_id: US-007, display_name}` lista (root paraméterezhető) + BDD gate mapping a harnessnak.
+**P1-3 recorder bulk:** új MCP `browser_export_batch_spec` — N recording id/step-dict → merged egy `.spec.ts` (artifact_store .ts artifact).
+
+**P2 nice-to-have:** új MCP `browser_visual_diff_locale` — locale-anként friss session + `addScript` locale kulcs → screenshot + ScreenshotDiffEngine pixel-diff per pár (h1 `Scan` vs `Numérisez`, threshold), comparer `browser_visual_diff_locale {url, locales:[en,fr], storage_key: receiptlens.locale, h1_selector: h1}`. Új MCP `browser_rate_hybrid_idle` — hybrid `wait_network_idle` integrálva navigate-be (opcionális `url`, rate_limiter ``domain_throttle.snapshot`` + hybrid idle-t visszaküldi /hybrid). `domain_throttle.snapshot()` helper az API-hoz.
+
+**Docs & skill:** `docs/mcp-server.md` 68 tools (tool-count), `docs/agent-api.md` + `browser-helper-local` skill — minden új toolt leír (origins, expect, bundle, batch batch, discovery, locale diff, hybrid idle) kód példákkal.
+
+### Docs
+- `docs/api-reference.md` — NavigateRequest origins/storageState body minták, /agent/expect, /agent/bundle, /fleet/run-batch bulk knobs táblázat.
+
 ## [1.34.0] — 2026-08-26
 ### Added — 6 csoportos E2E validációs csomag (47 → 64 MCP eszköz)
 

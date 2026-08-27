@@ -322,8 +322,14 @@ class ChromeManager:
         ]
 
         # Headless mode: --headless=new (Chrome 112+), fallback --headless for older
-        if headless:
-            cmd.append("--headless=new")
+        # P1-1 CI: honours CHROME_HEADLESS env (run.py --headless=new --display :99)
+        _headless_env = os.environ.get("CHROME_HEADLESS", "").strip().lower()
+        _headless = headless or _headless_env in ("1", "true", "yes", "new", "old", "--headless=new", "--headless")
+        if _headless:
+            if _headless_env in ("new", "--headless=new", "1", "true", "yes"):
+                cmd.append("--headless=new")
+            else:
+                cmd.append("--headless")
 
         # Proxy server
         if proxy:

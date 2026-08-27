@@ -93,6 +93,11 @@ _TOOL_CAPABILITY = {
     "browser_export_playwright_spec": "agent.flow",
     "browser_inject_storage_state": "diagnostics.cookies",
     "browser_reset_session": "browser.core",
+    # P1-2/P1-3/P2 (discovery + bulk recorder + locale diff + hybrid idle)
+    "browser_discover_tests": "agent.testing",
+    "browser_export_batch_spec": "agent.flow",
+    "browser_visual_diff_locale": "agent.testing",
+    "browser_rate_hybrid_idle": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -276,12 +281,17 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {},
     },
-    # Fleet run-batch (v1.27.0, F4)
+    # Fleet run-batch — P0-2 bulk executor (workers/retries/shard/reporter)
     "fleet_run_batch": {
         "type": "object",
         "properties": {
-            "tasks": {"type": "array", "description": "List of {url, action?, assert_selector?, assert_text?, timeout?} — at least 1, max 50"},
-            "concurrency": {"type": "integer", "description": "Parallel tasks (default 4, max 8)"},
+            "tasks": { "type": "array", "description": "List of {url, action?, assert_selector?, assert_text?, timeout?, id?} — at least 1, max 100" },
+            "concurrency": { "type": "integer", "description": "Parallel tasks (default 4, max 16)" },
+            "workers": { "type": "integer", "description": "Alias for concurrency — workers wins when set (1-32)" },
+            "retries": { "type": "integer", "description": "Retries per failed task (0-3, default 0)" },
+            "timeoutPerTest":  { "type": "integer", "description": "Per-test timeout override in seconds (1-300, falls back to task.timeout)" },
+            "shard": { "type": "string", "description": "Shard filter '1/2' (index/total) — only that slice runs" },
+            "reporter": { "type": "string", "description": "Reporter(s) comma-separated: html,json,junit — artifact ids returned" },
         },
         "required": ["tasks"],
     },
@@ -460,6 +470,8 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "wait_until": { "type": "string", "description": "domContentLoaded|load|networkIdle (default domContentLoaded)" },
             "settle": { "type": "boolean", "description": "Extra SPA settle: wait for network-idle + readyState=complete after load (maps/maps-heavy pages, default false)" },
             "timeout": { "type": "integer", "description": "Max seconds for the whole navigation (default 10, clamped 1-30)" },
+            "origins": { "type": "array", "items": { "type": "object" }, "description": "Playwright-style origins: [{origin, localStorage:[{name,value}]}] — injected BEFORE navigate via addScriptToEvaluateOnNewDocument (receiptlens.locale=fr parity)" },
+            "storage_state": { "type": "object", "description": "Alias for origins — {origins:[{origin,localStorage:[{name,value}]}]} or origins list directly" },
         },
         "required": ["url"],
     },
@@ -579,6 +591,40 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "scope": { "type": "string", "description": "cookies|storage|all (default all)" },
         },
     },
+    # P1-2/P1-3/P2 (bulk + discovery + locale diff + hybrid idle)
+    "browser_discover_tests": {
+        "type": "object",
+        "properties": {
+            "pattern": { "type": "string", "description": "Glob pattern relative to root, e.g. e2e/us_*.spec.ts (default that)" },
+            "root": { "type": "string", "description": "Root dir for glob (default cwd)" },
+        },
+    },
+    "browser_export_batch_spec": {
+        "type": "object",
+        "properties": {
+            "recordings": { "type": "array", "items": { "type": "string" }, "description": "Recording ids or step-dicts to merge into one .spec.ts" },
+            "suite_name": { "type": "string", "description": "describe() title (default Batch of N)" },
+        },
+    },
+    "browser_visual_diff_locale": {
+        "type": "object",
+        "properties": {
+            "url": { "type": "string", "description": "URL of the page to diff per locale" },
+            "locales": { "type": "array", "items": { "type": "string" }, "description": "Locale values, e.g. ['en','fr'] (default en,fr)" },
+            "storage_key": { "type": "string", "description": "localStorage key for locale, e.g. receiptlens.locale (default that)" },
+            "h1_selector": { "type": "string", "description": "H1 selector for text assertion (default h1)" },
+            "threshold": { "type": "number", "description": "Pixel delta threshold (default 0.001)" },
+        },
+        "required": ["url"],
+    },
+    "browser_rate_hybrid_idle": {
+        "type": "object",
+        "properties": {
+            "url": { "type": "string", "description": "Optional URL to navigate before the hybrid idle wait" },
+            "timeout": { "type": "integer", "description": "Max seconds for idle (default 10)" },
+            "quiet_ms": { "type": "integer", "description": "Quiet window ms for network idle (default 500)" },
+        },
+    },
 }
 
 
@@ -654,6 +700,9 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
     def _handler(name: str):
         if name in ("fleet_nodes", "fleet_status", "fleet_queue", "fleet_run_batch"):
             return getattr(fleet_tools, name)
+        if name in ("browser_discover_tests", "browser_export_batch_spec", "browser_visual_diff_locale", "browser_rate_hybrid_idle"):
+            from . import discovery_tools  # lazy — P1-2/P1-3/P2 wrappers
+            return getattr(discovery_tools, name)
         if name.startswith("memory_"):
             return getattr(memory_tools, name)
         if name == "assert":

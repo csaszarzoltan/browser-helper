@@ -88,6 +88,10 @@ class DomainThrottle:
         """Monotonic timestamp of the last navigation to *domain* (0.0 if never)."""
         return self._last.get(domain.lower(), 0.0)
 
+    def snapshot(self) -> dict:
+        """Return a JSON-serializable snapshot of throttle state."""
+        return {"per_domain": dict(self._last), "default_min_interval": DEFAULT_MIN_INTERVAL_SEC}
+
     def reset(self) -> None:
         """Clear all history (tests, settings change)."""
         self._last.clear()

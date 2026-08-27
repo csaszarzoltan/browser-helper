@@ -9,6 +9,7 @@ Usage:
     python run.py --port 8000 --launch-chrome
     python run.py --launch-chrome --profile-dir "C:\\Users\\...\\User Data\\Default"
     python run.py --launch-chrome --debug-port 9222
+    python run.py --launch-chrome --headless=new --display :99  # CI (no VNC)
 """
 
 import argparse
@@ -38,6 +39,9 @@ def main():
                         help="Automation backend: cdp (default) or playwright")
     parser.add_argument("--display", type=str, default=None,
                         help="X11 display for Chrome (e.g. :1); forwarded as CHROME_DISPLAY")
+    # P1-1 CI: headless Chrome without VNC — run.py --headless=new --display :99
+    parser.add_argument("--headless", type=str, nargs="?", const="new", default=None,
+                        help="Launch Chrome headless (--headless=new or --headless; forwarded as CHROME_HEADLESS)")
     args = parser.parse_args()
 
     # Pass launch parameters to the server via environment variables
@@ -49,6 +53,8 @@ def main():
             os.environ["CHROME_AUTO_PORT"] = str(args.debug_port)
     if args.display:
         os.environ["CHROME_DISPLAY"] = args.display
+    if args.headless is not None:
+        os.environ["CHROME_HEADLESS"] = args.headless
 
     import uvicorn
 
@@ -59,6 +65,10 @@ def main():
             print(f"   → Profile: {args.profile_dir}")
         if args.debug_port:
             print(f"   → Debug port: {args.debug_port}")
+        if args.headless is not None:
+            print(f"   → Headless: {args.headless}")
+        if args.display:
+            print(f"   → Display: {args.display}")
 
     uvicorn.run(
         "main:app",

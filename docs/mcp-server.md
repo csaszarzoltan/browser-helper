@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **64 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory + 6 agent testing + 17 additional E2E validation).
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **68 tools** derived from the capability registry (28 browser/fleet + 4 persistent memory + 6 agent testing + 17 additional E2E validation).
 
 ---
 
@@ -26,7 +26,7 @@ bh mcp                                  # stdio (default)
 On startup you see:
 
 ```
-Browser Helper MCP server — transport=stdio tools=64 host=127.0.0.1 port=8765
+Browser Helper MCP server — transport=stdio tools=68 host=127.0.0.1 port=8765
 ```
 
 The server then speaks JSON-RPC over stdin/stdout. Stdio is the transport for local, single-process agents. **No port is bound** in stdio mode — the port/host settings are ignored.
@@ -131,9 +131,9 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ---
 
-## 3. Tool reference (64 tools)
+## 3. Tool reference (68 tools)
 
-All 64 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
+All 68 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 
 ### Browser tools — `src/mcp_server/tools.py`
 
@@ -341,9 +341,18 @@ All three tools are pure reads: they never register, unregister, allocate, relea
 
 Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`) require a live CDP connection. Without one, `run_op` raises `HTTPException` 400 *before* the engine call — the agent sees a tool-call error with that message rather than an envelope. Start Browser Helper (or launch Chrome with `--remote-debugging-port=9555` and connect) before calling them. `session_status` and the fleet tools work without a browser connection.
 
-### The agent sees only 64 tools
+### The agent sees only 68 tools
 
-64 is the correct count for v1.34.0 (28 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation = 64). The 17 new E2E tools cover 6 functional groups for autonomous agent test creation and validation. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`); EXPERIMENTAL capabilities (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones are deliberately not exposed.
+68 is the correct count for v1.35.0 (28 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery = 68). The 4 new P0–P2 tools cover bulk scheduling, test discovery & export, and locale-aware visual proof. The 17 E2E tools cover 6 functional groups; the 4 new tools add `agent.testing` + `agent.flow` + `browser.core`. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`, `agent.flow`); EXPERIMENTAL (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones never surface.
+
+**v1.35 bulk/locale/discovery (4 new tools):**
+
+| Tool | Parameters | Capability | Engine binding | REST mirror |
+|------|-----------|------------|----------------|-------------|
+| `browser_discover_tests` | `pattern` (e2e/us_*.spec.ts), `root` | `agent.testing` | `glob` + US gate map | — |
+| `browser_export_batch_spec` | `recordings[]`, `suite_name` | `agent.flow` | `artifact_store` + `_render_playwright_spec` | — |
+| `browser_visual_diff_locale` | `url`, `locales:[en,fr]`, `storage_key`, `h1_selector`, `threshold` | `agent.testing` | `ScreenshotDiffEngine` per locale + `addScriptToEvaluateOnNewDocument` | — |
+| `browser_rate_hybrid_idle` | `url?`, `timeout`, `quiet_ms` | `browser.core` | `wait_for_network_idle` + `domain_throttle.snapshot()` | `POST /wait/network-idle` |
 
 **v1.34 E2E validation groups (17 new tools):**
 
@@ -390,8 +399,8 @@ export PATH="$PWD/.venv/bin:$PATH"
 
 python -m browser_helper.mcp --help            # exits 0, prints transports
 bh mcp --help                                  # Click help (entry point)
-python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 64
-python -m pytest tests/test_mcp_server.py -q   # 64 tests: interface, engine binding, fleet reads, FastMCP
+python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 68
+python -m pytest tests/test_mcp_server.py -q   # 68 tests: interface, engine binding, fleet reads, FastMCP
 ```
 
 ---

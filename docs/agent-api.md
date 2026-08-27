@@ -12,7 +12,7 @@ Browser Helper 1.0 provides a compact, deterministic interface for LLM agents. T
 - **Capture:** `POST /agent/act {"action":"capture"}` → `data: {artifact, data: base64, artifact_id, format: jpeg}` (not `result.base64`). `GET /artifacts/{id}` still serves the bytes.
 - **Ergonomia:** `GET|POST /page/visible-text?limit=10000` — fast `innerText` without `wait_ready` idle-wait. `POST /agent/console` returns `count+errors+console_errors+failures+entries`; `GET /network/requests` returns `count+failures+network_failures+entries` — tolerant aliases. `pin_snapshot: bool` only (`target.snapshot_id` holds the snap string).
 
-## 1.34 — 6 csoportos E2E validációs csomag (64 MCP eszköz)
+## 1.35 — P0–P2 bulk & locale (68 MCP eszköz — 64 + 4 új)
 
 17 új MCP tool a 6 funkciócsoportban — autonóm agentek törékenység/hallucináció mentes E2E tesztjeihez:
 

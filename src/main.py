@@ -283,7 +283,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.34.0",
+    version="1.35.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -382,10 +382,16 @@ class ClickRequest(BaseModel):
 
 
 class NavigateRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+
     url: str | None = None
     wait: bool | None = None  # None = default (wait for ready); False = return immediately after navigate
     timeout: int | None = None  # wait_for_ready timeout in seconds (overrides default 3s); ignored if wait is False
     wait_until: str | None = Field(None, description="domContentLoaded | load | networkIdle — default domContentLoaded (~400ms); networkIdle waits for quiet 400ms")
+    # P0-3 parity with Playwright: inject storageState BEFORE navigate via Page.addScriptToEvaluateOnNewDocument
+    origins: list[dict] | None = Field(None, description="Playwright-style origins list: [{origin, localStorage:[{name,value}]}] — injected via addScriptToEvaluateOnNewDocument BEFORE navigate, so first paint already sees the value. Example: [{origin:'https://example.com',localStorage:[{name:'receiptlens.locale',value:'fr'}]}]")
+    # Alias: storageState for direct Playwright storageState parity (origins list)
+    storage_state: list[dict] | dict | None = Field(None, alias="storageState", description="Alias for origins — Playwright storageState origins: [{origin, localStorage:[{name,value}]}]")
 
 
 class TypeRequest(BaseModel):
@@ -937,6 +943,20 @@ class AgentExecuteTaskRequest(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     return_options: dict[str, Any] = Field(default_factory=dict, alias="return")
 
+
+# P0-4: polling expect — auto-retry visible|hidden|text:Scan
+class AgentExpectRequest(BaseModel):
+    selector: str | None = Field(None, description="CSS selector to check (mutually exclusive with ref)")
+    ref: str | None = Field(None, description="AX ref from the last /agent/observe snapshot (mutually exclusive with selector)")
+    condition: str = Field("visible", description="visible | hidden | exists | gone | text:<substring> — e.g. 'text:Scan' checks innerText contains Scan")
+    timeout: int = Field(5000, ge=100, le=60000, description="Max wait in ms (default 5000)")
+    poll: int = Field(100, ge=10, le=2000, description="Poll interval in ms (default 100)")
+
+
+# Artifact bundle (P0-5) — retained trace.zip analog of Playwright retain-on-failure
+class ArtifactBundleRequest(BaseModel):
+    retain: str = Field("on-failure", description="always | on-failure — retain artifacts even when the test passed")
+    include: list[str] | None = Field(None, description="Subset: screenshot, console, network, trace — default all")
 
 
 class AgentRecordRequest(BaseModel):
@@ -1632,7 +1652,7 @@ async def _resolve_session_client(require_session: bool = True) -> tuple[CDPClie
     sess = _get_current_session()
     if sess is None:
         if require_session:
-            if _session_auto.get():
+            if _session_auto.get() or os.environ.get("BH_SESSION_AUTO", "").strip().lower() in ("1", "true", "yes"):
                 try:
                     await chrome_mgr.launch()  # idempotent — reuses running Chrome
                     sess = await session_registry.create(_local_cdp_http())
@@ -1725,12 +1745,12 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
                 except Exception as exc:
                     logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
                     sess = None
-        elif _session_auto.get():
+        elif _session_auto.get() or os.environ.get("BH_SESSION_AUTO", "").strip().lower() in ("1", "true", "yes"):
             try:
                 await chrome_mgr.launch()  # idempotent — reuses running Chrome
                 sess = await session_registry.create(_local_cdp_http())
                 _set_current_session(sess)
-                logger.info("Auto-minted session %s (tab %s) via X-Session-Auto opt-in", sess.session_id[:8], sess.tab_id[:8])
+                logger.info("Auto-minted session %s (tab %s) via X-Session-Auto/BH_SESSION_AUTO opt-in", sess.session_id[:8], sess.tab_id[:8])
             except Exception as exc:
                 logger.warning("X-Session-Auto session creation failed, falling back to default client: %s", exc, exc_info=True)
                 sess = None
@@ -2468,6 +2488,20 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
     """
     if url is None and body is not None:
         url = getattr(body, "url", None)
+    # P0-3: normalize storageState → origins and inject BEFORE navigate via addScriptToEvaluateOnNewDocument
+    origins_payload = None
+    storage_state_payload = None
+    if body is not None:
+        origins_payload = getattr(body, "origins", None)
+        storage_state_payload = getattr(body, "storage_state", None)
+    # storageState alias → origins merge (Playwright shape: {"origins": [...] } or origins list directly)
+    if storage_state_payload is not None:
+        if isinstance(storage_state_payload, dict) and "origins" in storage_state_payload:
+            _ss_origins = storage_state_payload["origins"]
+            if isinstance(_ss_origins, list):
+                origins_payload = (origins_payload or []) + _ss_origins
+        elif isinstance(storage_state_payload, list):
+            origins_payload = (origins_payload or []) + storage_state_payload
     # Merge wait/timeout/waitUntil: body > query > default
     eff_wait = body.wait if body is not None and body.wait is not None else wait
     if eff_wait is None:
@@ -2484,6 +2518,30 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
             status_code=422,
             detail="Missing 'url' — pass it as ?url=... query param OR JSON body {\"url\": \"...\"}",
         )
+    # P0-3: inject localStorage via addScriptToEvaluateOnNewDocument BEFORE navigate
+    if origins_payload:
+        _pre = _get_current_session()
+        _pre_client = _pre.client if _pre is not None else client
+        # Build one script that sets each origin's localStorage before the document's scripts run
+        _script_parts: list[str] = []
+        for _origin in origins_payload if isinstance(origins_payload, list) else []:
+            if not isinstance(_origin, dict):
+                continue
+            _ls = _origin.get("localStorage") or _origin.get("local_storage") or []
+            if not isinstance(_ls, list) or not _ls:
+                continue
+            for _kv in _ls:
+                _k = _kv.get("name") if isinstance(_kv, dict) else None
+                _v = _kv.get("value") if isinstance(_kv, dict) else None
+                if _k is None or _v is None:
+                    continue
+                _script_parts.append(f"try{{localStorage.setItem({json.dumps(str(_k))},{json.dumps(str(_v))});}}catch(e){{}}")
+        if _script_parts:
+            _js_src = "".join(_script_parts)
+            try:
+                await _pre_client.add_script_to_evaluate_on_new_document(_js_src)
+            except Exception as exc:
+                logger.debug("storageState addScript failed: %s", exc, exc_info=True)
     # Invalidate tab cache — navigation changes the page URL
     client._tabs_cache = []
     client._tabs_cache_ts = 0
@@ -5406,6 +5464,152 @@ async def agent_execute_task(body: AgentExecuteTaskRequest):
 # ---------------------------------------------------------------------------
 # High-level agent endpoints — one-call search & E2E test flows
 # ---------------------------------------------------------------------------
+
+# P0-4: polling expect — visible|hidden|text:Scan auto-retry (replaces wait_js innerText hack)
+@app.post("/agent/expect")
+async def agent_expect(body: AgentExpectRequest):
+    """Polling expect: retry until selector|ref satisfies condition or timeout.
+
+    * condition: ``visible`` | ``hidden`` | ``exists`` | ``gone`` | ``text:<sub>``
+      (text: checks innerText contains sub, case-sensitive).
+    * selector XOR ref (ref = AX ref from the last observe).
+    * Polls every ``poll`` ms until timeout — no manual wait_js loop.
+    """
+    if (body.selector is None) == (body.ref is None):
+        return api_error("agent_expect", "invalid_params", "Exactly one of selector or ref is required", 422)
+    if body.ref and body.ref not in ax_snapshots:
+        return api_error("agent_expect", "stale_snapshot",
+                         f"AX snapshot ref {body.ref!r} not found — call POST /agent/observe first", 409)
+    cond = (body.condition or "visible").strip()
+    is_text = cond.startswith("text:")
+    text_needle = cond[5:] if is_text else ""
+    allowed = {"visible", "hidden", "exists", "gone"}
+    if not is_text and cond not in allowed:
+        return api_error("agent_expect", "invalid_condition",
+                         "condition must be visible|hidden|exists|gone|text:<substring>", 422)
+    target, _sess = await _resolve_session_client()
+    deadline = time.monotonic() + body.timeout / 1000.0
+    poll_s = max(body.poll, 10) / 1000.0
+    last_err: str | None = None
+    while True:
+        try:
+            if body.ref:
+                snap = ax_snapshots.get(body.ref.split("#")[0]) or await _capture_accessibility_snapshot(target=target)
+                # ref is an AX ref like "e4" — check node existence/visibility via snapshot
+                _node = snap.nodes_by_ref.get(body.ref) if hasattr(snap, "nodes_by_ref") else None
+                if is_text:
+                    # find node text
+                    name = (_node.name if _node else "") or ""
+                    ok = text_needle in name
+                elif cond in ("visible", "exists"):
+                    ok = _node is not None and getattr(_node, "visible", True)
+                else:  # hidden|gone
+                    ok = _node is None or not getattr(_node, "visible", False)
+                if ok:
+                    return api_success("agent_expect", {"condition": cond, "selector": body.selector, "ref": body.ref, "matched": True, "elapsed_ms": round((body.timeout - max(0, (deadline - time.monotonic()) * 1000)))})
+                last_err = f"AX ref {body.ref!r} not yet {cond}"
+            else:
+                # CSS selector path — evaluate in the page
+                sel = body.selector
+                if is_text:
+                    js = f"JSON.stringify((document.querySelector({json.dumps(sel)})?.innerText || '').includes({json.dumps(text_needle)}))"
+                    r = await target.evaluate(js)
+                    val = (r.get("result") if isinstance(r, dict) else "") or ""
+                    # r.result is JSON string "true"/"false"
+                    try:
+                        ok = json.loads(val) is True if isinstance(val, str) else bool(val)
+                    except Exception:
+                        ok = val == "true"
+                    if ok:
+                        return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True, "elapsed_ms": round((body.timeout - max(0, (deadline - time.monotonic()) * 1000)))})
+                    last_err = f"text:{text_needle!r} not in {sel!r}"
+                elif cond in ("visible", "exists"):
+                    js = f"JSON.stringify((()=>{{const e=document.querySelector({json.dumps(sel)});return e&&e.offsetParent!==null&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';}})())"
+                    r = await target.evaluate(js)
+                    val = r.get("result", "false") if isinstance(r, dict) else "false"
+                    try:
+                        ok = json.loads(val) is True if isinstance(val, str) else bool(val)
+                    except Exception:
+                        ok = False
+                    if ok or (cond == "exists" and await _selector_exists(target, sel)):
+                        return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True, "elapsed_ms": round((body.timeout - max(0, (deadline - time.monotonic()) * 1000)))})
+                    last_err = f"{sel!r} not yet {cond}"
+                else:  # hidden|gone
+                    js = f"JSON.stringify((()=>{{const e=document.querySelector({json.dumps(sel)});return !e||e.offsetParent===null||getComputedStyle(e).visibility==='hidden'||getComputedStyle(e).display==='none';}})())"
+                    r = await target.evaluate(js)
+                    val = r.get("result", "false") if isinstance(r, dict) else "false"
+                    try:
+                        ok = json.loads(val) is True if isinstance(val, str) else bool(val)
+                    except Exception:
+                        ok = False
+                    if ok:
+                        return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True})
+                    last_err = f"{sel!r} not yet {cond}"
+        except Exception as exc:
+            last_err = str(exc)[:200]
+        if time.monotonic() >= deadline:
+            return api_error("agent_expect", "expect_timeout",
+                             f"Condition {cond!r} not met within {body.timeout}ms: {last_err}", 504)
+        await asyncio.sleep(poll_s)
+
+
+async def _selector_exists(target, sel: str) -> bool:
+    try:
+        r = await target.evaluate(f"JSON.stringify(!!document.querySelector({json.dumps(sel)}))")
+        return r.get("result") == "true" if isinstance(r, dict) else False
+    except Exception:
+        return False
+
+
+# P0-5: per-test artifact bundle — trace.zip + screenshot + console + network (retain-on-failure)
+@app.post("/agent/bundle")
+async def agent_bundle(body: ArtifactBundleRequest):
+    """Build a per-test artifact bundle (screenshot + console + network + trace).
+
+    Returns artifact records + a trace.zip (JSON bundle of the last journey's
+    /logs + screenshots) analogous to Playwright's trace.zip retain-on-failure.
+    Pass retain=always to force artifacts even on passing tests.
+    """
+    target, _sess = await _resolve_session_client()
+    want = set(body.include or ["screenshot", "console", "network", "trace"])
+    out: dict[str, Any] = {}
+    # screenshot
+    if "screenshot" in want:
+        try:
+            shot = await target.screenshot()
+            out["screenshot"] = shot
+        except Exception as exc:
+            out["screenshot_error"] = str(exc)[:200]
+    # console
+    if "console" in want:
+        try:
+            await target.start_console_monitoring()
+            entries = target.get_console_entries(level="error") if hasattr(target, "get_console_entries") else []
+            out["console"] = {"count": len(entries), "entries": entries[-50:]}
+        except Exception as exc:
+            out["console_error"] = str(exc)[:200]
+    # network
+    if "network" in want:
+        try:
+            await target.start_network_monitoring()
+            log = await target.get_network_log()
+            entries = log.get("entries", []) if isinstance(log, dict) else []
+            out["network"] = {"count": len(entries), "entries": entries[-100:]}
+        except Exception as exc:
+            out["network_error"] = str(exc)[:200]
+    # trace: collect recent /logs for the current trace_id + inline JSON zip-like bundle
+    if "trace" in want:
+        try:
+            trace_id = _current_trace.get()
+            logs = [e for e in operation_log if e.get("trace_id") == trace_id] if trace_id else list(operation_log)[-20:]
+            trace_payload = json.dumps({"trace_id": trace_id, "logs": logs, "captured_at": datetime.now(_UTC).isoformat()}, indent=2).encode()
+            rec = artifact_store.put(trace_payload, "application/zip", ".zip", metadata={"kind": "trace", "trace_id": trace_id})
+            out["trace"] = rec
+        except Exception as exc:
+            out["trace_error"] = str(exc)[:200]
+    out["retain"] = body.retain
+    return api_success("agent_bundle", out)
+
 
 # Engine → (search URL builder, answer selector)
 _SEARCH_ENGINES = {

@@ -182,13 +182,23 @@ class BatchTask(BaseModel):
     assert_selector: str | None = Field(None, description="CSS selector to assert present")
     assert_text: str | None = Field(None, description="Text substring to assert present")
     timeout: int = Field(15, description="Per-task timeout in seconds")
+    # P0-2 bulk: optional per-task id for sharding/reporter
+    id: str | None = Field(None, description="Stable test id (e.g. US-007-01) for shard/reporter")
 
 
 class RunBatchRequest(BaseModel):
-    """Payload for ``POST /fleet/run-batch`` (v1.27.0, F4)."""
+    """Payload for ``POST /fleet/run-batch`` (v1.27.0, F4) — P0-2 bulk executor."""
 
-    tasks: list[BatchTask] = Field(..., min_length=1, max_length=50)
-    concurrency: int = Field(4, ge=1, le=8)
+    tasks: list[BatchTask] = Field(..., min_length=1, max_length=100)
+    concurrency: int = Field(4, ge=1, le=16)
+    # P0-2 bulk executor knobs (all optional, all backward-compat)
+    workers: int | None = Field(None, ge=1, le=32, description="Alias for concurrency — workers wins when set")
+    retries: int = Field(0, ge=0, le=3, description="Retries per failed task (0=no retry, 1=re-run once)")
+    timeout_per_test: int | None = Field(None, alias="timeoutPerTest", ge=1, le=300, description="Per-test timeout override (seconds); falls back to task.timeout")
+    shard: str | None = Field(None, description="Shard filter '1/2' (shard_index/shard_total) — only tasks where index % total == shard-1 run")
+    reporter: str | list[str] | None = Field(None, description="Reporter(s) to generate: html|json|junit — aggregated report artifact ids returned")
+
+    model_config = {"populate_by_name": True}
 
 
 # ---------------------------------------------------------------------------
@@ -441,75 +451,149 @@ async def queue_sweep() -> Any:
 async def run_batch(body: RunBatchRequest) -> Any:
     """Run N independent browsing tasks in parallel (``POST /fleet/run-batch``).
 
+    Bulk executor (P0-2): supports workers/retries/timeoutPerTest/shard/reporter.
     Each task gets its own isolated session tab (session_registry.create);
-    tasks run up to *concurrency* at a time.  A failing task does not affect
-    the others — every result carries its own status.  Returns one aggregated
-    report with per-task outcomes.
+    tasks run up to *concurrency/workers* at a time.  Failed tasks retry once
+    when retries>=1.  Shard filters tasks by index.  Reporters generate
+    JSON/JUnit/HTML summaries as artifacts.  1 call → N tests in parallel,
+    aggregated passed/flaky/failed.
     """
     from main import _local_cdp_http, chrome_mgr, session_registry
 
-    tasks = body.tasks
-    sem = asyncio.Semaphore(body.concurrency)
+    # Normalize P0-2 bulk knobs (all backward-compat)
+    concurrency = body.workers if body.workers is not None else body.concurrency
+    per_test_timeout = body.timeout_per_test
+    # Shard filtering: shard="2/4" → only tasks where (index % 4) == 1 run
+    tasks_with_idx: list[tuple[int, BatchTask]] = list(enumerate(body.tasks))
+    if body.shard:
+        try:
+            parts = body.shard.split("/")
+            shard_idx = int(parts[0]) - 1
+            shard_total = int(parts[1])
+            if shard_total >= 1 and 0 <= shard_idx < shard_total:
+                tasks_with_idx = [(i, t) for i, t in tasks_with_idx if (i % shard_total) == shard_idx]
+        except Exception:
+            pass
+    sem = asyncio.Semaphore(concurrency)
 
     async def _run_one(idx: int, task: BatchTask) -> dict:
         async with sem:
             sess = None
             t0 = time.monotonic()
-            try:
-                await chrome_mgr.launch()
-                # Perf P0: mint on the target URL directly — skips the extra
-                # navigate round-trip the old about:blank→navigate dance paid.
-                sess = await session_registry.create(_local_cdp_http(), url=task.url)
-                client_ = sess.client
-                await asyncio.sleep(0.4)  # domContentLoaded-style settle (DCL poll)
-                result: dict[str, Any] = {"status": "ok", "url": task.url}
-                if task.action == "title":
-                    t = await client_.get_title() if hasattr(client_, "get_title") else {"title": ""}
-                    if not (t or {}).get("title"):
-                        t = await client_.evaluate("document.title")
-                        result["title"] = str((t or {}).get("result", ""))
-                    else:
-                        result["title"] = t.get("title", "")
-                elif task.action == "text":
-                    txt = await client_.get_page_text() if hasattr(client_, "get_page_text") else {"text": ""}
-                    result["text_length"] = len((txt or {}).get("text", ""))
-                elif task.action == "screenshot":
-                    shot = await client_.screenshot()
-                    result["screenshot_bytes"] = len(str((shot or {}).get("data", "")))
-                if task.assert_selector:
-                    a = await client_.assert_elements("selector", task.assert_selector, "exists")
-                    passed = (a.get("result") or {}).get("passed")
-                    if not passed:
-                        result["status"] = "assert_failed"
-                        result["assert"] = {"selector": task.assert_selector, "passed": False}
-                if task.assert_text and result["status"] == "ok":
-                    a = await client_.assert_elements("text", task.assert_text, "exists")
-                    passed = (a.get("result") or {}).get("passed")
-                    if not passed:
-                        result["status"] = "assert_failed"
-                        result["assert"] = {"text": task.assert_text, "passed": False}
-                result["elapsed_ms"] = round((time.monotonic() - t0) * 1000)
-                return {"index": idx, "task": task.url, **result}
-            except Exception as exc:  # noqa: BLE001 — per-task isolation
-                return {"index": idx, "task": task.url, "status": "error", "error": str(exc)[:300]}
-            finally:
-                if sess is not None:
-                    try:
-                        await session_registry.destroy(sess.session_id)
-                    except Exception as exc:  # noqa: BLE001 — best-effort cleanup
-                        logger.debug("Batch cleanup destroy failed: %s", exc)
+            # retry wrapper (retries=0 → single attempt; retries=1 → one re-run)
+            last_error: dict | None = None
+            for attempt in range(body.retries + 1):
+                try:
+                    await chrome_mgr.launch()
+                    eff_timeout = per_test_timeout if per_test_timeout is not None else task.timeout
+                    # Clamp per-test timeout via wait loop budget
+                    sess = await session_registry.create(_local_cdp_http(), url=task.url)
+                    client_ = sess.client
+                    await asyncio.sleep(0.4)  # domContentLoaded-style settle (DCL poll)
+                    result: dict[str, Any] = {"status": "ok", "url": task.url, "id": task.id}
+                    # timeout guard uses asyncio.wait_for around the action+asserts
+                    async def _do_work():
+                        if task.action == "title":
+                            t = await client_.get_title() if hasattr(client_, "get_title") else {"title": ""}
+                            if not (t or {}).get("title"):
+                                t = await client_.evaluate("document.title")
+                                result["title"] = str((t or {}).get("result", ""))
+                            else:
+                                result["title"] = t.get("title", "")
+                        elif task.action == "text":
+                            txt = await client_.get_page_text() if hasattr(client_, "get_page_text") else {"text": ""}
+                            result["text_length"] = len((txt or {}).get("text", ""))
+                        elif task.action == "screenshot":
+                            shot = await client_.screenshot()
+                            result["screenshot_bytes"] = len(str((shot or {}).get("data", "")))
+                        if task.assert_selector:
+                            a = await client_.assert_elements("selector", task.assert_selector, "exists")
+                            passed = (a.get("result") or {}).get("passed")
+                            if not passed:
+                                result["status"] = "assert_failed"
+                                result["assert"] = {"selector": task.assert_selector, "passed": False}
+                        if task.assert_text and result["status"] == "ok":
+                            a = await client_.assert_elements("text", task.assert_text, "exists")
+                            passed = (a.get("result") or {}).get("passed")
+                            if not passed:
+                                result["status"] = "assert_failed"
+                                result["assert"] = {"text": task.assert_text, "passed": False}
+                    await asyncio.wait_for(_do_work(), timeout=eff_timeout)
+                    result["elapsed_ms"] = round((time.monotonic() - t0) * 1000)
+                    if result["status"] == "ok":
+                        if last_error is not None:
+                            result["flaky"] = True  # recovered on retry
+                        return {"index": idx, "task": task.url, **result}
+                    last_error = {"index": idx, "task": task.url, **result}
+                except asyncio.TimeoutError:
+                    last_error = {"index": idx, "task": task.url, "status": "timeout", "error": f"timeout after {per_test_timeout or task.timeout}s"}
+                except Exception as exc:  # noqa: BLE001 — per-task isolation
+                    last_error = {"index": idx, "task": task.url, "status": "error", "error": str(exc)[:300]}
+                finally:
+                    if sess is not None:
+                        try:
+                            await session_registry.destroy(sess.session_id)
+                        except Exception as exc2:  # noqa: BLE001 — best-effort cleanup
+                            logger.debug("Batch cleanup destroy failed: %s", exc2)
+                        sess = None
+                # retry loop: if we have more attempts, continue; otherwise fall through
+                if attempt < body.retries and last_error and last_error.get("status") not in ("ok",):
+                    await asyncio.sleep(0.3)
+                    continue
+                break
+            assert last_error is not None
+            return last_error
 
-    results = await asyncio.gather(*(_run_one(i, t) for i, t in enumerate(tasks)))
-    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    results = await asyncio.gather(*(_run_one(i, t) for i, t in tasks_with_idx))
+    ok_count = sum(1 for r in results if r.get("status") == "ok" and not r.get("flaky"))
+    flaky_count = sum(1 for r in results if r.get("flaky"))
+    failed_count = len(results) - ok_count - flaky_count
+    payload: dict[str, Any] = {
+        "total": len(results),
+        "ok": ok_count + flaky_count,  # passed (ok is backward-compat alias)
+        "passed": ok_count + flaky_count,
+        "flaky": flaky_count,
+        "failed": failed_count,
+        "concurrency": concurrency,
+        "workers": concurrency,
+        "results": results,
+    }
+    # Optional reporters: json/html/junit artifacts (aggregated summaries)
+    want_reporters: set[str] = set()
+    if body.reporter:
+        raw = [body.reporter] if isinstance(body.reporter, str) else list(body.reporter)
+        want_reporters = {r.lower().strip() for r in raw if r and isinstance(r, str)}
+    if want_reporters:
+        try:
+            from main import artifact_store
+            import xml.etree.ElementTree as _ET
+            reporters_out: dict[str, Any] = {}
+            if "json" in want_reporters:
+                rec = artifact_store.put(json.dumps({"results": results, "summary": {"total": len(results), "passed": ok_count + flaky_count, "flaky": flaky_count, "failed": failed_count}}, indent=2).encode(), "application/json", ".json", metadata={"kind": "batch-report", "format": "json"})
+                reporters_out["json"] = rec
+            if "junit" in want_reporters:
+                suite = _ET.Element("testsuite", name="fleet-run-batch", tests=str(len(results)), failures=str(failed_count), skipped="0")
+                for r in results:
+                    tc_name = (r.get("id") or r.get("task") or f"task-{r.get('index')}")[:120]
+                    tc = _ET.SubElement(suite, "testcase", name=tc_name, classname="batch", time=str(r.get("elapsed_ms", 0) / 1000))
+                    if r.get("status") not in ("ok",):
+                        fail = _ET.SubElement(tc, "failure", message=r.get("error") or r.get("assert", {}).get("selector", "assert_failed"))
+                        fail.text = json.dumps(r, indent=2)[:4000]
+                junit_xml = _ET.tostring(suite, encoding="unicode", xml_declaration=False)
+                rec = artifact_store.put(junit_xml.encode(), "application/xml", ".xml", metadata={"kind": "batch-report", "format": "junit"})
+                reporters_out["junit"] = rec
+            if "html" in want_reporters:
+                rows = "".join(f"<tr><td>{r.get('index')}</td><td>{(r.get('id') or r.get('task',''))[:80]}</td><td class='{r.get('status')}'>{r.get('status')}</td><td>{r.get('elapsed_ms','')}</td></tr>" for r in results)
+                html_doc = f"<!doctype html><html><head><meta charset='utf-8'><title>Fleet run-batch</title><style>table{{border-collapse:collapse}}td,th{{border:1px solid #ccc;padding:4px 8px}} .ok{{color:green}} .failed{{color:red}} .flaky{{color:orange}}</style></head><body><h1>Fleet run-batch — {ok_count+flaky_count} passed / {failed_count} failed / {flaky_count} flaky</h1><table><tr><th>#</th><th>test</th><th>status</th><th>ms</th></tr>{rows}</table></body></html>"
+                rec = artifact_store.put(html_doc.encode(), "text/html", ".html", metadata={"kind": "batch-report", "format": "html"})
+                reporters_out["html"] = rec
+            if reporters_out:
+                payload["reporters"] = reporters_out
+        except Exception as exc:
+            logger.debug("reporter generation failed: %s", exc, exc_info=True)
     return _success(
         "fleet_run_batch",
-        {
-            "total": len(results),
-            "ok": ok_count,
-            "failed": len(results) - ok_count,
-            "concurrency": body.concurrency,
-            "results": results,
-        },
+        payload,
     )
 
 
