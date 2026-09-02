@@ -3372,6 +3372,17 @@ class CDPClient:
         tabs = await self.discover_tabs()
         target = next((t for t in tabs if t["id"] == tab_id), None)
         if not target:
+            # 2026-09-02 stale-cache fix: the tab may have JUST been recreated
+            # (PUT /json/new in _ensure_browser's dead-tab heal) after this
+            # client's tab cache was populated — force fresh discovery + retry
+            # once instead of failing the whole op with "Tab not found"
+            # (observed: heal created the tab, immediate connect missed it →
+            # 503 "Chrome unavailable" even though Chrome was fine).
+            self._tabs_cache = []
+            self._tabs_cache_ts = 0
+            tabs = await self.discover_tabs()
+            target = next((t for t in tabs if t["id"] == tab_id), None)
+        if not target:
             raise CDPError(
                 f"Tab not found: {tab_id}. "
                 "The tab may have been closed or navigated to a new target. "

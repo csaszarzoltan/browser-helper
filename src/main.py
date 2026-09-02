@@ -5087,8 +5087,26 @@ async def agent_act(body: AgentActionRequest):
             else:
                 text = target.get("text") or target.get("name") or target.get("label")
                 if not text:
-                    raise ValueError("click requires an element reference, selector or text")
-                result = await tc.click_by_text(text, body.timeout)
+                    # 2026-09-02 ref-parity fix: a ref that resolved to nothing
+                    # (stale snapshot, GC'd ax cache) said "click requires an
+                    # element reference" — misleading. Re-capture the a11y
+                    # snapshot and retry ref resolution once; if still missing,
+                    # say exactly that with the live refs.
+                    if body.target and body.target.ref:
+                        fresh = await _capture_accessibility_snapshot(target=tc)
+                        node = next((n for n in fresh.nodes if n.ref == body.target.ref), None)
+                        if node:
+                            result = await tc.click_backend_node(node.backend_node_id)
+                        else:
+                            live = [n.ref for n in fresh.nodes[:20]]
+                            raise ElementNotFoundError(
+                                f"ref {body.target.ref!r} not found in the current page snapshot "
+                                f"(page may have changed — call observe/snapshot again). Live refs: {live}"
+                            )
+                    else:
+                        raise ValueError("click requires an element reference, selector or text")
+                else:
+                    result = await tc.click_by_text(text, body.timeout)
                 if isinstance(result, dict) and result.get("status") == "error":
                     try:
                         snap_e2 = await _capture_accessibility_snapshot(target=tc)
@@ -5198,6 +5216,18 @@ async def agent_act(body: AgentActionRequest):
             if not tab_id:
                 raise ValueError("switch_context requires parameters.tab_id")
             result = await tc.switch_tab(str(tab_id))
+        elif action == "observe":
+            # MCP-parity (2026-09-02): act {"action":"observe"} — snapshot-only,
+            # same payload as POST /agent/observe (was 422 unknown_action).
+            scope = body.parameters.get("scope", "page")
+            snap = await _capture_accessibility_snapshot(
+                scope=scope if scope in ("page", "dialog") else "page", target=tc
+            )
+            result = {
+                "snapshot_id": snap.snapshot_id,
+                "nodes": [n.as_dict() for n in snap.nodes],
+                "page": snap.page,
+            }
         else:
             return api_error("agent_act", "unknown_action", f"Unknown action: {action}", 422)
         data = {"action": action, "result": result}
