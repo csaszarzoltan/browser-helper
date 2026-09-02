@@ -4,6 +4,22 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.35.3] — 2026-09-02
+
+**Fix:** 3 maradék bug a retry-teszt alapján (1.35.2 utáni ad-hoc report):
+1) **Last-tab exit:** orphan-tab sweep bezárta az utolsó page tabot → headed
+   Chrome halkan kilépett (tiszta exit, nincs crash-signal), watchdog ciklus.
+   Fix: `src/session_registry.py` never-close-last-tab guard + stale-reap utáni
+   keep-warm tab mint. 2) **Stale tab-cache:** `cdp_client.connect_to_target`
+   elavult cache-ből 503-at dobott (`Tab not found`) a dead-tab heal (új tab
+   `PUT /json/new` már létezett) után. Fix: cache invalidate + retry once
+   connect-ben (switch_tab már így tett). 3) **MCP act parity:** `act
+   {"action":"observe"}` REST-en 422 `unknown_action` (csak `/agent/observe`
+   létezett), `ref:"e1"` bogus click `click requires an element reference`
+   félrevezető üzenet. Fix: `observe` branch `src/main.py:agent_act`-ben
+   (scope=page|dialog, ugyanaz a snapshot mint `/agent/observe`), ref-missnél
+   friss snapshot retry + live ref lista az hibában.
+
 ## [1.35.2] — 2026-09-02
 
 **Fix:** `MCP/browser-helper` 2 db szerver-bug a felhasználói report alapján:
