@@ -229,13 +229,14 @@ async def act(
     body = {
         "action": action,
         "target": {k: v for k, v in target_dict.items() if v is not None},
-        "url": url,
-        "value": value,
-        "fields": fields,
-        "option": option,
-        "timeout": timeout,
-        "expression": expression,
     }
+    # Only include set fields — the REST schema rejects explicit nulls with
+    # 422 Unprocessable (observed 2026-09-02: MCP act navigate 422 because
+    # "url": null / "fields": null were sent alongside).
+    for _k in ("url", "value", "fields", "option", "timeout", "expression"):
+        _v = locals().get(_k)
+        if _v is not None:
+            body[_k] = _v
     # Route through the running service to get identical behaviour
     try:
         import asyncio

@@ -4,6 +4,22 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.35.2] — 2026-09-02
+
+**Fix:** `MCP/browser-helper` 2 db szerver-bug a felhasználói report alapján:
+1) `navigate → JSONResponse is not JSON serializable` — `main.run_op` hibaágon
+   Starlette `JSONResponse`-t adott (REST parity), de `src/mcp_server/tools.py`
+   `json_dumps(JSONResponse)`-szel bukott és elnyelte a hibát. Fix:
+   `src/mcp_server/serialization.py::_unwrap` (`response.body` → dict unwrap,
+   minden MCP handlerre érvényes, nem csak navigate-re). 2) `act → 422
+   Unprocessable` MCP-n át — a `tools.py:act` handler explicit `None`-okat is
+   küldött (`"url": null`, `"fields": null`) a `/agent/act` felé; a REST
+   séma null-t 422-vel dobta. Fix: csak `is not None` kulcsok mennek a
+   `body`-ba. Plusz ops: `settings.json` 9555→9557 szinkron (service
+   `--debug-port 9557` vs MCP `CHROME_AUTO_PORT` default-eltérés), Chrome
+   `stderr` → `/tmp/bh-chrome-stderr.log` (3 néma halál 08:30–08:35, most
+   debuggolható), watchdog már 1.35.1-ben 300s/3×8s/2-tick debounce.
+
 ## [1.35.1] — 2026-09-02
 
 **Ops:** fix `browser-helper.service` watchdog túlérzékenysége — a Chrome 2 percenként tévesen újraindult

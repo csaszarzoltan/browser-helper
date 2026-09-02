@@ -362,10 +362,19 @@ class ChromeManager:
                 break
 
         try:
+            # Chrome stderr → file (NOT DEVNULL): crashes were invisible until
+            # now (observed 2026-09-02: 3 silent deaths in 50 min, no dmesg OOM,
+            # no crash dump — the reason died with the process). Rotate by
+            # truncating per launch so the file always holds the latest life.
+            self._stderr_path = "/tmp/bh-chrome-stderr.log"
+            try:
+                self._stderr_fh = open(self._stderr_path, "w", buffering=1)  # noqa: ASYNC230,SIM115 — once per launch, not a tight loop; must stay open for process lifetime
+            except OSError:
+                self._stderr_fh = None
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=(self._stderr_fh if self._stderr_fh is not None else subprocess.DEVNULL),
                 env=child_env,
             )
         except FileNotFoundError:

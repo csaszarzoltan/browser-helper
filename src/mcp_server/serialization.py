@@ -12,9 +12,36 @@ import json
 from typing import Any
 
 
+def _unwrap(payload: Any) -> Any:
+    """Normalize a handler result to a JSON-serializable object.
+
+    ``main.run_op``'s error path returns a Starlette ``JSONResponse`` (REST
+    parity).  MCP handlers handed that straight to :func:`json_dumps`, which
+    raised ``Object of type JSONResponse is not JSON serializable`` and hid
+    the real error (observed 2026-09-02: navigate 503 surfaced as a
+    serialization crash).  Unwrap ``.body`` back to a dict here so every
+    handler stays a thin wrapper.
+    """
+    if isinstance(payload, (str, bytes, bytearray)) or payload is None or isinstance(
+        payload, (bool, int, float, list, tuple, dict)
+    ):
+        return payload
+    body = getattr(payload, "body", None)
+    if body is not None:
+        try:
+            return json.loads(bytes(body))
+        except Exception as exc:  # noqa: BLE001 — fall back to generic envelope
+            return {"status": "error", "operation": getattr(payload, "operation", "unknown"),
+                    "data": None, "error": {"code": "operation_failed", "message": f"{exc}"[:300]},
+                    "meta": {}}
+    return {"status": "error", "operation": getattr(payload, "operation", "unknown"),
+            "data": None, "error": {"code": "operation_failed", "message": str(payload)},
+            "meta": {}}
+
+
 def json_dumps(payload: Any) -> str:
     """Serialize a payload to a JSON string (``ensure_ascii=False``)."""
-    return json.dumps(payload, ensure_ascii=False)
+    return json.dumps(_unwrap(payload), ensure_ascii=False)
 
 
 def tool_result(operation: str, data: Any, meta: dict[str, Any] | None = None) -> str:
