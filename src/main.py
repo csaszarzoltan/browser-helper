@@ -1460,11 +1460,17 @@ async def _ensure_global_client_attached() -> None:
 async def _chrome_health_watchdog() -> None:
     """Periodic background task: reap orphan Chrome + auto-restart if dead.
 
-    Runs every 5 minutes.  If the main browser-helper Chrome has crashed,
-    it auto-restarts.  Orphan Chrome processes are killed to prevent RAM
-    accumulation.
+    After 2026-09-02 fix: 5-minute interval (was 120s), 2-tick debounce
+    (3 probes ×8s inline → 24s confirmed downtime per tick, then 1 tick
+    defer → ~10 min before a SingletonLock-clearing relaunch). A transient
+    GC / X stall no longer kills a live Chrome (observed 2026-09-02: GC
+    log arrived 30s after the watchdog had already relaunched).
     """
-    WATCHDOG_INTERVAL = 120  # 2 minutes (was 300s — faster recovery after crash)
+
+    WATCHDOG_INTERVAL = 300  # 5 min — 120s was too aggressive for X/extension stalls
+    _FAIL_PROBES = 3  # probes per tick, 8s apart → ~24s confirmed downtime
+    _FAIL_TICKS = 2  # require N consecutive failed ticks before relaunch
+    _consecutive_failed_ticks = 0
     while True:
         await asyncio.sleep(WATCHDOG_INTERVAL)
         try:
@@ -1486,20 +1492,52 @@ async def _chrome_health_watchdog() -> None:
                 or settings_mgr.get("chrome_debug_port")
                 or 9557
             )
-            try:
-                import httpx as _httpx
+            # Inline retry: 3 probes spaced 8s — transient stalls don't count
+            _probe_ok = False
+            _last_exc: Exception | None = None
+            for _pi in range(_FAIL_PROBES):
+                if chrome_mgr._launch_in_progress:
+                    logger.info("Watchdog: launch already in progress — skipping probe")
+                    _probe_ok = True
+                    break
+                try:
+                    import httpx as _httpx
 
-                async with _httpx.AsyncClient(timeout=3.0) as http:
-                    resp = await http.get(f"http://127.0.0.1:{main_port}/json/version")
-                    if resp.status_code == 200:
-                        # Chrome is up.  If the global client happens to be
-                        # disconnected, re-attach it quietly (no restart).
-                        if not client.is_connected:
-                            await _ensure_global_client_attached()
-                        continue  # all good — Chrome is alive
-                    raise ConnectionError("Chrome not responding")
-            except Exception as exc:
-                logger.debug("chrome health check failed: %s", exc, exc_info=True)
+                    async with _httpx.AsyncClient(timeout=5.0) as http:
+                        resp = await http.get(f"http://127.0.0.1:{main_port}/json/version")
+                        if resp.status_code == 200:
+                            # Chrome is up.  If the global client happens to be
+                            # disconnected, re-attach it quietly (no restart).
+                            if not client.is_connected:
+                                await _ensure_global_client_attached()
+                            _probe_ok = True
+                            break
+                        raise ConnectionError(f"Chrome HTTP {resp.status_code}")
+                except Exception as exc:  # noqa: BLE001 — probe: any failure counts
+                    _last_exc = exc
+                    logger.debug("watchdog probe %d/%d failed: %s", _pi + 1, _FAIL_PROBES, exc, exc_info=True)
+                    if _pi + 1 < _FAIL_PROBES:
+                        await asyncio.sleep(8.0)
+            if _probe_ok:
+                _consecutive_failed_ticks = 0
+                continue  # Chrome alive — nothing to do
+
+            # All inline probes failed — count the failed tick; defer the first
+            # one.  A single ~24s stall (GC, X repaint) defers; only a 2nd
+            # consecutive failed tick (~5 min later) triggers relaunch.
+            _consecutive_failed_ticks += 1
+            if _consecutive_failed_ticks < _FAIL_TICKS:
+                logger.info(
+                    "Watchdog: chrome probe failed (%d/%d) after %d probes — deferring relaunch until next tick (last: %s)",
+                    _consecutive_failed_ticks, _FAIL_TICKS, _FAIL_PROBES, _last_exc,
+                )
+                continue
+            _consecutive_failed_ticks = 0  # reset for the post-relaunch cycle
+            exc = _last_exc or ConnectionError("Chrome not responding")
+            try:
+                raise exc
+            except Exception as exc:  # keep existing `exc` handling path below
+                logger.debug("chrome health check failed (debounced): %s", exc, exc_info=True)
                 # Chrome not running at all — launch a new one.  But if a
                 # launch is ALREADY in progress (run_op triggered it and the
                 # warm-up window is still open), do NOT spawn a second
