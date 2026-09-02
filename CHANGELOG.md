@@ -4,6 +4,16 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.35.1] — 2026-09-02
+
+**Ops:** fix `browser-helper.service` watchdog túlérzékenysége — a Chrome 2 percenként tévesen újraindult
+(`All connection attempts failed` egyetlen 3s timeout után, `SingletonLock` törlése élő Chrome-on).
+Javítás: 300s interval (was 120s), 5s probe timeout, 3×8s inline retry (24s igazolt downtime), 2-tick defer
+(`_consecutive_failed_ticks`) → relaunch leghamarabb ~10 perc megerősített halál után. OOM nincs
+(kernel/dmesg üres), mem 4.6Gi/23Gi, VNC `Xtigervnc :1` stabil — a hiba pusztán watchdog debounce volt;
+érintett chrome PID 792301 csak GC stall miatt nem válaszolt. `lab-dashboard.service` `stop+disable` +
+árva `turbo/tsx` (6 proc), 2 orphan `next-server` (21GB dev leak `:3100/:3002`) cleanup.
+
 ## [1.35.0] — 2026-08-26
 ### Added — P0–P2 bulk & locale csomag (64 → 68 MCP eszköz)
 **P0 400-fix:** `BH_SESSION_AUTO=1` systemd default (Environment=), MCP stdio auto-mint (első browser tool sosem 400-oz) — `run_op` + `_resolve_session_client` + `_mcp_session` mind honolják az env-et (ContextVar mellé fallback).
