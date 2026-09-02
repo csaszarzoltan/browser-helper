@@ -167,6 +167,12 @@ async def observe(
     )
     
     _sess, _run_op = await _mcp_session()  # local function
+    # 2026-09-02 heal fix: health-check via run_op before snapshot capture
+    if _sess is not None:
+        try:
+            await _run_op("observe_heal_ping", _sess.client.get_tabs)
+        except Exception:  # noqa: BLE001
+            pass
     _set_current_session(_sess)
 
     try:
@@ -888,7 +894,16 @@ async def get_page_text(
                 await run_op_fn("get_page_text_wait", target.wait_for_ready, timeout)
             except Exception:  # noqa: BLE001,S110 — wait is best-effort; text still readable
                 pass
-        result = await target.get_page_text()
+        # 2026-09-02 heal fix: run via run_op so _ensure_browser reconnects the
+        # session tab after a Chrome restart (direct target.get_page_text hit
+        # "Not connected to Chrome CDP" when the MCP session held a dead WS).
+        result = await run_op_fn("get_page_text", target.get_page_text)
+        # run_op wraps as {status, data, ...}; unwrap on success
+        if isinstance(result, dict) and result.get("data") is not None:
+            inner = result["data"]
+            # inner may be {status:"ok", text, length} — keep envelope compat
+            if isinstance(inner, dict) and "text" in inner:
+                result = inner
         return tool_result("get_page_text", result)
     except Exception as exc:  # noqa: BLE001
         return tool_error("get_page_text", "failed", str(exc))
@@ -1141,8 +1156,15 @@ async def browser_get_accessibility_tree(
     if ctx is not None:
         ctx.info(f"browser_get_accessibility_tree scope={scope} max_nodes={max_nodes}")
     try:
+        target, run_op_fn = await _target()
+        # 2026-09-02 heal fix: health-check the session tab via run_op so a
+        #  dead WS reconnects before the snapshot capture (otherwise
+        #  "Not connected to Chrome CDP").
+        try:
+            await run_op_fn("a11y_heal_ping", target.get_tabs)
+        except Exception:  # noqa: BLE001 — heal is best-effort; capture will retry
+            pass
         from main import _capture_accessibility_snapshot
-        target, _ = await _target()
         snap = await _capture_accessibility_snapshot(
             scope=scope, interactive_only=interactive_only, include_hidden=include_hidden, target=target
         )
