@@ -121,6 +121,13 @@ class SessionRegistry:
             return 0
         owned = {s.tab_id for s in self._sessions.values()}
         orphans = [t.get("id") for t in tabs if t.get("type") == "page" and t.get("id") not in owned]
+        # CRITICAL (2026-09-02): never close the LAST page tab. Closing the
+        # final tab makes headed Chrome exit cleanly (no crash, no signal —
+        # silent disappearance), which the watchdog then "fixed" by
+        # relaunching, minting another unowned tab the next sweep would
+        # close again → endless launch/kill loop. Keep ≥1 page tab alive.
+        if len(orphans) == len([t for t in tabs if t.get("type") == "page"]) and orphans:
+            orphans = orphans[1:]  # spare one tab as the keep-warm anchor
         reaped = 0
         for tid in orphans:
             try:
@@ -311,6 +318,21 @@ class SessionRegistry:
                 self._last_reaped = self._last_reaped[-100:]
         if stale:
             logger.info("Reaped %d stale session(s), %d remain", len(stale), len(self._sessions))
+        # CRITICAL (2026-09-02): closing the LAST tab exits headed Chrome
+        # silently. If the stale-session destroy loop above closed every
+        # page tab, mint a keep-warm about:blank tab so the browser (and
+        # the watchdog) stay alive.
+        if stale:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as http:
+                    resp = await http.get(f"{cdp_url.rstrip('/')}/json")
+                    pages = [t for t in resp.json() if t.get("type") == "page"] if resp.status_code == 200 else []
+                if not pages:
+                    async with httpx.AsyncClient(timeout=5.0) as http:
+                        await http.put(f"{cdp_url.rstrip('/')}/json/new", params={"url": "about:blank"})
+                    logger.info("Keep-warm tab minted — all tabs were closed by session reap")
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.debug("keep-warm tab check failed: %s", exc)
         # P3: also reap orphan tabs (about:blank accumulation) while we're here.
         # The per-create reap only runs on session creation; long-lived sessions
         # that accumulate about:blank tabs (e.g. old cross-origin roam leftovers)
