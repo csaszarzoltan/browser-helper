@@ -95,7 +95,7 @@ def _no_real_chrome(monkeypatch, request):
     async def _noop_ensure_browser(*args, **kwargs):
         return None
 
-    async def _resolve_no_session_client():
+    async def _resolve_no_session_client(require_session: bool = False):
         # Tests run without cookies → session-less fallback to the global client,
         # matching the pre-session behaviour endpoint tests were written against.
         await _noop_ensure_browser()

@@ -4,6 +4,16 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.1] — 2026-09-21
+
+**Fix:** `BH_STRICT_SESSIONS=1` szigorú session-mód — az auto-mint tab-szivárgás
+valódi lezárása (1 agent-oldal → 9 üres `about:blank` tab az éles logban):
+- Strict módban a `X-Session-Auto` / `BH_SESSION_AUTO=1` opt-in ellenére SEM
+  mintel új sessiont+tabot a `/eval`, `/navigate` stb. — header-nélküli hívás
+  400 `Missing session`-t kap. Új tab csak explicit `POST /session/new`-val.
+- Alapértelmezett (nem strict) viselkedés változatlan: auto-mint marad.
+- Teszt: `test_strict_sessions_blocks_automint` + 501 passed regresszió.
+
 ## [1.36.0] — 2026-09-21
 
 **Feat:** tab-kontextus + determinizmus + kényelem (P0/P1/P2, v1.36.0):

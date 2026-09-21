@@ -15,6 +15,13 @@ Two server-level bugs from the field report are pinned here:
    30-session LRU cap evicted live tabs and broke ``switch_tab``).  It is now
    idempotent: an existing valid session is reused (``reused: true``) and a
    fast-repeat caller gets an in-band ``warnings`` entry naming the fix.
+
+3. **Auto-mint tab-leak (v1.36.1).**  The 1.32 ``X-Session-Auto`` /
+   ``BH_SESSION_AUTO=1`` fallback re-opened the leak one level down: every
+   header-less ``/eval`` / ``/navigate`` minted a fresh session + tab
+   (observed: 1 agent page → 9 about:blank tabs).  ``BH_STRICT_SESSIONS=1``
+   kills the auto-mint — header-less browser ops get 400, new tabs only via
+   explicit ``POST /session/new``.
 """
 from __future__ import annotations
 
@@ -314,3 +321,38 @@ def test_session_new_spam_detector_warns_after_threshold(monkeypatch):
         "caller would keep opening tabs silently"
     )
     main._session_mint_log.clear()
+
+
+def test_strict_sessions_blocks_automint(monkeypatch):
+    """BH_STRICT_SESSIONS=1: header-less op gets 400, no tab minted.
+
+    Regression for the field leak where every header-less /eval + auto-mint
+    opt-in opened a fresh about:blank tab (1 agent page → 9 empty tabs).
+    """
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("BH_STRICT_SESSIONS", "1")
+    monkeypatch.setenv("BH_SESSION_AUTO", "1")
+    # The module-level _STRICT_SESSIONS flag is read at import; the test
+    # process imported main without the env var, so force the cached flag
+    # too (production sets the env before import, so both agree there).
+    # monkeypatch.setattr restores it automatically after the test.
+    monkeypatch.setattr(main, "_STRICT_SESSIONS", True)
+    # If the code still mints, this mock would be called — it must not be.
+    created = {"n": 0}
+
+    async def _fail_on_create(*a, **kw):
+        created["n"] += 1
+        raise AssertionError("auto-mint must not run in strict mode")
+
+    monkeypatch.setattr(main.session_registry, "create", _fail_on_create)
+    monkeypatch.setattr(main.session_registry, "get", lambda sid: None)
+    main.client.navigate = AsyncMock(return_value={"status": "ok"})
+
+    resp = client.post("/navigate?url=https://example.test/",
+                       headers={"X-Session-Auto": "true"})
+    assert resp.status_code == 400, (
+        f"strict mode did not block header-less navigate: {resp.status_code} {resp.text[:300]}"
+    )
+    assert "Missing session" in resp.text
+    assert created["n"] == 0, "strict mode minted a tab anyway"

@@ -283,7 +283,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.36.0",
+    version="1.36.1",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -1190,6 +1190,20 @@ _current_session: ContextVar[list[Session | None]] = ContextVar(
 # sends ``X-Session-Auto: true`` or when ``BH_SESSION_AUTO=1`` is set.
 # When true, header-less browser ops mint a fresh session (1.30 fallback)
 # instead of returning 400.
+# v1.36.1: ``BH_STRICT_SESSIONS=1`` kills the auto-mint even when the opt-in
+# is present — header-less browser ops get 400 Missing session, new tabs only
+# via explicit POST /session/new.  Env read is cached in a module global so
+# every request doesn't hit os.environ (reload via SIGHUP-safe setter).
+_SESSION_AUTO_ENV = "BH_SESSION_AUTO"
+_SESSION_STRICT_ENV = "BH_STRICT_SESSIONS"
+_STRICT_SESSIONS = os.environ.get(_SESSION_STRICT_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def _strict_sessions() -> bool:
+    """True when strict mode is on (module flag or env set after import)."""
+    return _STRICT_SESSIONS or os.environ.get(_SESSION_STRICT_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
 _session_auto: ContextVar[bool] = ContextVar("session_auto", default=False)
 
 # 1.33 P2-1: per-request trace id — set by session_middleware, read by
@@ -1317,9 +1331,14 @@ async def session_middleware(request: Request, call_next):
     ``X-Trace-ID`` or minted (``tr_`` + uuid8) — attached to every
     log_operation entry so ``GET /logs?trace_id=...`` can correlate a full
     observe→act→assert journey. The response always carries ``X-Trace-ID``.
+
+    v1.36.1: ``BH_STRICT_SESSIONS=1`` forces ``auto`` off even when the
+    header/env opt-in is present — no lazy mint anywhere downstream.
     """
     sid = _session_id_from_request(request)
-    auto = request.headers.get("X-Session-Auto", "").strip().lower() in ("1", "true", "yes") or os.environ.get("BH_SESSION_AUTO", "").strip().lower() in ("1", "true", "yes")
+    auto = request.headers.get("X-Session-Auto", "").strip().lower() in ("1", "true", "yes") or os.environ.get(_SESSION_AUTO_ENV, "").strip().lower() in ("1", "true", "yes")
+    if auto and _strict_sessions():
+        auto = False
     _session_auto.set(auto)
     # P2-1 structured logging: propagate or mint a trace id for this request
     trace_id = request.headers.get("X-Trace-ID") or f"tr_{uuid.uuid4().hex[:12]}"
@@ -1809,7 +1828,11 @@ async def _resolve_session_client(require_session: bool = True) -> tuple[CDPClie
     sess = _get_current_session()
     if sess is None:
         if require_session:
-            if _session_auto.get() or os.environ.get("BH_SESSION_AUTO", "").strip().lower() in ("1", "true", "yes"):
+            # v1.36.1 strict: BH_STRICT_SESSIONS=1 kills the auto-mint even
+            # when the X-Session-Auto/BH_SESSION_AUTO opt-in is present —
+            # header-less callers get 400, new tabs only via POST /session/new.
+            _auto_opt_in = (_session_auto.get() or os.environ.get(_SESSION_AUTO_ENV, "").strip().lower() in ("1", "true", "yes")) and not _strict_sessions()
+            if _auto_opt_in:
                 try:
                     await chrome_mgr.launch()  # idempotent — reuses running Chrome
                     sess = await session_registry.create(_local_cdp_http())
@@ -1899,14 +1922,14 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
         # 1.32: ``X-Session-Auto: true`` (or ``BH_SESSION_AUTO=1``) re-enables
         # the 1.30 lazy auto-mint for simple harnesses.  Check the request flag
         # via _session_auto ContextVar (set by session_middleware).
-        # Exceptions:
-        #  - global read-only ops (get_tabs etc.) run on the shared client
-        #  - tests (PYTEST_CURRENT_TEST / BH_TEST_NO_CHROME) keep the old
-        #    fallback so the suite stays green without per-test session setup
+        # Tests (PYTEST_CURRENT_TEST / BH_TEST_NO_CHROME) keep the old fallback
+        # so the suite stays green without per-test session setup — UNLESS
+        # strict mode is on (the strict test itself runs under pytest and must
+        # hit the 400 path, not the test-mint path).
         _GLOBAL_OPS = {"get_tabs", "scan_all_tabs", "sessions_list", "mcp_status", "get_status", "health", "status", "sessions"}
         if operation in _GLOBAL_OPS:
             sess = None
-        elif os.environ.get("PYTEST_CURRENT_TEST") is not None or os.environ.get("BH_TEST_NO_CHROME") == "1":
+        elif not _strict_sessions() and (os.environ.get("PYTEST_CURRENT_TEST") is not None or os.environ.get("BH_TEST_NO_CHROME") == "1"):
             if os.environ.get("BH_TEST_NO_CHROME") == "1":
                 sess = None
             else:
@@ -1917,7 +1940,12 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
                 except Exception as exc:
                     logger.warning("Session creation failed, falling back to default client: %s", exc, exc_info=True)
                     sess = None
-        elif _session_auto.get() or os.environ.get("BH_SESSION_AUTO", "").strip().lower() in ("1", "true", "yes"):
+        # v1.36.1 strict: BH_STRICT_SESSIONS=1 kills the auto-mint even when
+        # the X-Session-Auto/BH_SESSION_AUTO opt-in is present — header-less
+        # callers get 400 Missing session, new tabs only via POST /session/new.
+        # NOTE: stays in the same elif chain — the opt-in check AND the strict
+        # veto are one condition, so a strict deploy falls through to the 400.
+        elif (_session_auto.get() or os.environ.get(_SESSION_AUTO_ENV, "").strip().lower() in ("1", "true", "yes")) and not _strict_sessions():
             try:
                 await chrome_mgr.launch()  # idempotent — reuses running Chrome
                 sess = await session_registry.create(_local_cdp_http())
