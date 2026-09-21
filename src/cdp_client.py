@@ -817,7 +817,8 @@ class CDPClient:
             except (CDPError, OSError) as exc:
                 logger.debug("Navigate tab sync skipped: %s", exc)
 
-        return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url}
+        return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url,
+                "tab_id": self._ws_tab_id or self._active_tab_id}
 
     # navigate() is complete — note: JSON-page detection lives in
     # /page/analyze (main.py) where agents typically check page state
@@ -1122,9 +1123,20 @@ class CDPClient:
         await self._activate_current()
         js = f"""
 (async function() {{
+ // P1 determinism (v1.36): offsetParent is null for position:fixed elements,
+ // so text inside a fixed banner/modal never matched this wait.
+ function __bhVisible(el) {{
+   if (!el || !el.isConnected) return false;
+   const r = el.getBoundingClientRect();
+   if (r.width === 0 && r.height === 0) return false;
+   const cs = getComputedStyle(el);
+   if (!cs) return false;
+   if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+   return true;
+ }}
  const started=Date.now(), deadline=started+{int(timeout_ms)}, wanted={json.dumps(text)}.toLowerCase();
  while(Date.now()<deadline) {{
-  const nodes=[...document.querySelectorAll('body *')].filter(el=>el.offsetParent!==null && (el.innerText||'').toLowerCase().includes(wanted));
+  const nodes=[...document.querySelectorAll('body *')].filter(el=>__bhVisible(el) && (el.innerText||'').toLowerCase().includes(wanted));
   if(nodes.length) return {{found:true,elapsed_ms:Date.now()-started,actual_text:(nodes[0].innerText||'').trim().substring(0,500)}};
   await new Promise(r=>setTimeout(r,100));
  }}
@@ -1162,12 +1174,24 @@ class CDPClient:
         await self._activate_current()
         js = f"""
 (async function() {{
+  // P1 determinism (v1.36): a position:fixed element has offsetParent === null,
+  // so waiting on a fixed button/banner timed out forever.  Rect + computed
+  // style is the honest visibility test.
+  function __bhVisible(el) {{
+    if (!el || !el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return false;
+    const cs = getComputedStyle(el);
+    if (!cs) return false;
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+    return true;
+  }}
   const deadline = Date.now() + {timeout * 1000};
   const poll = 200;
   while (Date.now() < deadline) {{
     const el = document.querySelector({json.dumps(selector)});
     if (el) {{
-      const isVisible = el.offsetParent !== null;
+      const isVisible = __bhVisible(el);
       if (!{str(visible).lower()} || isVisible) {{
         return JSON.stringify({{
           status: "ok",
@@ -1205,9 +1229,17 @@ class CDPClient:
         """
         await self._activate_current()
         cond_js = {
-            "selector": "document.querySelector({v}) !== null",
-            "text": "document.body && document.body.innerText.includes({v})",
-            "url": "location.href.includes({v})",
+            # NOTE: these are plain strings spliced into an f-string that DOES
+            # define a JS variable ``v`` (``const v = <json value>``).  The
+            # placeholder must therefore be the identifier ``v`` — a literal
+            # ``{v}`` is a JS OBJECT LITERAL, so querySelector received an
+            # object (TypeError, swallowed by the poll's try/catch) and
+            # innerText.includes({v}) was always false.  Both the selector and
+            # text branches timed out 100% of the time while the Python
+            # envelope reported status "ok".
+            "selector": "document.querySelector(v) !== null",
+            "text": "document.body && document.body.innerText.includes(v)",
+            "url": "location.href.includes(v)",
         }
         if kind not in cond_js:
             return {"status": "error", "error": f"unknown kind: {kind} (selector|text|url)"}
@@ -1215,7 +1247,18 @@ class CDPClient:
             return {"status": "error", "error": f"unknown condition: {condition} (present|gone|visible)"}
         base = cond_js[kind]
         if kind == "selector" and condition == "visible":
-            base = "(() => { const el = document.querySelector({v}); return el !== null && el.offsetParent !== null; })()"
+            # P1 determinism (v1.36): offsetParent is null for position:fixed —
+            # a fixed CTA counted as "not visible" forever.  Rect + computed
+            # style instead.
+            base = (
+                "(() => { const el = document.querySelector(v);"
+                " if (!el || !el.isConnected) return false;"
+                " const r = el.getBoundingClientRect();"
+                " if (r.width === 0 && r.height === 0) return false;"
+                " const cs = getComputedStyle(el);"
+                " if (!cs) return false;"
+                " return !(cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0'); })()"
+            )
         check = f"!({base})" if condition == "gone" else base
         js = f"""
 (async function() {{
@@ -1338,6 +1381,21 @@ class CDPClient:
   const deadline = Date.now() + {timeout * 1000};
   const nth = {nth};
 
+  // P1 determinism (v1.36): `el.offsetParent === null` is TRUE for an element
+  // that is itself `position: fixed` (sticky footer CTA, fixed modal button),
+  // so those were silently unclickable.  A painted rect + computed style is
+  // the honest test.  Defined inline because every Runtime.evaluate() call is
+  // its own JS context.
+  function __bhVisible(el) {{
+    if (!el || !el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return false;
+    const cs = getComputedStyle(el);
+    if (!cs) return false;
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+    return true;
+  }}
+
   function findAll() {{
     const root = {('document' if not container_selector else 'container')};
     const results = [];
@@ -1348,7 +1406,7 @@ class CDPClient:
       "a, button, input[type=submit], input[type=button], [role=button]"
     );
     for (let el of interactive) {{
-      if (el.offsetParent === null) continue;
+      if (!__bhVisible(el)) continue;
       const txt = (el.textContent || "").toLowerCase().trim();
       if (txt === low || txt.includes(low)) {{
         const key = txt + ":" + Math.round(el.getBoundingClientRect().x) + ":" + Math.round(el.getBoundingClientRect().y);
@@ -1363,7 +1421,7 @@ class CDPClient:
     if (results.length === 0) {{
       const all = root.querySelectorAll("[onclick], span, div");
       for (let el of all) {{
-        if (el.offsetParent === null) continue;
+        if (!__bhVisible(el)) continue;
         const txt = (el.textContent || "").toLowerCase().trim();
         if (txt === low) {{
           const key = txt + ":" + Math.round(el.getBoundingClientRect().x);
@@ -1397,7 +1455,25 @@ class CDPClient:
       }});
     }}
   }}
-  return JSON.stringify({{status: "error", error: "text not found: " + target.substring(0, 50) + " (nth=" + nth + ")"}});
+  // P1 determinism (v1.36): a bare "text not found" left the agent with no way
+  // to self-correct.  Enumerate what IS clickable so the retry is informed.
+  const near = [];
+  const nearSeen = new Set();
+  document.querySelectorAll(
+    "a, button, input[type=submit], input[type=button], [role=button], [onclick]"
+  ).forEach(function (el) {{
+    const t = (el.textContent || "").trim();
+    if (!t || t.length > 60) return;
+    if (!__bhVisible(el)) return;
+    if (nearSeen.has(t)) return;
+    nearSeen.add(t);
+    if (near.length < 20) near.push(t);
+  }});
+  return JSON.stringify({{
+    status: "error",
+    error: "text not found: " + target.substring(0, 50) + " (nth=" + nth + ")",
+    candidates: near,
+  }});
 }})();
 """
         eval_result = await self.evaluate(js)
@@ -1407,6 +1483,22 @@ class CDPClient:
         except (json.JSONDecodeError, TypeError):
             return {"status": "error", "error": "parse failed"}
         if data.get("status") == "error":
+            # P1 determinism (v1.36): attach an actionable hint listing the
+            # clickable texts the page DOES expose, so a retry is informed
+            # instead of blind.
+            cands = data.get("candidates") or []
+            if cands:
+                data["hint"] = (
+                    f"text {text!r} not found; the page exposes these clickable "
+                    f"texts: {cands}. Retry with one of them, or pass "
+                    f"container_selector/nth, or use observe() for the a11y tree."
+                )
+            else:
+                data["hint"] = (
+                    f"text {text!r} not found and no clickable text is visible — "
+                    f"the page may be blank, still loading, or on another tab. "
+                    f"Check get_tabs()/get_page_text() and retry."
+                )
             return data
         # Perform real CDP click at the position
         x, y = data.get("x", 0), data.get("y", 0)
@@ -3632,6 +3724,21 @@ class CDPClient:
 (function() {
   const result = {};
 
+  // P1 determinism (v1.36): `el.offsetParent === null` is TRUE for an element
+  // that is itself `position: fixed` — a fixed CTA/button or a modal styled
+  // with position:fixed was reported as invisible, so analyze_page returned
+  // BUTTONS: [] while the page was full of them.  A painted rect + computed
+  // style is the honest visibility test.
+  function __bhVisible(el) {
+    if (!el || !el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return false;
+    const cs = getComputedStyle(el);
+    if (!cs) return false;
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+    return true;
+  }
+
   // Metadata
   result.url = window.location.href;
   result.title = document.title;
@@ -3642,7 +3749,7 @@ class CDPClient:
     "a, button, input[type=submit], input[type=button], [role=button]"
   );
   interactive.forEach(function(el) {
-    if (el.offsetParent === null) return;
+    if (!__bhVisible(el)) return;
     const txt = (el.textContent || "").trim();
     if (!txt && !el.getAttribute("aria-label")) return;
     const r = el.getBoundingClientRect();
@@ -3665,7 +3772,7 @@ class CDPClient:
     "[class*=modal][class*=in], [class*=modal].show, [role=dialog]:not([hidden])"
   );
   modalEls.forEach(function(m) {
-    if (m.offsetParent === null && !m.classList.contains("in") && !m.classList.contains("show")) return;
+    if (!__bhVisible(m) && !m.classList.contains("in") && !m.classList.contains("show")) return;
     // ── v0.9: Modal type heuristic ──
     var mcls = (m.className || "").toLowerCase();
     var modalType = "classic";
@@ -3688,7 +3795,7 @@ class CDPClient:
     m.querySelectorAll(
       "button, a, input, select, textarea, [role=button], [tabindex]"
     ).forEach(function(ie) {
-      if (ie.offsetParent === null) return;
+      if (!__bhVisible(ie)) return;
       var iTag = ie.tagName;
       var iTxt = (ie.textContent || "").trim().substring(0, 100);
       var iType = ie.type || "";
@@ -3718,7 +3825,7 @@ class CDPClient:
     };
     // Buttons inside modal
     m.querySelectorAll("button, a[role=button], input[type=submit]").forEach(function(b) {
-      if (b.offsetParent === null) return;
+      if (!__bhVisible(b)) return;
       var bt = (b.textContent || "").trim() || (b.getAttribute("aria-label") || "");
       if (bt) info.buttons.push({text: bt.substring(0, 80), disabled: b.disabled === true});
     });
@@ -3739,7 +3846,7 @@ class CDPClient:
   // Form fields — enhanced with label context + error detection
   result.form_fields = [];
   document.querySelectorAll("input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select").forEach(function(el) {
-  if (el.offsetParent === null) return;
+  if (!__bhVisible(el)) return;
   var label = "";
   var id = el.id;
   if (id) {
@@ -3807,7 +3914,7 @@ class CDPClient:
   document.querySelectorAll(
     ".alert, .alert-success, .alert-danger, .alert-error, .alert-info, .alert-warning, [class*=message], [class*=toast], [class*=notification]"
   ).forEach(function(a) {
-    if (a.offsetParent === null) return;
+    if (!__bhVisible(a)) return;
     var t = (a.textContent || "").trim().substring(0, 300);
     if (t) result.alerts.push(t);
   });
@@ -3917,13 +4024,26 @@ class CDPClient:
     return false;
   }
 
+  // ── Helper: visibility (P1 determinism, v1.36) ──
+  // `offsetParent === null` is true for a position:fixed element, which hid
+  // fixed CTAs / fixed modals from the condensed view too.
+  function __bhVisible(el) {
+    if (!el || !el.isConnected) return false;
+    var r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return false;
+    var cs = getComputedStyle(el);
+    if (!cs) return false;
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
+    return true;
+  }
+
   // ── Visible buttons (only from main content area) ──
   result.buttons = [];
   var allInteractive = root.querySelectorAll(
     "a, button, input[type=submit], input[type=button], [role=button]"
   );
   allInteractive.forEach(function(el) {
-    if (el.offsetParent === null) return;
+    if (!__bhVisible(el)) return;
     if (isExcluded(el)) return;
     var txt = (el.textContent || "").trim();
     if (!txt && !el.getAttribute("aria-label")) return;
@@ -3945,7 +4065,7 @@ class CDPClient:
     "[class*=modal][class*=in], [class*=modal].show, [role=dialog]:not([hidden])"
   );
   modalEls.forEach(function(m) {
-    if (m.offsetParent === null && !m.classList.contains("in") && !m.classList.contains("show")) return;
+    if (!__bhVisible(m) && !m.classList.contains("in") && !m.classList.contains("show")) return;
     // ── v0.9: Modal type heuristic ──
     var mcls = (m.className || "").toLowerCase();
     var modalType = "classic";
@@ -3968,7 +4088,7 @@ class CDPClient:
     m.querySelectorAll(
       "button, a, input, select, textarea, [role=button], [tabindex]"
     ).forEach(function(ie) {
-      if (ie.offsetParent === null) return;
+      if (!__bhVisible(ie)) return;
       interactiveEls.push({
         tag: ie.tagName,
         text: (ie.textContent || "").trim().substring(0, 100),
@@ -3988,7 +4108,7 @@ class CDPClient:
       buttons: [],
     };
     m.querySelectorAll("button, a[role=button], input[type=submit]").forEach(function(b) {
-      if (b.offsetParent === null) return;
+      if (!__bhVisible(b)) return;
       var bt = (b.textContent || "").trim() || (b.getAttribute("aria-label") || "");
       if (bt) info.buttons.push({ text: bt.substring(0, 80), disabled: b.disabled === true });
     });
@@ -3999,7 +4119,7 @@ class CDPClient:
   // ── Form fields inside main content ──
   result.form_fields = [];
   root.querySelectorAll("input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select").forEach(function(el) {
-    if (el.offsetParent === null) return;
+    if (!__bhVisible(el)) return;
     if (isExcluded(el)) return;
     var label = "";
     var id = el.id;
@@ -4117,6 +4237,25 @@ class CDPClient:
             data = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
             data = {"error": "parse failed"}
+        # P1 determinism (v1.36): propagate the inner verdict.  The envelope
+        # used to be hardcoded to "ok", so a timed-out wait looked successful
+        # to callers checking result["status"] == "ok" — a silent failure.
+        if isinstance(data, dict) and data.get("status") == "error":
+            return {
+                "status": "error",
+                "text": text,
+                "timeout": timeout,
+                "present": present,
+                "error": data.get("error", f"wait_for_text failed for {text!r}"),
+                "hint": (
+                    "The text never matched within the timeout — the page may "
+                    "still be hydrating, or the string differs (case/whitespace/"
+                    "locale). Read the page (get_page_text / analyze_page) and "
+                    "retry with the exact visible text, or wait on a stable "
+                    "element with wait_for_element instead."
+                ),
+                "result": data,
+            }
         return {"status": "ok", "text": text, "timeout": timeout, "result": data}
 
     # ─── Wait for navigation (URL change) ─────────────────────────
@@ -4177,23 +4316,26 @@ class CDPClient:
         await self._activate_current()
         # Enable Network domain if not already
         await self._send_command("Network.enable")
-        # Keep track of in-flight requests
-        requests = set()
+        # Keep track of in-flight requests (id → URL, so callers can see WHAT
+        # is still pending — e.g. Next.js hydration vs analytics — instead of
+        # just a bare count).
+        requests: dict[str, str] = {}
         deadline = time.monotonic() + timeout
 
         # Listen for request/response events
         async def on_request(evt):
             req_id = evt.get("params", {}).get("requestId", "")
             if req_id:
-                requests.add(req_id)
+                url = evt.get("params", {}).get("request", {}).get("url", "")
+                requests[req_id] = url
         async def on_response(evt):
             req_id = evt.get("params", {}).get("requestId", "")
             if req_id and req_id in requests:
-                requests.remove(req_id)
+                requests.pop(req_id, None)
         async def on_loading(evt):
             req_id = evt.get("params", {}).get("requestId", "")
             if req_id and req_id in requests:
-                requests.remove(req_id)
+                requests.pop(req_id, None)
 
         self._event_callbacks.setdefault("Network.requestWillBeSent", []).append(on_request)
         self._event_callbacks.setdefault("Network.responseReceived", []).append(on_response)
@@ -4208,8 +4350,10 @@ class CDPClient:
                         return {"status": "ok", "quiet_ms": quiet_ms,
                                 "idle": True}
                 await asyncio.sleep(0.1)
+            pending_urls = sorted({u for u in requests.values() if u})[:10]
             return {"status": "ok", "quiet_ms": quiet_ms,
-                    "idle": False, "pending": len(requests)}
+                    "idle": False, "pending": len(requests),
+                    "pending_urls": pending_urls}
         finally:
             # Clean up callbacks
             for cb_list in self._event_callbacks.values():

@@ -4,6 +4,22 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.0] — 2026-09-21
+
+**Feat:** tab-kontextus + determinizmus + kényelem (P0/P1/P2, v1.36.0):
+- P0 tab-routing: `tab_id` REST-en (eval, page/text, page/analyze, observe) és
+  MCP-n (eval, observe, get_page_text); `navigate` → `tab_id` +
+  `make_active` / `active_tab_id`; `/session/new` idempotens (`reused:true`)
+  + tab-spam riasztás (60s/>3 → `warnings` + log).
+- P1 determinizmus: `__bhVisible()` (rect + computed-style) a
+  `click_by_text` / `analyze_page` / `wait_*` offsetParent-helyett (fixed
+  elemek láthatók); `wait_for_condition` `{v}`→`v` fix (selector/text ág
+  eddig 100%-ban timeoutolt); unique operationId-k (multi-metódus
+  route-split).
+- P2 kényelem: `store_screenshot` → artifact URL; `exclude_urls` hálónapló-
+  szűrő; `target.url` navigate-alias; 11 determinizmus- + 13 API-kontrakt-
+  teszt (500 passed).
+
 ## [1.35.3] — 2026-09-02
 
 **Fix:** 3 maradék bug a retry-teszt alapján (1.35.2 utáni ad-hoc report):

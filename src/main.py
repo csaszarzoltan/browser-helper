@@ -283,10 +283,53 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.35.3",
+    version="1.36.0",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
+
+
+# ---------------------------------------------------------------------------
+# Split multi-method routes so every OpenAPI operation gets a unique id.
+#
+# FastAPI derives ONE ``unique_id`` per APIRoute, but a route registered with
+# several methods (``@app.api_route(..., methods=["GET","POST"])`` — used by
+# /page/text, /page/visible-text, /screenshot, /console/errors and the
+# /api/v1/* collections) emits one operation PER method and reuses that single
+# id for each.  The emitted OpenAPI document therefore contained duplicate
+# operationIds (invalid spec; breaks client generators and SDK pipelines).
+#
+# Fixing this inside ``generate_unique_id_function`` is impossible — it never
+# receives the method.  Splitting the route into one APIRoute per method is the
+# honest fix: routing is unchanged (each copy matches the same path for a
+# different method) while every operation gets its own id.
+# ---------------------------------------------------------------------------
+def _split_multimethod_routes(application) -> None:
+    """Replace each multi-method APIRoute with one single-method copy."""
+    import copy as _copy
+
+    from fastapi.routing import APIRoute as _APIRoute
+
+    rebuilt: list = []
+    for route in application.routes:
+        if not isinstance(route, _APIRoute):
+            rebuilt.append(route)
+            continue
+        methods = sorted(m for m in (route.methods or set()) if m != "HEAD")
+        if len(methods) < 2:
+            rebuilt.append(route)
+            continue
+        for method in methods:
+            clone = _copy.copy(route)
+            clone.methods = {method}
+            clone.unique_id = f"{route.name}_{method.lower()}_{route.path_format}"
+            rebuilt.append(clone)
+    application.routes[:] = rebuilt
+
+
+# NOTE: called at the END of this module — every @app.* decorator below
+# registers its route after this definition, so the split must run once all
+# routes exist.
 
 # ---------------------------------------------------------------------------
 # CORS — allow all origins
@@ -367,6 +410,7 @@ class EvalRequest(BaseModel):
     js: str | None = None
     expression: str | None = None  # alias for js — accepts {"expression": "..."} as POST /headless/eval does
     format: str = "raw"  # "raw" | "pretty" | "structured"
+    tab_id: str | None = Field(None, description="Run on this tab instead of the session's tab — no context switch (P0 tab_id, v1.36)")
 
     @model_validator(mode="after")
     def _coalesce_js(self):
@@ -392,6 +436,7 @@ class NavigateRequest(BaseModel):
     origins: list[dict] | None = Field(None, description="Playwright-style origins list: [{origin, localStorage:[{name,value}]}] — injected via addScriptToEvaluateOnNewDocument BEFORE navigate, so first paint already sees the value. Example: [{origin:'https://example.com',localStorage:[{name:'receiptlens.locale',value:'fr'}]}]")
     # Alias: storageState for direct Playwright storageState parity (origins list)
     storage_state: list[dict] | dict | None = Field(None, alias="storageState", description="Alias for origins — Playwright storageState origins: [{origin, localStorage:[{name,value}]}]")
+    make_active: bool | None = Field(None, description="Bring the navigated tab to the foreground after navigate (default true for the session tab; P0 navigate-active, v1.36)")
 
 
 class TypeRequest(BaseModel):
@@ -788,11 +833,19 @@ class AgentObserveRequest(BaseModel):
     include_console: bool = False
     include_network: bool = False
     include_screenshot: bool = False
+    # P2 convenience (v1.36): store the bundled screenshot in the artifact
+    # store and return its id, so the agent can fetch it later via
+    # GET /artifacts/{id} instead of re-screenshotting.
+    store_screenshot: bool = Field(False, description="Store the observe screenshot as an artifact and return artifact_id (P2, v1.36)")
+    # P2 convenience (v1.36): substring filters for the bundled network log —
+    # agents testing their own backend drown in the BH harness's own traffic.
+    exclude_urls: list[str] | None = Field(None, description="URL substrings to drop from the bundled network log (P2, v1.36)")
     # Back-compat: comma-separated include_evidence alias
     include_evidence: str | None = Field(None, description="Comma list: console,network,screenshot — alias for the three booleans above")
     # 304-style fingerprint cache: if the page fingerprint matches this id's
     # fingerprint, return {unchanged:true} without re-serializing nodes.
     if_none_match_snapshot_id: str | None = None
+    tab_id: str | None = Field(None, description="Observe this tab instead of the session's tab — no context switch (P0 tab_id, v1.36)")
 
 
 class AgentTarget(BaseModel):
@@ -1151,6 +1204,11 @@ _SESSION_EXEMPT = {
     "/api/v1/launchpad",
 }
 
+# v1.36 tab-spam detector: caller-host → list of session-mint timestamps.
+# A caller that mints >3 sessions/min is not echoing its X-Session-ID and is
+# opening a real Chrome tab per request (observed 2026-09-21: 18 in one run).
+_session_mint_log: dict[str, list[float]] = {}
+
 
 def _set_current_session(sess: Session | None) -> None:
     """Publish *sess* into the request-scoped holder (idempotent)."""
@@ -1164,6 +1222,67 @@ def _set_current_session(sess: Session | None) -> None:
 def _get_current_session() -> Session | None:
     holder = _current_session.get()
     return holder[0] if holder else None
+
+
+# ── P0 tab_id (v1.36): per-tab read routing without context switch ──
+# Read ops (eval / observe / analyze / get_text) accept an optional
+# ``tab_id`` that pins the op to a DIFFERENT tab than the session's own —
+# the #1 friction from the 2026-09-19 user round (observe/eval saw
+# about:blank while /tabs showed the right page loaded).  Routing opens a
+# short-lived extra WS via connect_to_target (no focus steal) bound to a
+# cached throwaway CDPClient per tab, so the session's own WS — and the
+# VNC foreground tab — are untouched.  Unknown tab_id → 404 with the live
+# tab list (never a silent wrong-tab read).
+_TAB_CLIENTS: dict[str, "CDPClient"] = {}
+# Sentinel: run_op(sess_override=...) means "already routed, use this
+# client's bound method directly" — bypasses session lookup entirely
+# (avoids 400 Missing session for header-less tab_id reads).
+_SENTINEL_SESSION: Any = object()
+
+
+async def _assert_tab_exists(tab_id: str):
+    """Return True when *tab_id* is a live page target, else a 404 error dict."""
+    try:
+        tabs = await client.discover_tabs()
+    except Exception as exc:  # noqa: BLE001 — Chrome unreachable
+        return api_error("tab", "browser_unreachable", f"Cannot list tabs: {exc}", 503)
+    live = [(t.get("id"), t.get("title", ""), t.get("url", "")) for t in tabs if t.get("type") == "page"]
+    if not any(tid == tab_id for tid, _, _ in live):
+        return api_error(
+            "tab", "tab_not_found",
+            f"Tab not found: {tab_id}. Live tabs: " +
+            ", ".join(f"{tid} ({title or url})" for tid, title, url in live[:10]),
+            404,
+        )
+    return True
+
+
+async def _tab_client_for(tab_id: str, sess: "Session | None") -> "CDPClient":
+    """Return a CDPClient bound to *tab_id* (cached throwaway, no focus steal).
+
+    Reuses the session's own client when it already sits on the tab;
+    otherwise binds (or reuses) a cached extra client via
+    connect_to_target — which attaches a CDP session WITHOUT activating
+    the tab in the foreground.
+    """
+    if sess is not None and (sess.client._ws_tab_id == tab_id or sess.client._active_tab_id == tab_id):
+        return sess.client
+    if client._ws_tab_id == tab_id or client._active_tab_id == tab_id:
+        return client
+    cached = _TAB_CLIENTS.get(tab_id)
+    if cached is not None and cached.is_connected and cached._ws_tab_id == tab_id:
+        return cached
+    fresh = CDPClient(cdp_http_url=_local_cdp_http())
+    await fresh.connect_to_target(tab_id)
+    _TAB_CLIENTS[tab_id] = fresh
+    # Bound the cache: evict disconnected/stale entries beyond 8 tabs
+    if len(_TAB_CLIENTS) > 8:
+        for tid, c in list(_TAB_CLIENTS.items()):
+            if tid != tab_id and (not c.is_connected or c._ws_tab_id != tid):
+                _TAB_CLIENTS.pop(tid, None)
+            if len(_TAB_CLIENTS) <= 8:
+                break
+    return fresh
 
 
 def _session_id_from_request(request: Request) -> str | None:
@@ -1756,6 +1875,21 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
     right after it is determined/minted, letting callers cache it.
     """
     sess = sess_override if sess_override is not None else _get_current_session()
+    if sess is _SENTINEL_SESSION:
+        # P0 tab_id (v1.36): caller already routed to a tab-bound client —
+        # the bound method IS the target.  No session lookup, no 400.
+        _sentinel_method = method
+        try:
+            await chrome_mgr.await_chrome_ready()
+        except Exception as exc:  # noqa: BLE001 — best-effort warm-up hold
+            logger.debug("sentinel warm-up hold skipped: %s", exc)
+        try:
+            _result = await _sentinel_method(*args, **kwargs)
+        except Exception as exc:
+            logger.exception("Operation '%s' failed (tab-routed)", operation)
+            status = 504 if isinstance(exc, TimeoutError) else 503 if "connect" in str(exc).lower() else 400
+            return api_error(operation, "operation_failed", str(exc), status)
+        return api_success(operation, _result)
     if sess is None:
         # 1.31 P0 fix: header-less browser ops no longer auto-mint a fresh tab
         # (that caused session drift + tab-leak: every header-less call opened
@@ -2139,7 +2273,8 @@ async def get_status():
 
 
 @app.post("/session/new")
-async def session_new(url: str = Query("about:blank", description="Initial URL for the new session's tab"),
+async def session_new(request: Request,
+                      url: str = Query("about:blank", description="Initial URL for the new session's tab"),
                       profile: str | None = Query(None, description="Profile name for cookie isolation (optional)")):
     """Mint a new isolated session with its own dedicated browser tab.
 
@@ -2148,9 +2283,50 @@ async def session_new(url: str = Query("about:blank", description="Initial URL f
     Header OR cookie is enough (not both).  ``/session/new`` responds with
     ``data``=``result`` containing ``session_id`` (both for compat).
 
+    **IDEMPOTENT (v1.36):** when the caller already has a valid session
+    (``X-Session-ID`` header or ``bh_session`` cookie) this REUSES it —
+    ``reused: true``, no new tab — instead of minting a fresh session+tab.
+    Call ``/session/new`` ONCE, then echo the id on every later call; a
+    per-request ``/session/new`` loop used to open one tab per call (observed
+    2026-09-21: 18 calls → 18 sessions → tab-cap eviction storms).
+    Fast repeat callers also get a ``warnings`` entry naming the fix.
+
     With *profile* set, the session gets a dedicated Chrome profile (own
     cookies/storage) — full isolation between clients.
     """
+    # ── Reuse path (v1.36 idempotency) ──
+    existing = session_registry.get(_session_id_from_request(request))
+    if existing is not None and not profile:
+        _reuse_warn = []
+        if url and url != "about:blank":
+            try:
+                await run_op("navigate", existing.client.navigate, url,
+                             sess_override=existing)
+            except Exception as exc:  # noqa: BLE001 — reuse still valid
+                logger.debug("session_new reuse navigate failed: %s", exc)
+                _reuse_warn.append(f"Could not navigate reused session to {url}: {exc}")
+        logger.info(
+            "session_new reuse: session %s (tab %s) — caller already had a session",
+            existing.session_id[:8], existing.tab_id[:8],
+        )
+        body = api_success("session_new", {
+            "session_id": existing.session_id,
+            "tab_id": existing.tab_id,
+            "url": url,
+            "reused": True,
+            "warnings": _reuse_warn + [
+                "Session reused — you already had a valid session. Call /session/new "
+                "ONCE and echo X-Session-ID (or the bh_session cookie) on every later "
+                "call; calling /session/new per request opens a new tab each time."
+            ],
+        })
+        return JSONResponse(
+            content=body,
+            headers={
+                "X-Session-ID": existing.session_id,
+                "Set-Cookie": f"bh_session={existing.session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800",
+            },
+        )
     try:
         await chrome_mgr.launch()
         profile_dir = None
@@ -2168,7 +2344,33 @@ async def session_new(url: str = Query("about:blank", description="Initial URL f
     except Exception as exc:
         logger.exception("Session creation failed")
         return api_error("session_new", "session_creation_failed", str(exc), 503)
-    body = api_success("session_new", {"session_id": sess.session_id, "tab_id": sess.tab_id, "url": url})
+    # ── Tab-spam detector (v1.36): several fresh sessions in a minute from
+    # the same client means the caller is not echoing its session id.  Warn
+    # in-band (the only channel a header-less caller reads) and log loudly.
+    _spam_warn = []
+    try:
+        _caller = request.client.host if request.client else "unknown"
+        _now = time.time()
+        _hits = [t for t in _session_mint_log.get(_caller, []) if _now - t < 60]
+        _hits.append(_now)
+        _session_mint_log[_caller] = _hits
+        if len(_hits) > 3:
+            _spam_warn.append(
+                f"You opened {len(_hits)} sessions in the last 60s from {_caller} — each "
+                "one is a real Chrome tab. Call /session/new ONCE per journey, then send "
+                "X-Session-ID (or bh_session cookie) on every later request."
+            )
+            logger.warning(
+                "Tab-spam: %s opened %d sessions in 60s — caller is not echoing X-Session-ID",
+                _caller, len(_hits),
+            )
+    except Exception as exc:  # noqa: BLE001 — detector is advisory only
+        logger.debug("session mint spam detector failed: %s", exc)
+    body = api_success("session_new", {
+        "session_id": sess.session_id, "tab_id": sess.tab_id, "url": url,
+        "reused": False,
+        **({"warnings": _spam_warn} if _spam_warn else {}),
+    })
     return JSONResponse(
         content=body,
         headers={
@@ -2613,6 +2815,20 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
     # Post-navigate ready wait (default domContentLoaded ~400ms, was networkIdle 8s).
     # The 30s timeout came from 8s wait + 4s domain throttle; localhost is throttled at 0.
     if not eff_wait:
+        if isinstance(result, dict):
+            data = result.get("data")
+            if isinstance(data, dict):
+                data.setdefault("active_tab_id", data.get("tab_id"))
+                if body is not None and body.make_active is False:
+                    pass  # explicit opt-out: leave foreground untouched
+                else:
+                    try:
+                        _aid = data.get("tab_id") or data.get("active_tab_id")
+                        if _aid:
+                            _ac = sess.client if sess is not None else client
+                            await _ac._activate_tab_by_id(_aid)
+                    except Exception as exc:  # noqa: BLE001 — best-effort foreground
+                        logger.debug("make_active skipped: %s", exc)
         return result
     try:
         wait_client = sess.client if sess is not None else client
@@ -2647,6 +2863,15 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
             if isinstance(data, dict):
                 data["ready"] = ready.get("ready", True)
                 data["waitUntil"] = eff_wait_until
+                data.setdefault("active_tab_id", data.get("tab_id"))
+                if not (body is not None and body.make_active is False):
+                    try:
+                        _aid = data.get("tab_id") or data.get("active_tab_id")
+                        if _aid:
+                            _ac2 = sess.client if sess is not None else client
+                            await _ac2._activate_tab_by_id(_aid)
+                    except Exception as exc:  # noqa: BLE001 — best-effort foreground
+                        logger.debug("make_active skipped: %s", exc)
     except Exception as exc:
         logger.debug("Auto-wait after navigate skipped: %s", exc, exc_info=True)
     return result
@@ -2654,7 +2879,14 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
 
 @app.post("/eval")
 async def eval_js(body: EvalRequest):
-    """Execute JavaScript in the current page."""
+    """Execute JavaScript in the current page (or the page named by ``tab_id``)."""
+    if body.tab_id:
+        _tab_ok = await _assert_tab_exists(body.tab_id)
+        if _tab_ok is not True:
+            return _tab_ok
+        _tc = await _tab_client_for(body.tab_id, _get_current_session())
+        return await run_op("eval", _tc.evaluate_js, body.js,
+                            sess_override=_SENTINEL_SESSION)
     return await run_op("eval", client.evaluate_js, body.js)
 
 
@@ -2957,7 +3189,8 @@ async def checkbox_deselect(body: CheckboxRequest | CheckboxBatchRequest, confir
 
 
 @app.post("/page/analyze")
-async def page_analyze(condensed: bool = Query(False, description="Enable condensed mode (strips nav/sidebar/footer)")):
+async def page_analyze(condensed: bool = Query(False, description="Enable condensed mode (strips nav/sidebar/footer)"),
+                       tab_id: str | None = Query(None, description="Analyze this tab instead of the session's tab — no context switch (P0 tab_id, v1.36)")):
     """Analyze the current page and return structured information.
 
     Returns a comprehensive snapshot of the page state in one call:
@@ -2972,6 +3205,24 @@ async def page_analyze(condensed: bool = Query(False, description="Enable conden
 
     Replaces 3-4 separate eval() calls.
     """
+    _pea_tab = tab_id
+    if _pea_tab:
+        _tab_ok = await _assert_tab_exists(_pea_tab)
+        if _tab_ok is not True:
+            return _tab_ok
+        target = await _tab_client_for(_pea_tab, _get_current_session())
+        try:
+            raw = await (target.analyze_page_condensed() if condensed else target.analyze_page())
+        except Exception as exc:
+            logger.warning("page analyze (tab-routed) failed: %s", exc, exc_info=True)
+            return api_error("page_analyze", "operation_failed", str(exc), 400)
+        snap = snapshot_store.add(raw)
+        if isinstance(raw, dict):
+            page = raw.get("page", raw)
+            if isinstance(page, dict):
+                page["snapshot_id"] = snap.snapshot_id
+                page["elements"] = snap.elements
+        return api_success("page_analyze_condensed" if condensed else "page_analyze", raw)
     target, _sess = await _resolve_session_client()
     try:
         raw = await (target.analyze_page_condensed() if condensed else target.analyze_page())
@@ -3326,7 +3577,8 @@ async def upload_files(body: UploadRequest):
 
 @app.api_route("/page/text", methods=["GET", "POST"])
 async def page_text(wait_ready: bool = Query(False, description="Wait for network idle + stable DOM before reading"),
-                    timeout: int = Query(30, description="Max seconds to wait when wait_ready=true")):
+                    timeout: int = Query(30, description="Max seconds to wait when wait_ready=true"),
+                    tab_id: str | None = Query(None, description="Read this tab instead of the session's tab — no context switch (P0 tab_id, v1.36)")):
     """Extract the full visible text content of the current page.
 
     Returns the innerText of document.body — cleaner than raw HTML,
@@ -3335,8 +3587,24 @@ async def page_text(wait_ready: bool = Query(False, description="Wait for networ
     With ``wait_ready=true`` the call first waits until the page is ready
     (network idle + DOM stable), then returns the text — no manual sleeps.
 
+    With ``tab_id`` the read is pinned to that tab (via a background CDP
+    attach — no focus steal, no session-tab switch), so observe-then-read
+    round-trips can never drift onto about:blank.
+
     Useful for LLM context extraction before deciding what to do.
     """
+    if tab_id:
+        _tab_ok = await _assert_tab_exists(tab_id)
+        if _tab_ok is not True:
+            return _tab_ok
+        _tc = await _tab_client_for(tab_id, _get_current_session())
+        if wait_ready:
+            try:
+                await _tc.wait_for_ready(timeout)
+            except Exception:  # noqa: BLE001 — wait is best-effort; text still readable
+                pass
+        return await run_op("get_page_text", _tc.get_page_text,
+                            sess_override=_SENTINEL_SESSION)
     if wait_ready:
         return await run_op("wait_for_ready", client.wait_for_ready, timeout)
     return await run_op("get_page_text", client.get_page_text)
@@ -4829,16 +5097,44 @@ async def agent_observe(body: AgentObserveRequest, include: str | None = Query(N
                 logger.debug("network log in observe bundle: %s", exc)
                 entries = []
             failures = [e for e in entries if isinstance(e.get("status"), int) and e["status"] >= 400]
-            ev["network"] = {"count": len(entries), "failures": failures[-20:], "failure_count": len(failures)}
+            # P2 convenience (v1.36): drop harness-internal traffic so the
+            # agent's own backend calls are visible without post-filtering.
+            _excl = body.exclude_urls or []
+            if _excl:
+                entries = [e for e in entries
+                           if not any(x in str(e.get("url", "")) for x in _excl)]
+                failures = [e for e in entries if isinstance(e.get("status"), int) and e["status"] >= 400]
+            ev["network"] = {"count": len(entries), "entries": entries[-100:], "failures": failures[-20:], "failure_count": len(failures)}
         if body.include_screenshot:
             try:
                 shot = await tgt.screenshot(quality=60)
                 ev["screenshot"] = {"data": shot.get("data", ""), "format": shot.get("format", "jpeg"), "size": shot.get("size", 0)}
+                # P2 convenience (v1.36): also persist the shot so it can be
+                # fetched via GET /artifacts/{artifact_id} without retaking.
+                if body.store_screenshot and shot.get("data"):
+                    try:
+                        import base64 as _b64
+
+                        _art = artifact_store.put(
+                            _b64.b64decode(shot["data"]), "image/jpeg", ".jpg",
+                            {"source": "agent_observe"},
+                        )
+                        ev["screenshot"]["artifact_id"] = _art.get("artifact_id")
+                        ev["screenshot"]["artifact_url"] = f"/artifacts/{_art.get('artifact_id')}"
+                    except Exception as exc:  # noqa: BLE001 — store is best-effort
+                        logger.debug("observe screenshot artifact store failed: %s", exc)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("screenshot in observe bundle: %s", exc)
                 ev["screenshot"] = {"error": str(exc)}
         return ev
     target, _sess = await _resolve_session_client()
+    # P0 tab_id (v1.36): pin the observation to an explicit tab when asked.
+    _obs_tab = (body.tab_id or "").strip() if getattr(body, "tab_id", None) else ""
+    if _obs_tab:
+        _tab_ok = await _assert_tab_exists(_obs_tab)
+        if _tab_ok is not True:
+            return _tab_ok
+        target = await _tab_client_for(_obs_tab, _sess)
     # 1a: warn when request had no session (auto-minted about:blank tab — hints cookie-less caller)
     if _sess is not None and _get_current_session() is not None:
         sess_now = _get_current_session()
@@ -4925,9 +5221,13 @@ async def agent_observe(body: AgentObserveRequest, include: str | None = Query(N
             if body.include_console or body.include_network or body.include_screenshot:
                 ev = await _gather_evidence(target)
                 data.update(ev)
-            _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope})
+            _record_agent_step("observe", {"mode": "accessibility", "scope": body.scope, "search_text": body.search_text})
             _record_latency("agent_observe", (time.monotonic() - _t0) * 1000)
-            return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility"})
+            # `meta.fallback` is the documented contract for this path: clients
+            # (and tests) detect the semantic→accessibility fallback from the
+            # envelope, not by probing data["fallback_from"].  A metrics commit
+            # (6cb0483) rewrote this return and silently dropped it.
+            return api_success("agent_observe", data, meta={"trust_level": "untrusted_web_content", "mode": "accessibility", "fallback": True})
         data = paginate_snapshot(snap, body.max_chars, body.max_elements, body.cursor)
         if body.since_snapshot_id:
             old = snapshot_store.get(body.since_snapshot_id)
@@ -4990,7 +5290,7 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
 
 
 @app.post("/agent/act")
-async def agent_act(body: AgentActionRequest):
+async def agent_act(request: Request, body: AgentActionRequest):
     _t0 = time.monotonic()
     tc, _sess = await _resolve_session_client()
     action = body.action.lower().strip()
@@ -5028,9 +5328,30 @@ async def agent_act(body: AgentActionRequest):
             target = matches[0].as_dict()
         before_ax = await _capture_accessibility_snapshot(target=tc) if body.expect else None
         if action == "navigate":
-            if not body.url:
-                raise ValueError("url is required")
-            result = await tc.navigate(body.url)
+            # P1 determinism (v1.36): also accept target.url — the natural
+            # guess agents kept sending ({"target": {"url": ...}}), which the
+            # strict AgentTarget model silently drops (extra="ignore") and
+            # then failed with a bare "url is required".  The raw request body
+            # is the only place it survives validation, so read it from there.
+            # Top-level "url" stays canonical; target.url is a tolerant alias.
+            _nav_url = body.url
+            if not _nav_url:
+                try:
+                    _raw = await request.json()
+                except Exception:  # noqa: BLE001 — body already consumed/unavailable
+                    _raw = None
+                if isinstance(_raw, dict):
+                    _t = _raw.get("target")
+                    if isinstance(_t, dict):
+                        _cand = _t.get("url")
+                        if isinstance(_cand, str) and _cand.strip():
+                            _nav_url = _cand.strip()
+            if not _nav_url:
+                raise ValueError(
+                    "url is required — send {\"action\": \"navigate\", \"url\": \"https://...\"} "
+                    "(top-level url). A URL inside \"target\" is also accepted as an alias."
+                )
+            result = await tc.navigate(_nav_url)
         elif action == "click":
             if target.get("backend_node_id"):
                 result = await tc.click_backend_node(target["backend_node_id"])
@@ -5335,7 +5656,7 @@ def _apply_recording_overrides(value: Any, overrides: dict[str, Any]) -> Any:
 
 
 @app.post("/agent/replay")
-async def agent_replay(body: AgentReplayRequest):
+async def agent_replay(request: Request, body: AgentReplayRequest):
     """Replay recorded act requests; observe steps are intentionally informational."""
     recording_id = body.effective_recording_id
     recording = agent_recordings.get(recording_id)
@@ -5349,7 +5670,9 @@ async def agent_replay(body: AgentReplayRequest):
         replay_body = AgentActionRequest.model_validate(payload)
         replay_body.pin_snapshot = False
         replay_body.auto_recover = True
-        response = await agent_act(replay_body)
+        # agent_act takes (request, body): pass the SAME request so the raw-body
+        # target.url alias also works on replayed steps.
+        response = await agent_act(request, replay_body)
         status = getattr(response, "status_code", 200)
         results.append({"step": index, "status_code": status})
         if body.stop_on_error and status >= 400:
@@ -7027,6 +7350,9 @@ from fleet.api import router as fleet_router  # imported after app is created
 # baked in, so extending the list is equivalent for matching and schema.
 app.routes.extend(fleet_router.routes)
 
+# NOTE: the actual split call lives at the very END of this module — later
+# decorators (e.g. the /api/v1/* endpoints below) register after this point.
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -7606,3 +7932,12 @@ async def api_fingerprint_test(body: dict | None = None):
         {"site": r.site, "passed": r.passed, "details": r.details, "errors": r.errors}
         for r in results
     ]
+
+
+# ---------------------------------------------------------------------------
+# The module is fully evaluated at this point: every @app.* decorator above has
+# registered.  Split the multi-method routes so the OpenAPI document carries
+# one unique operationId per operation.  See the _split_multimethod_routes
+# docstring near the top of this file.
+# ---------------------------------------------------------------------------
+_split_multimethod_routes(app)

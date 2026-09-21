@@ -36,12 +36,20 @@ client = TestClient(app)
 # ---------------------------------------------------------------------------
 
 def _get_routes() -> dict[str, set[str]]:
-    """Return {path: frozenset_of_http_methods} for all registered API routes."""
+    """Return {path: frozenset_of_http_methods} for all registered API routes.
+
+    Methods are MERGED across routes sharing a path: a multi-method endpoint is
+    legitimately registered as one APIRoute per method (v1.36 split for unique
+    OpenAPI operationIds), and overwriting the entry would silently drop
+    everything but the last route.
+    """
     result: dict[str, set[str]] = {}
     for route in app.routes:
         if isinstance(route, APIRoute):
             # methods is a set like {'GET', 'POST'} — normalise to uppercase
-            result[route.path] = {m.upper() for m in route.methods if m != "HEAD"}
+            result.setdefault(route.path, set()).update(
+                m.upper() for m in route.methods if m != "HEAD"
+            )
     return result
 
 

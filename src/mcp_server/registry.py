@@ -134,6 +134,11 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "interactive_only": {"type": "boolean", "description": "Only interactive elements (default false)"},
             "include_hidden": {"type": "boolean", "description": "Include hidden nodes (default false)"},
             "condensed": {"type": "boolean", "description": "Condensed semantic snapshot (default true)"},
+            "tab_id": {"type": "string", "description": "Observe this tab instead of the session's tab — no context switch (P0 tab_id)"},
+            "include_network": {"type": "boolean", "description": "Bundle the network log into the observation (default false)"},
+            "include_screenshot": {"type": "boolean", "description": "Bundle a viewport screenshot into the observation (default false)"},
+            "store_screenshot": {"type": "boolean", "description": "Store the bundled screenshot as an artifact and return artifact_id (P2)"},
+            "exclude_urls": {"type": "array", "items": {"type": "string"}, "description": "URL substrings to drop from the bundled network log (P2)"},
         },
     },
     "act": {
@@ -377,6 +382,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "js": {"type": "string", "description": "JavaScript expression to evaluate in the page"},
             "timeout": {"type": "integer", "description": "Max seconds to wait (default 30)"},
+            "tab_id": {"type": "string", "description": "Eval in this tab instead of the session's tab — no context switch (P0 tab_id)"},
         },
         "required": ["js"],
     },
@@ -386,6 +392,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "wait_ready": {"type": "boolean", "description": "Wait for page ready before extracting (default true)"},
             "timeout": {"type": "integer", "description": "Max seconds to wait for ready (default 20)"},
+            "tab_id": {"type": "string", "description": "Read this tab instead of the session's tab — no context switch (P0 tab_id)"},
         },
     },
     # B5+B6: press_key / hover / scroll / reload / wait_network_idle
@@ -472,6 +479,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "timeout": { "type": "integer", "description": "Max seconds for the whole navigation (default 10, clamped 1-30)" },
             "origins": { "type": "array", "items": { "type": "object" }, "description": "Playwright-style origins: [{origin, localStorage:[{name,value}]}] — injected BEFORE navigate via addScriptToEvaluateOnNewDocument (receiptlens.locale=fr parity)" },
             "storage_state": { "type": "object", "description": "Alias for origins — {origins:[{origin,localStorage:[{name,value}]}]} or origins list directly" },
+            "make_active": { "type": "boolean", "description": "Bring the navigated tab to the foreground after navigate (default true; false keeps the current foreground tab — P0 navigate-active)" },
         },
         "required": ["url"],
     },

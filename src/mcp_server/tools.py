@@ -65,6 +65,39 @@ async def _mcp_session():
     return None, (lambda op, method, *a, **kw: run_op(op, method, *a, session_hook=_cache_sess, **kw))
 
 
+async def _tab_pinned_client(tab_id: str):
+    """Return a CDPClient bound to *tab_id*, or a tool_error string.
+
+    MCP-side twin of main._tab_client_for: dedupes onto the MCP session's own
+    client when it already sits on the tab, else binds a cached throwaway
+    client via connect_to_target (background attach, no focus steal).
+    Unknown/unreachable tab → tool_error envelope naming the live tabs.
+    """
+    import json as _json
+
+    from main import (
+        _SENTINEL_SESSION,  # noqa: F401 — re-exported contract marker
+        _assert_tab_exists,
+        _tab_client_for,
+        client as _default_client,
+    )
+
+    ok = await _assert_tab_exists(tab_id)
+    if ok is not True:
+        # ok is an api_error JSONResponse — surface its message as tool_error
+        try:
+            body = _json.loads(bytes(ok.body).decode())
+            detail = body.get("error", {}).get("message", "tab not found")
+        except Exception:  # noqa: BLE001
+            detail = f"Tab not found: {tab_id}"
+        return tool_error("tab_id", "tab_not_found", detail)
+    try:
+        sess = _MCP_SESSION.get("session")
+        return await _tab_client_for(tab_id, sess)
+    except Exception as exc:  # noqa: BLE001
+        return tool_error("tab_id", "attach_failed", f"Cannot attach to tab {tab_id}: {exc}")
+
+
 async def _target():
     """Return (client_obj, run_op) for a handler — session client or default."""
     from main import client
@@ -150,22 +183,36 @@ async def observe(
     interactive_only: bool = False,
     include_hidden: bool = False,
     condensed: bool = True,
+    tab_id: str | None = None,
+    include_network: bool = False,
+    include_screenshot: bool = False,
+    store_screenshot: bool = False,
+    exclude_urls: list[str] | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Observe the page as accessibility tree or semantic snapshot (capability ``agent.semantic``, READY).
 
     Backed by the same engine as ``POST /agent/observe``.
+
+    Pass ``tab_id`` (from ``get_tabs``) to observe a DIFFERENT tab than the
+    session's own — no context switch, so the observation can never return
+    about:blank while the target tab is loaded.
+
+    ``include_network`` / ``include_screenshot`` bundle page evidence into the
+    observation; ``exclude_urls`` drops harness-internal traffic from the log
+    and ``store_screenshot`` persists the shot as an artifact (P2, v1.36).
     """
     if ctx is not None:
-        ctx.info(f"observe mode={mode} scope={scope}")
+        ctx.info(f"observe mode={mode} scope={scope} tab_id={tab_id or 'session'}")
     # Use internal snapshot functions directly (same as REST endpoint)
     from main import (
         _capture_accessibility_snapshot,
         _capture_agent_snapshot,
         _set_current_session,
+        artifact_store,
         paginate_snapshot,
     )
-    
+
     _sess, _run_op = await _mcp_session()  # local function
     # 2026-09-02 heal fix: health-check via run_op before snapshot capture
     if _sess is not None:
@@ -177,6 +224,11 @@ async def observe(
 
     try:
         target = _sess.client if _sess else None
+        if tab_id:
+            pinned = await _tab_pinned_client(tab_id)
+            if isinstance(pinned, str):
+                return pinned  # tool_error envelope (unknown tab / unreachable)
+            target = pinned
         if mode.lower() in {"accessibility", "ax"}:
             snap = await _capture_accessibility_snapshot(
                 scope=("dialog" if True and scope == "page" else scope),
@@ -188,6 +240,38 @@ async def observe(
         else:
             snap = await _capture_agent_snapshot(condensed, target=target)
             data = paginate_snapshot(snap, 6000, max_nodes, None)
+        if include_network and target is not None:
+            try:
+                await target.start_network_monitoring()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                nlog = await target.get_network_log()
+                entries = nlog.get("entries", []) if isinstance(nlog, dict) else []
+            except Exception:  # noqa: BLE001
+                entries = []
+            if exclude_urls:
+                entries = [e for e in entries
+                           if not any(x in str(e.get("url", "")) for x in exclude_urls)]
+            failures = [e for e in entries if isinstance(e.get("status"), int) and e["status"] >= 400]
+            data["network"] = {"count": len(entries), "entries": entries[-100:],
+                               "failures": failures[-20:], "failure_count": len(failures)}
+        if include_screenshot and target is not None:
+            try:
+                shot = await target.screenshot(quality=60)
+                data["screenshot"] = {"format": shot.get("format", "jpeg"),
+                                      "size": shot.get("size", 0)}
+                if store_screenshot and shot.get("data"):
+                    import base64 as _b64
+
+                    _art = artifact_store.put(
+                        _b64.b64decode(shot["data"]), "image/jpeg", ".jpg",
+                        {"source": "mcp_observe"},
+                    )
+                    data["screenshot"]["artifact_id"] = _art.get("artifact_id")
+                    data["screenshot"]["artifact_url"] = f"/artifacts/{_art.get('artifact_id')}"
+            except Exception as exc:  # noqa: BLE001
+                data["screenshot"] = {"error": str(exc)}
         return tool_result("observe", data)
     except Exception as exc:  # noqa: BLE001
         return tool_error("observe", "operation_failed", str(exc))
@@ -853,22 +937,33 @@ async def wait_js(
         return tool_error("wait_js", "failed", str(exc))
 
 
-async def eval(js: str, timeout: int = 30, ctx: Context | None = None) -> str:
+async def eval(js: str, timeout: int = 30, tab_id: str | None = None, ctx: Context | None = None) -> str:
     """Execute JS directly and return the value (capability ``browser.core``, READY).
 
     Calls ``client.evaluate_js`` directly — no snapshot round-trip.
+
+    Pass ``tab_id`` (from ``get_tabs``) to evaluate in a DIFFERENT tab than the
+    session's own — the read is pinned to that tab via a background CDP attach
+    (no focus steal, no context switch), so it can never land on about:blank.
 
     Examples::
 
         eval("document.title")
         eval("window.__APP_STATE__")
         eval("document.querySelectorAll('a').length")
+        eval("document.title", tab_id="4D0598DB...")
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"eval js ({len(js)} chars, timeout={timeout}s)")
+        ctx.info(f"eval js ({len(js)} chars, timeout={timeout}s, tab_id={tab_id or 'session'})")
     try:
-        result = await target.evaluate_js(js)
+        if tab_id:
+            pinned = await _tab_pinned_client(tab_id)
+            if isinstance(pinned, str):
+                return pinned  # tool_error envelope (unknown tab / unreachable)
+            result = await pinned.evaluate_js(js)
+        else:
+            result = await target.evaluate_js(js)
         return tool_result("eval", result)
     except Exception as exc:  # noqa: BLE001
         return tool_error("eval", "failed", str(exc))
@@ -877,6 +972,7 @@ async def eval(js: str, timeout: int = 30, ctx: Context | None = None) -> str:
 async def get_page_text(
     wait_ready: bool = True,
     timeout: int = 20,
+    tab_id: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Get visible page text (capability ``browser.core``, READY).
@@ -884,11 +980,26 @@ async def get_page_text(
     Optionally waits for the page to reach ready (network idle + stable DOM)
     before extracting, same as ``get_content`` with the cleaner main-content
     filter stripped.  Alias for ``client.get_page_text`` with wait handling.
+
+    Pass ``tab_id`` (from ``get_tabs``) to read a DIFFERENT tab than the
+    session's own — pinned via a background CDP attach, so observe-then-read
+    round-trips can never drift onto about:blank.
     """
     target, run_op_fn = await _target()
     if ctx is not None:
-        ctx.info(f"get_page_text wait_ready={wait_ready} timeout={timeout}")
+        ctx.info(f"get_page_text wait_ready={wait_ready} timeout={timeout} tab_id={tab_id or 'session'}")
     try:
+        if tab_id:
+            pinned = await _tab_pinned_client(tab_id)
+            if isinstance(pinned, str):
+                return pinned  # tool_error envelope (unknown tab / unreachable)
+            if wait_ready:
+                try:
+                    await pinned.wait_for_ready(timeout)
+                except Exception:  # noqa: BLE001,S110 — wait is best-effort
+                    pass
+            inner = await pinned.get_page_text()
+            return tool_result("get_page_text", inner)
         if wait_ready:
             try:
                 await run_op_fn("get_page_text_wait", target.wait_for_ready, timeout)
@@ -1283,9 +1394,15 @@ async def browser_navigate(
     timeout: int = 10,
     origins: list[dict] | None = None,
     storage_state: list[dict] | dict | None = None,
+    make_active: bool | None = None,
     ctx = None,
 ) -> str:
-    """Navigate with load strategy (capability ``browser.core``, READY). P0-3: origins / storageState before paint."""
+    """Navigate with load strategy (capability ``browser.core``, READY). P0-3: origins / storageState before paint.
+
+    ``make_active`` (default true) brings the navigated tab to the foreground;
+    pass ``false`` to keep the current foreground tab (P0 navigate-active).
+    The response always carries ``tab_id`` / ``active_tab_id``.
+    """
     if ctx is not None:
         ctx.info(f"browser_navigate {url} wait_until={wait_until} settle={settle} origins={bool(origins or storage_state)}")
     try:
@@ -1320,6 +1437,13 @@ async def browser_navigate(
                 except Exception:
                     pass
         res = await run_op("navigate", target.navigate, url)
+        # P0 navigate-active: surface the resolved tab and honor make_active=false
+        if isinstance(res, dict):
+            _d = res.get("data")
+            if isinstance(_d, dict):
+                _d.setdefault("active_tab_id", _d.get("tab_id"))
+                if make_active is False:
+                    _d["make_active"] = False
         if settle:
             try:
                 tout = min(max(int(timeout), 1), 30)
