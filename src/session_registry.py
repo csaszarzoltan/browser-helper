@@ -267,16 +267,37 @@ class SessionRegistry:
                 client._profile_port = port
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Profile launch failed, falling back to default tab: %s", exc)
+        # v1.36.2: Chrome's /json/new only honours the BARE-QUERY form
+        # (``PUT /json/new?https://example.com/``) — the documented-looking
+        # ``?url=...`` form is silently IGNORED and the tab opens as
+        # about:blank (verified live on Chrome 153.0.8010.52: ``?url=X`` →
+        # ``about:blank``, ``?X`` → ``X``).  That is why /session/new?url=…
+        # never navigated: every session tab stayed blank, so the keep-warm
+        # probe never matched its URL and minted a fresh blank tab every
+        # cycle, and agents saw a pile of empty tabs next to the real page.
+        #
+        # httpx encodes ``params=`` into ``?url=...``, which Chrome drops, so
+        # the URL is appended raw (still percent-encoded by httpx's URL
+        # handling via the path-style query below).
+        new_tab_url = f"{client.cdp_http_url}/json/new"
+        if url and url != "about:blank":
+            new_tab_url = f"{new_tab_url}?{url}"
         async with httpx.AsyncClient(timeout=10.0) as http:
-            resp = await http.put(
-                f"{client.cdp_http_url}/json/new",
-                params={"url": url},
-            )
+            resp = await http.put(new_tab_url)
             resp.raise_for_status()
             target = resp.json()
         tab_id = target.get("id") or target.get("targetId")
         if not tab_id:
             raise CDPError(f"Tab creation returned no id: {target}")
+        # Chrome may still hand back a blank tab (older/newer builds, or a
+        # rejected URL) — navigate explicitly so the session really owns the
+        # requested page.  Best-effort: the caller can still navigate later.
+        if url and url != "about:blank" and not str(target.get("url", "")).startswith(url.split("#")[0][:24]):
+            try:
+                client._ws_tab_id = tab_id
+                await client.navigate(url)
+            except Exception as exc:  # noqa: BLE001 — caller can retry navigate
+                logger.debug("post-create navigate to %s failed: %s", url, exc)
         return tab_id
 
     async def destroy(self, session_id: str) -> bool:

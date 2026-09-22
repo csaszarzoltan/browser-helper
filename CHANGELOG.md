@@ -4,6 +4,20 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.2] — 2026-09-22
+
+**Fix:** `/session/new?url=…` soha nem navigált — az üres tabok igazi gyökér-oka:
+- A Chrome `PUT /json/new` csak a NYERS query-formát veszi figyelembe
+  (`/json/new?https://example.com/`); a `?url=https://example.com/` formát
+  csendben eldobja és `about:blank`-et nyit. Élő mérés Chrome 153.0.8010.52-n:
+  `?url=X` → `about:blank`, `?X` → `X`. A `session_registry._open_tab_http`
+  httpx `params={"url": url}`-t használt → minden session-tab üres maradt.
+- Következmény: a keep-warm probe sosem találta a saját URL-jét, ezért
+  300 s-enként új üres tabot mintelt; egy agent-oldal mellett 8-9 üres
+  `about:blank` tab gyűlt.
+- Fix: nyers query + fallback `navigate` a friss tabra, ha a Chrome mégis
+  üresen adja vissza. Teszt: `tests/test_session_new_tab_url.py` (4 teszt).
+
 ## [1.36.1] — 2026-09-21
 
 **Fix:** `BH_STRICT_SESSIONS=1` szigorú session-mód — az auto-mint tab-szivárgás
