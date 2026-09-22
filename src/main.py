@@ -240,9 +240,31 @@ async def lifespan(application: FastAPI):
             import httpx as _hx
             while True:
                 try:
-                    tabs = await client.get_tabs()
-                    rows = tabs.get("data", []) if isinstance(tabs, dict) else []
-                    if any(str(row.get("url", "")).startswith(warm_url) for row in rows):
+                    # v1.36.2: probe TWICE before minting.  A fresh session tab
+                    # reports ``about:blank`` for a few seconds while the page
+                    # loads — a single probe in that window mints a duplicate
+                    # (observed 2026-09-22: 4× the keep-warm URL).  Also accept
+                    # a blank tab whose SESSION already targets warm_url, so a
+                    # still-loading warm tab counts as present.
+                    warm_found = False
+                    for _attempt in (1, 2):
+                        tabs = await client.get_tabs()
+                        rows = tabs.get("data", []) if isinstance(tabs, dict) else []
+                        if any(str(row.get("url", "")).startswith(warm_url) for row in rows):
+                            warm_found = True
+                            break
+                        try:
+                            _all = getattr(session_registry, "_sessions", None) or {}
+                            for _s in _all.values():
+                                if str(getattr(_s, "target_url", "") or "").startswith(warm_url):
+                                    warm_found = True
+                                    break
+                        except Exception:  # noqa: BLE001 — registry shape may vary
+                            pass
+                        if warm_found or _attempt == 2:
+                            break
+                        await asyncio.sleep(5)
+                    if warm_found:
                         await asyncio.sleep(int(os.environ.get("BH_KEEP_WARM_INTERVAL", "300")))
                         continue
                     await chrome_mgr.launch()

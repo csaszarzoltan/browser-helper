@@ -37,6 +37,10 @@ class Session:
     created: float = field(default_factory=time.monotonic)
     last_seen: float = field(default_factory=time.monotonic)
     profile_dir: str | None = None
+    # v1.36.2: the URL this session was created for.  A fresh tab reports
+    # ``about:blank`` for a few seconds while the page loads — the keep-warm
+    # probe uses this to recognise a still-loading warm tab as present.
+    target_url: str = "about:blank"
 
     def touch(self) -> None:
         self.last_seen = time.monotonic()
@@ -177,7 +181,7 @@ class SessionRegistry:
             client._tabs_cache = []
             client._tabs_cache_ts = 0
             await client.connect_to_target(tab_id)
-            sess = Session(session_id=sid, client=client, tab_id=tab_id)
+            sess = Session(session_id=sid, client=client, tab_id=tab_id, target_url=url)
             sess.profile_dir = profile_dir
             self._sessions[sid] = sess
             # Attach a behavioral engine with a human profile seeded from

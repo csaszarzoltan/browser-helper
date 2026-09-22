@@ -17,6 +17,11 @@ All notable changes to browser-helper will be documented in this file.
   `about:blank` tab gyűlt.
 - Fix: nyers query + fallback `navigate` a friss tabra, ha a Chrome mégis
   üresen adja vissza. Teszt: `tests/test_session_new_tab_url.py` (4 teszt).
+- Keep-warm duplikáció-stop: a probe KÉTSZER néz (5 s különbséggel), mielőtt
+  mintelne — a friss tab pár másodpercig `about:blank`-et jelent töltés
+  közben, ez okozta a 4×-es keep-warm duplikátumot (2026-09-22). A session
+  mostantól őrzi a `target_url`-t, így a még töltődő warm-tab is jelenlévőnek
+  számít.
 
 ## [1.36.1] — 2026-09-21
 
