@@ -4,9 +4,10 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
-## [1.36.2] — 2026-09-22
+## [1.36.3] — 2026-09-22
 
-**Fix:** `/session/new?url=…` soha nem navigált — az üres tabok igazi gyökér-oka:
+**Fix:** `/session/new?url=…` soha nem navigált — az üres tabok igazi gyökér-oka
+(+ keep-warm duplikáció-stop):
 - A Chrome `PUT /json/new` csak a NYERS query-formát veszi figyelembe
   (`/json/new?https://example.com/`); a `?url=https://example.com/` formát
   csendben eldobja és `about:blank`-et nyit. Élő mérés Chrome 153.0.8010.52-n:
