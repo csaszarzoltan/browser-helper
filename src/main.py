@@ -305,7 +305,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.36.3",
+    version="1.36.4",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -1509,6 +1509,29 @@ def _local_cdp_http() -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def _chrome_proc_meta(pid: str) -> tuple[str, bool]:
+    """Return ``(ppid, has_type_flag)`` for a PID, best-effort.
+
+    ``has_type_flag`` is True for Chrome *child* processes (renderer, zygote,
+    gpu, crashpad, utility): they all carry ``--type=...``.  Only the top
+    browser process has no ``--type=`` flag.
+    """
+    import subprocess
+
+    ppid = ""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "ppid=,args=", "-p", pid],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout.strip()
+        if out:
+            ppid = out.split()[0]
+            return ppid, "--type=" in out
+    except Exception as exc:  # noqa: BLE001 — probe only
+        logger.debug("ps meta for pid %s failed: %s", pid, exc)
+    return ppid, True  # unknown → treat as child (never kill)
+
+
 def _reap_orphan_headless() -> int:
     """Kill headless Chrome processes not owned by live headless sessions.
 
@@ -1518,6 +1541,26 @@ def _reap_orphan_headless() -> int:
     for all ``chrome`` processes with ``--headless`` or
     ``--remote-debugging-port`` and kills those whose PID is not in the
     current session pool.  Returns the number killed.
+
+    v1.36.4 hardening (root cause of the ~40-minute Chrome deaths, 2026-09-24):
+    the scan pattern also matched the MAIN browser and its renderer children:
+
+      * the main Chrome carries ``--remote-debugging-port=9557`` itself, so it
+        only survived because ``main_pids`` matched — losing that race killed
+        it outright;
+      * renderers/zygotes (``--type=renderer``) matched via the *parent's*
+        cmdline inherited flags and were killed 6-12 at a time every 5 min.
+        Killing a live browser's renderers destabilises it and the whole
+        browser exits — then the watchdog relaunches, sessions die, and every
+        call 400/503s for minutes.  That is what looked like "BH keeps
+        stopping".
+
+    Two guards now apply before any kill:
+      1. only processes WITHOUT ``--type=`` (the top browser process — never a
+         renderer/zygote/utility child of a live Chrome), and
+      2. only TRUE orphans (``ppid == 1``), i.e. left over from a previous
+         browser-helper instance.  Anything parented to a live process
+         (including our own service) is left alone.
     """
     import subprocess
 
@@ -1562,9 +1605,20 @@ def _reap_orphan_headless() -> int:
         live = set()
 
     killed = 0
+    skipped_children = 0
     for pid in pids:
         if pid in live or pid in main_pids:
             continue  # owned by a live session or the main browser — leave it
+        ppid, has_type = _chrome_proc_meta(pid)
+        if has_type:
+            # Renderer / zygote / gpu / utility child — killing these takes
+            # down the live browser it belongs to.  Never touch them.
+            skipped_children += 1
+            continue
+        if ppid != "1":
+            # Parented to a live process (our own service, a supervisor, a
+            # live Chrome) → not an orphan, leave it alone.
+            continue
         try:
             subprocess.run(
                 ["kill", "-9", pid], capture_output=True, timeout=5,
@@ -1573,6 +1627,11 @@ def _reap_orphan_headless() -> int:
             killed += 1
         except Exception as exc:
             logger.debug("best-effort kill of orphan chrome failed: %s, %s", pid, exc, exc_info=True)
+    if skipped_children:
+        logger.debug(
+            "Orphan sweep: skipped %d live Chrome child process(es) (renderer/zygote)",
+            skipped_children,
+        )
     if killed:
         logger.warning("Reaped %d orphaned Chrome PID(s)", killed)
     return killed

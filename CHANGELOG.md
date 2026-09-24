@@ -4,6 +4,18 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.4] — 2026-09-24
+
+**Fix: a BH "leállások" gyökér-oka** — nem a service állt le (2 nap uptime,
+`NRestarts=0`), hanem a watchdog saját orphan-reap-je ölte meg a fő Chrome
+gyerekeit (renderer/zygote, 6-12 PID) 5 percenként. A gyerekek elvesztése
+után a browser kidőlt, a watchdog ~5-10 perc alatt újraindította — ebben az
+ablakban minden hívás 400/503-at kapott.
+- `_reap_orphan_headless()` mostantól csak a TÉNYLEG árva (ppid=1)
+  TOP-szintű browser-processzt öli; a `--type=`-os gyerekeket (renderer,
+  zygote, gpu) és az élő szülőhöz tartozó folyamatokat sosem bántja.
+- Új `_chrome_proc_meta()` helper + `tests/test_orphan_reap_guard.py` (2 teszt).
+
 ## [1.36.3] — 2026-09-22
 
 **Fix:** `/session/new?url=…` soha nem navigált — az üres tabok igazi gyökér-oka
