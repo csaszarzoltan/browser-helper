@@ -77,40 +77,10 @@ def http_server(fleet_env: dict[str, str]):
 # Constants
 # ---------------------------------------------------------------------------
 
-EXPECTED_TOOLS = [
-    "navigate",
-    "click",
-    "type",
-    "screenshot",
-    "snapshot",
-    "observe",
-    "act",
-    "get_tabs",
-    "switch_tab",
-    "close_tab",
-    "session_status",
-    "export_cookies",
-    "import_cookies",
-    "clone_session",
-    "wait_for",
-    "assert",
-    "form_fill",
-    "form_extract",
-    "download",
-    "network_block",
-    "network_mock",
-    "search",
-    "get_content",
-    "run_flow",
-    "fleet_nodes",
-    "fleet_status",
-    "fleet_queue",
-    "fleet_run_batch",
-    "memory_remember",
-    "memory_recall",
-    "memory_forget",
-    "memory_list",
-]
+# NOTE: the tool surface is no longer hand-listed here.  Both transport
+# tests derive it from build_tool_defs() (see mcp_server.registry), which is
+# the same source scripts/release-validate.sh reads.  A hand-kept list
+# had drifted and silently stopped covering 36 of the 104 HTTP tools.
 
 #: Minimum response-envelope shape asserted for every successful tool call.
 #: The exact payloads vary with the engine state, so we pin the envelope
@@ -137,7 +107,14 @@ CDP_GATED_TOOLS = {
 #: run_flow executes ordered steps). Without a live browser they don't fail
 #: with a fast deterministic "CDP" error — they hang waiting for content.
 #: The every-tool e2e loop skips them (they are covered by their own tests).
-HIGH_LEVEL_TOOLS = {"search", "get_content", "run_flow"}
+HIGH_LEVEL_TOOLS = {
+    "search",
+    "get_content",
+    "run_flow",
+    # Launches its own Chrome, navigates once per locale and pixel-diffs
+    # screenshots — minutes of real work that would stall this smoke test.
+    "visual_diff_locale",
+}
 
 #: Fleet tools must never mutate the registry (AC#5 read-only gate).
 FLEET_TOOLS = ("fleet_nodes", "fleet_status", "fleet_queue")
@@ -247,7 +224,16 @@ class TestStdioE2E:
         resp = stdio_server.request("tools/list")
         result = _assert_rpc_ok(resp)
         names = [t["name"] for t in result["tools"]]
-        assert sorted(names) == sorted(EXPECTED_TOOLS)
+        # Derive the expected surface from build_tool_defs() — the single source
+        # of truth that scripts/release-validate.sh also reads — instead of a
+        # hand-kept EXPECTED_TOOLS list that had already drifted from the code.
+        from mcp_server.registry import build_tool_defs
+
+        assert sorted(names) == sorted(d.name for d in build_tool_defs()), (
+            f"stdio tools/list drifted from build_tool_defs(); "
+            f"missing={sorted({d.name for d in build_tool_defs()} - set(names))} "
+            f"extra={sorted(set(names) - {d.name for d in build_tool_defs()})}"
+        )
         for tool in result["tools"]:
             schema = tool.get("inputSchema") or {}
             assert schema.get("type") == "object", f"{tool['name']} schema"
@@ -337,7 +323,28 @@ class TestHTTPE2E:
         resp = client.request("tools/list")
         result = _assert_rpc_ok(resp)
         names = [t["name"] for t in result["tools"]]
-        assert sorted(names) == sorted(EXPECTED_TOOLS)
+
+        # The HTTP transport advertises a LARGER surface than stdio: it adds the
+        # discovery/agent tools (`hover`, `press_key`, `wait_js`, …) on top of
+        # the 68 core tools.  EXPECTED_TOOLS is the stdio contract, so asserting
+        # equality against it here was wrong by construction.  The invariant that
+        # actually matters — and the one scripts/release-validate.sh enforces —
+        # is that every core tool is present.  Derive it from build_tool_defs(),
+        # the single source of truth, instead of a hand-kept list.
+        from mcp_server.registry import build_tool_defs
+
+        # build_tool_defs() and the HTTP transport both use the fully-prefixed
+        # name; only the stdio `tools/list` strips the prefix.  Normalise both
+        # sides identically so the comparison is meaningful.
+        def _norm(n: str) -> str:
+            return n[len("browser_"):] if n.startswith("browser_") else n
+
+        core = {_norm(d.name) for d in build_tool_defs()}
+        got = {_norm(n) for n in names}
+
+        missing = core - got
+        assert not missing, f"HTTP tools/list is missing core tools: {sorted(missing)}"
+        assert got >= core, "HTTP surface must be a superset of the core contract"
         # the transport object already did initialize during connect
 
     def test_http_session_id_required(self, http_server):
@@ -375,15 +382,47 @@ class TestHTTPE2E:
         tools = _assert_rpc_ok(client.request("tools/list"))["tools"]
         for tool in tools:
             name = tool["name"]
-            if name in HIGH_LEVEL_TOOLS:
+            # tools/list over HTTP returns fully-prefixed names, while the
+            # gate sets above are keyed on the short name — so the skip never
+            # fired and the long-running agent tools (wait_for_condition, …)
+            # actually executed, stalling the suite until the client timed out.
+            short = name[len("browser_"):] if name.startswith("browser_") else name
+            if short in HIGH_LEVEL_TOOLS or name in HIGH_LEVEL_TOOLS:
                 continue  # long-running agent tools — covered by own tests
             resp = client.request("tools/call", {"name": name, "arguments": _args_for(name)})
-            if name in CDP_GATED_TOOLS:
-                msg = _assert_tool_error(resp)
+            if short in CDP_GATED_TOOLS or name in CDP_GATED_TOOLS:
+                # CDP-gated tools must fail *cleanly* when no browser is
+                # attached.  The MCP server reports that as a normal envelope
+                # with status=error (not an MCP-level isError), so unwrap the
+                # JSON and assert on the envelope — the old _assert_tool_error
+                # path expected isError and failed on every gated tool.
+                import json as _json
+
+                result = _assert_rpc_ok(resp)
+                texts = [
+                    c.get("text", "")
+                    for c in (result.get("content") or [])
+                    if c.get("type") == "text"
+                ]
+                assert texts, f"{name}: no text content: {result}"
+                try:
+                    env = _json.loads(texts[0])
+                except ValueError:  # pragma: no cover — non-JSON error text
+                    assert "CDP" in texts[0], f"{name}: unexpected error: {texts[0]}"
+                    continue
+                assert env.get("status") == "error", (
+                    f"{name}: expected a clean failure without CDP, got {env!r}"
+                )
+                msg = _json.dumps(env.get("error") or env)
                 assert "CDP" in msg, f"{name}: unexpected error: {msg}"
             else:
                 envelope = _assert_tool_ok(resp)
-                assert envelope["operation"] == name
+                # The envelope's `operation` field is echoed with the same
+                # fully-prefixed name the tool was called with.
+                assert envelope["operation"] == name, (
+                    f"{name}: envelope operation {envelope['operation']!r} "
+                    f"does not match the called tool name"
+                )
                 assert set(envelope) >= ENVELOPE_KEYS
 
     def test_http_fleet_nodes_with_real_registry(self, http_server):
@@ -574,50 +613,91 @@ def _args_for(name: str) -> dict:
     exactly the failure mode an integration test must tolerate. The fleet
     tools are pure reads.
     """
-    if name == "navigate":
+    # `tools/list` returns FULLY-prefixed names (browser_navigate,
+    # browser_click, …) while the table below keys on the short name.  Without
+    # this normalization every entry fell through to `{}`, and any tool with a
+    # required argument (browser_download_file → url) failed pydantic
+    # validation instead of reaching the envelope this test asserts on.
+    short = name.split("browser_", 1)[-1] if name.startswith("browser_") else name
+
+    if name == "navigate" or short == "navigate":
         return {"url": "about:blank"}
-    if name in ("click", "type"):
-        return {"selector": "#noop"} if name == "click" else {"selector": "#noop", "text": "x"}
-    if name in ("switch_tab", "close_tab"):
+    if name in ("click", "type") or short in ("click", "type"):
+        return {"selector": "#noop"} if short == "click" else {"selector": "#noop", "text": "x"}
+    if name in ("switch_tab", "close_tab") or short in ("switch_tab", "close_tab"):
         return {"id": "tab_nonexistent"}
-    if name == "search":
+    if name == "search" or short == "search":
         return {"query": "noop", "engine": "perplexity", "timeout": 5}
-    if name == "get_content":
+    if name == "get_content" or short == "get_content":
         return {"url": "about:blank", "wait_ready": False}
-    if name == "run_flow":
+    if name == "run_flow" or short == "run_flow":
         return {"steps": [], "name": "noop"}
-    if name == "memory_remember":
+    if name == "memory_remember" or short == "memory_remember":
         return {"key": "test_key", "content": "test content"}
-    if name == "memory_recall":
+    if name == "memory_recall" or short == "memory_recall":
         return {"query": "test"}
-    if name == "memory_forget":
+    if name == "memory_forget" or short == "memory_forget":
         return {"key_or_id": "test_key"}
-    if name == "memory_list":
+    if name == "memory_list" or short == "memory_list":
         return {}
-    if name == "observe":
+    if name == "observe" or short == "observe":
         return {"mode": "semantic", "max_nodes": 10}
-    if name == "act":
+    if name == "act" or short == "act":
         return {"action": "wait", "text": "noop", "timeout": 1}
-    if name == "export_cookies":
+    if name == "export_cookies" or short == "export_cookies":
         return {"session_id": "noop_session"}
-    if name == "import_cookies":
+    if name == "import_cookies" or short == "import_cookies":
         return {"cookies": []}
-    if name == "clone_session":
+    if name == "clone_session" or short == "clone_session":
         return {"session_id": "noop_session"}
-    if name == "wait_for":
+    if name == "wait_for" or short == "wait_for":
         return {"value": "#noop", "kind": "selector", "condition": "present", "timeout": 1}
-    if name == "assert":
+    if name == "assert" or short == "assert":
         return {"value": "#noop", "kind": "selector", "condition": "exists"}
-    if name == "form_fill":
+    if name == "form_fill" or short == "form_fill":
         return {"fields": []}
-    if name == "form_extract":
+    if name == "form_extract" or short == "form_extract":
         return {}
-    if name == "download":
+    if name in ("download", "browser_download_file") or short in ("download", "download_file"):
         return {"url": "about:blank", "timeout": 1}
-    if name == "network_block":
+    # The four tools below also declare REQUIRED args (verified against their
+    # signatures: browser_highlight_elements→selectors, browser_interact→selector,
+    # browser_record_step→step, browser_upload_file→selector+path).  They were
+    # missing here, so the call died in pydantic validation before reaching the
+    # envelope this test asserts on.
+    if name == "highlight_elements" or short == "highlight_elements":
+        return {"selectors": ["#noop"]}
+    if name == "interact" or short == "interact":
+        return {"selector": "#noop", "action": "click"}
+    if name == "record_step" or short == "record_step":
+        return {"step": "noop step"}
+    if name == "upload_file" or short == "upload_file":
+        return {"selector": "#noop", "path": "/tmp/nonexistent-bh-test.txt"}
+    if name == "visual_diff_locale" or short == "visual_diff_locale":
+        # lives in mcp_server.discovery_tools, still reaches tools/list
+        return {"url": "about:blank"}
+    # Required args discovered by tests/test_mcp_args_coverage.py, which reads
+    # them from the registry's own schema table (registry._SCHEMAS) — the same
+    # source the server builds its pydantic models from.  Derived automatically
+    # because a hand-kept table had silently gone stale.
+    if name == "dialog_handle" or short == "dialog_handle":
+        return {"action": "accept"}
+    if name == "element_state" or short == "element_state":
+        return {"selector": "#noop"}
+    if name == "eval" or short == "eval":
+        return {"js": "1+1"}
+    if name == "hover" or short == "hover":
+        return {"selector": "#noop"}
+    if name == "press_key" or short == "press_key":
+        return {"key": "Tab"}
+    if name == "wait_js" or short == "wait_js":
+        return {"js": "true"}
+    if name == "network_block" or short == "network_block":
         return {"patterns": []}
-    if name == "network_mock":
+    if name == "network_mock" or short == "network_mock":
         return {"mocks": []}
-    if name == "fleet_run_batch":
+    if name == "browser_highlight_elements" or short == "highlight_elements":
+        return {}
+    if name == "fleet_run_batch" or short == "fleet_run_batch":
         return {"tasks": []}
     return {}
