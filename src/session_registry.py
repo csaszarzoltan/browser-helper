@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -27,10 +28,23 @@ from cdp_client import CDPClient, CDPError
 logger = logging.getLogger("browser-helper.session_registry")
 
 
+class TabBudgetExceeded(Exception):
+    """Raised when ``BH_MAX_TABS`` is spent — no new tab is opened.
+
+    v1.36.5.  Carries the current/budget numbers so the API layer can tell
+    the caller exactly what to do (reuse an existing session, or close one)
+    instead of silently opening tab number N+1.
+    """
+
+    def __init__(self, in_use: int, budget: int):
+        self.in_use = in_use
+        self.budget = budget
+        super().__init__(f"Tab budget exhausted: {in_use}/{budget} tabs in use")
+
+
 @dataclass
 class Session:
     """One client's isolated browser context."""
-
     session_id: str
     client: CDPClient
     tab_id: str
@@ -53,6 +67,10 @@ class SessionRegistry:
         self._sessions: dict[str, Session] = {}
         self._ttl = ttl
         self._max_sessions = max_sessions
+        # v1.36.5: hard cap on concurrently open session TABS.  Distinct from
+        # max_sessions (which is the LRU-eviction ceiling): this one REFUSES a
+        # new tab outright so a runaway client cannot keep opening tabs.
+        self._tab_budget = int(os.environ.get("BH_MAX_TABS", "0") or 0)
         self._lock = asyncio.Lock()
         self._reaper_task: asyncio.Task | None = None
 
@@ -65,6 +83,22 @@ class SessionRegistry:
     @property
     def max_sessions(self) -> int:
         return self._max_sessions
+
+    @property
+    def tab_budget(self) -> int:
+        """Hard cap on how many session tabs may exist at once (0 = off).
+
+        v1.36.5: a caller that keeps opening fresh sessions (or a client whose
+        auto-mint env is set) can still fill the browser with tabs even when
+        it echoes no session id.  ``BH_MAX_TABS`` turns that into a hard
+        server-side stop: creating a session beyond the budget is refused
+        with 429/400 instead of opening another real Chrome tab.
+        """
+        return self._tab_budget
+
+    def tabs_in_use(self) -> int:
+        """Number of live sessions, i.e. real Chrome tabs owned by us."""
+        return len(self._sessions)
 
     def get(self, session_id: str | None) -> Session | None:
         """Return the session for *session_id*, or None."""
@@ -157,6 +191,11 @@ class SessionRegistry:
         set, the tab is created with that profile's cookies/storage (cookie
         isolation between sessions); when omitted the tab shares the default
         profile (current behaviour).
+
+        v1.36.5: ``TabBudgetExceeded`` when ``BH_MAX_TABS`` is set and the
+        budget is already spent.  Unlike ``max_sessions`` (which evicts the
+        LRU tab to make room), this REFUSES the new tab outright — a runaway
+        client gets an error instead of one more real Chrome tab.
         """
         async with self._lock:
             # Reap tabs left behind by cookie-less clients / failed evictions,
@@ -165,6 +204,14 @@ class SessionRegistry:
                 await self._reap_orphan_tabs(cdp_http_url)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("reap orphan tabs failed: %s", exc)
+            # v1.36.5: hard tab budget — refuse BEFORE opening any tab so a
+            # runaway client cannot grow the tab count at all.
+            if self._tab_budget and len(self._sessions) >= self._tab_budget:
+                logger.warning(
+                    "Tab budget exhausted: %d/%d tabs in use — refusing new session",
+                    len(self._sessions), self._tab_budget,
+                )
+                raise TabBudgetExceeded(len(self._sessions), self._tab_budget)
             # Enforce the cap: evict LRU before minting a new one.
             await self._evict_lru()
             sid = uuid.uuid4().hex

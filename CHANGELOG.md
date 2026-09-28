@@ -4,6 +4,19 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.5] — 2026-09-28
+
+**Fix: szerver-oldali tab-budget** — az üres tab-spamet már a kliensoldali
+`BH_SESSION_AUTO=1` okozta a Claude MCP-configban (ez kód nélkül javítva:
+`~/.claude/mcp-browser-helper.json` → `env: {}`). Ez a vészvédelem azokra a
+kliensekre is, akik továbbra is új sessiont nyitnak minden hívásra.
+- `BH_MAX_TABS` (alap 0 = korlátlan): a `/session/new` a budget fölött
+  `429 tab_budget_exhausted` hibát ad `remedy` üzenettel — **nem nyit új
+  tabot**. A `max_sessions`-szal ellentétben nem LRU-zár, hanem megtagad.
+- `TabBudgetExceeded` kivétel a registry-ben, `tab_budget`/`tabs_in_use` a
+  `/sessions` válaszban.
+- Teszt: `tests/test_tab_budget.py` (5 teszt).
+
 ## [1.36.4] — 2026-09-24
 
 **Fix: a BH "leállások" gyökér-oka** — nem a service állt le (2 nap uptime,

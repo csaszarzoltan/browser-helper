@@ -85,7 +85,7 @@ from run_recovery import RecoveryAdvisor
 from run_timeline import RunStore
 from screenshot_diff import ScreenshotDiffEngine
 from session_manager import SessionManager
-from session_registry import Session, SessionRegistry
+from session_registry import Session, SessionRegistry, TabBudgetExceeded
 from settings_manager import SettingsManager
 from stealth_injector import StealthInjector
 from workflow_catalog import WorkflowCatalog
@@ -305,7 +305,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.36.4",
+    version="1.36.5",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -2450,6 +2450,23 @@ async def session_new(request: Request,
                 pd = pm.get_data_dir(profile)
             profile_dir = pd
         sess = await session_registry.create(_local_cdp_http(), url=url, profile_dir=profile_dir)
+    except TabBudgetExceeded as exc:
+        # v1.36.5: the BH_MAX_TABS budget is spent.  No tab was opened; tell
+        # the caller how to proceed (reuse or close) instead of failing 503.
+        body = api_error(
+            "session_new", "tab_budget_exhausted", str(exc), 429,
+            {
+                "tabs_in_use": exc.in_use,
+                "tab_budget": exc.budget,
+                "remedy": (
+                    "You already hold the maximum number of browser tabs. "
+                    "REUSE the session you have (send its X-Session-ID on every "
+                    "call), or close one via POST /session/close to free a slot. "
+                    "Do NOT call /session/new again without reusing a session id."
+                ),
+            },
+        )
+        return JSONResponse(content=body, status_code=429)
     except Exception as exc:
         logger.exception("Session creation failed")
         return api_error("session_new", "session_creation_failed", str(exc), 503)
@@ -2505,6 +2522,10 @@ async def sessions_list():
     return api_success("sessions_list", {
         "count": len(items),
         "max_sessions": session_registry.max_sessions,
+        # v1.36.5: hard tab budget (0 = unlimited) so an operator can see at a
+        # glance how close a caller is to the refusal point.
+        "tab_budget": session_registry.tab_budget,
+        "tabs_in_use": session_registry.tabs_in_use(),
         "sessions": items,
     })
 
