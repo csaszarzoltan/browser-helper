@@ -20,6 +20,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.responses import JSONResponse
 
 sys.path.insert(0, "src")
 sys.path.insert(0, ".")
@@ -129,3 +130,21 @@ def test_tab_budget_env_empty_means_unlimited(monkeypatch):
     importlib.reload(sr)
     reg = sr.SessionRegistry(ttl=1.0, max_sessions=5)
     assert reg.tab_budget == 0
+
+
+def test_api_error_returns_jsonresponse_not_dict():
+    """Regression: the 429 branch once double-wrapped api_error's result.
+
+    ``api_error`` already returns a ``JSONResponse``; re-wrapping it in
+    ``JSONResponse(content=...)`` raised
+    ``TypeError: Object of type JSONResponse is not JSON serializable``,
+    turning the intended 429 into a 500 (observed live 2026-09-28).
+    """
+    from main import api_error
+
+    resp = api_error("session_new", "tab_budget_exhausted", "boom", 429, {"a": 1})
+    assert isinstance(resp, JSONResponse), "api_error must return a response object"
+    assert resp.status_code == 429
+    # A JSONResponse cannot be re-wrapped as content — guard the exact trap.
+    with pytest.raises(TypeError):
+        JSONResponse(content=resp)

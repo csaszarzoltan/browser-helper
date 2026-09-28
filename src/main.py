@@ -2453,7 +2453,8 @@ async def session_new(request: Request,
     except TabBudgetExceeded as exc:
         # v1.36.5: the BH_MAX_TABS budget is spent.  No tab was opened; tell
         # the caller how to proceed (reuse or close) instead of failing 503.
-        body = api_error(
+        # api_error already returns a JSONResponse — do not wrap it again.
+        return api_error(
             "session_new", "tab_budget_exhausted", str(exc), 429,
             {
                 "tabs_in_use": exc.in_use,
@@ -2466,7 +2467,6 @@ async def session_new(request: Request,
                 ),
             },
         )
-        return JSONResponse(content=body, status_code=429)
     except Exception as exc:
         logger.exception("Session creation failed")
         return api_error("session_new", "session_creation_failed", str(exc), 503)
