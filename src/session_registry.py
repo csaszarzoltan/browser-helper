@@ -28,6 +28,30 @@ from cdp_client import CDPClient, CDPError
 logger = logging.getLogger("browser-helper.session_registry")
 
 
+def _build_new_tab_url(cdp_http_url: str, url: str | None) -> str:
+    """Build the CDP ``PUT /json/new`` URL for opening *url* in a new tab.
+
+    v1.36.7: Chrome takes the ENTIRE remainder of the request line after
+    ``/json/new?`` as the target URL.  v1.36.2 therefore appended the URL raw —
+    which works for a bare URL but silently truncates any URL that carries its
+    own query string at the first ``&``:
+
+        PUT /json/new?https://example.com/?a=1&b=2  ->  opens .../?a=1
+
+    (verified live on Chrome 154.0.8037.57: ``b=2`` never reaches the page.)
+
+    Percent-encoding the whole URL fixes it and also keeps control characters
+    out of the request line.  ``about:blank``/empty is the CDP default and gets
+    no query at all.
+    """
+    base = f"{cdp_http_url.rstrip('/')}/json/new"
+    if not url or url == "about:blank":
+        return base
+    import urllib.parse
+
+    return f"{base}?{urllib.parse.quote(url, safe='')}"
+
+
 class TabBudgetExceeded(Exception):
     """Raised when ``BH_MAX_TABS`` is spent — no new tab is opened.
 
@@ -327,12 +351,11 @@ class SessionRegistry:
         # probe never matched its URL and minted a fresh blank tab every
         # cycle, and agents saw a pile of empty tabs next to the real page.
         #
-        # httpx encodes ``params=`` into ``?url=...``, which Chrome drops, so
-        # the URL is appended raw (still percent-encoded by httpx's URL
-        # handling via the path-style query below).
-        new_tab_url = f"{client.cdp_http_url}/json/new"
-        if url and url != "about:blank":
-            new_tab_url = f"{new_tab_url}?{url}"
+        # v1.36.7: the bare form must still be used, but the URL is now
+        # percent-encoded — appended raw, a URL with its own query string was
+        # cut at the first ``&`` (verified live on Chrome 154.0.8037.57:
+        # ``/json/new?https://example.com/?a=1&b=2`` opened only ``?a=1``).
+        new_tab_url = _build_new_tab_url(client.cdp_http_url, url)
         async with httpx.AsyncClient(timeout=10.0) as http:
             resp = await http.put(new_tab_url)
             resp.raise_for_status()

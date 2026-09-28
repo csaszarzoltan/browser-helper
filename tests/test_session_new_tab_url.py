@@ -64,7 +64,13 @@ def _patch_httpx(monkeypatch, captured, payload):
 
 
 def test_open_tab_uses_bare_query_form(monkeypatch):
-    """The URL must be appended raw — NOT as ``?url=`` (Chrome drops that)."""
+    """The URL must be the BARE query, percent-encoded — NOT ``?url=``.
+
+    v1.36.7 updated the assertion: the form is still bare (Chrome drops
+    ``?url=``), but the URL is now percent-encoded so its own ``&``/``?``/CRLF
+    cannot truncate or corrupt the request.  Verified live on Chrome
+    154.0.8037.57 — the raw form opened only ``?a=1`` of ``?a=1&b=2``.
+    """
     captured: list[dict] = []
     _patch_httpx(monkeypatch, captured, {"id": "TAB1", "url": "http://127.0.0.1:8080/"})
 
@@ -77,9 +83,9 @@ def test_open_tab_uses_bare_query_form(monkeypatch):
 
     assert tab_id == "TAB1"
     requested = captured[0]["url"]
-    assert requested == "http://127.0.0.1:9557/json/new?http://127.0.0.1:8080/", (
-        f"wrong /json/new form: {requested}"
-    )
+    assert requested == (
+        "http://127.0.0.1:9557/json/new?http%3A%2F%2F127.0.0.1%3A8080%2F"
+    ), f"wrong /json/new form: {requested}"
     assert "url=" not in requested, (
         "the ?url= form is silently ignored by Chrome — the tab opens blank"
     )

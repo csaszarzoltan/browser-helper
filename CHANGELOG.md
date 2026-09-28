@@ -4,6 +4,34 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.7] — 2026-09-28
+
+**Fix: `/session/new?url=` elvesztette a URL query stringjét** — élőben
+bizonyított adatvesztés Chrome 154.0.8037.57-en.
+
+A v1.36.2 a `?url=` form helyett a Chrome nyers `/json/new?<URL>` bare-query
+formáját vezette be, de az URL-t **nyersen** fűzte utána. A Chrome a kéréssor
+maradékát tekinti cél-URL-nek, így az első `&`-nél levágja:
+
+    PUT /json/new?https://example.com/?a=1&b=2  →  megnyílik .../?a=1
+                                                  (b=2 csendben elveszik)
+
+Mostantól `session_registry._build_new_tab_url()` percent-encodeli a teljes
+URL-t (`urllib.parse.quote(url, safe="")`), így a `?`/`&`/`#` és a CRLF
+injektálás is kizárt. Élő proof: `https://example.com/?a=1&b=2` teljesen
+megnyílik.
+
+- Teszt: `tests/test_new_tab_url_encoding.py` (7 teszt) + frissített
+  `tests/test_session_new_tab_url.py`
+
+**Fix: keep-warm hamis sikert logolt 429-nél** (v1.36.6)
+- `_ensure_keep_warm_session()` kiemelve modul-szintre, `bool`-t ad vissza
+- a 429 `tab_budget_exhausted` nem exception, ezért a régi kód
+  `Keep-warm session ensured`-et írt tab nélkül, és a ciklus halottan futott
+  tovább a processz élete végéig
+- a warm tab nem fogyasztja a `BH_MAX_TABS` utolsó slotját
+- Teszt: `tests/test_keep_warm_budget.py` (15 teszt)
+
 ## [1.36.5] — 2026-09-28
 
 **Fix: szerver-oldali tab-budget** — az üres tab-spamet már a kliensoldali
