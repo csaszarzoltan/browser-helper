@@ -268,9 +268,9 @@ async def lifespan(application: FastAPI):
                         await asyncio.sleep(int(os.environ.get("BH_KEEP_WARM_INTERVAL", "300")))
                         continue
                     await chrome_mgr.launch()
-                    async with _hx.AsyncClient(timeout=5.0) as hx:
-                        await hx.post(f"http://127.0.0.1:{os.environ.get('BH_PORT', '8020')}/session/new", params={"url": warm_url})
-                    logger.info("Keep-warm session ensured at %s", warm_url)
+                    ensured = await _ensure_keep_warm_session(warm_url)
+                    if ensured:
+                        logger.info("Keep-warm session ensured at %s", warm_url)
                 except Exception as exc:  # noqa: BLE001 — warm-up is best-effort
                     logger.debug("Keep-warm cycle failed: %s", exc)
                 await asyncio.sleep(int(os.environ.get("BH_KEEP_WARM_INTERVAL", "300")))
@@ -380,6 +380,51 @@ chrome_mgr = ChromeManager(settings_mgr)
 # session's tab when the cap is reached (client auto-heals on next call).
 # B8: 30 (was 20) — burst of parallel agents no longer triggers mass eviction.
 session_registry = SessionRegistry(ttl=1800.0, max_sessions=int(os.environ.get("BH_MAX_SESSIONS", "30")))
+
+
+async def _ensure_keep_warm_session(warm_url: str) -> bool:
+    """Mint (or confirm) the keep-warm session tab.  Returns True only on success.
+
+    v1.36.6: the previous inline version treated *any* non-throwing POST as
+    success and logged "Keep-warm session ensured".  But ``/session/new``
+    answers ``429 tab_budget_exhausted`` when ``BH_MAX_TABS`` is spent — a
+    normal response, not an exception — so the loop reported a warm tab it
+    never got, and silently stopped warming for the rest of the process
+    lifetime.  A refused cycle is normal, not fatal: the next interval tries
+    again, once the client has closed a session.
+    """
+    import httpx as _hx
+
+    # v1.36.6: the warm tab is a convenience, not a client need.  Never spend
+    # the last free BH_MAX_TABS slot on it — that would hand the budget to the
+    # keep-warm loop and 429 every real client until the warm tab is reaped.
+    budget = session_registry.tab_budget
+    if budget and session_registry.tabs_in_use() >= budget:
+        logger.info(
+            "Keep-warm skipped: tab budget full (%d/%d) — clients keep the slots",
+            session_registry.tabs_in_use(), budget,
+        )
+        return False
+
+    url = f"http://127.0.0.1:{os.environ.get('BH_PORT', '8020')}/session/new"
+    try:
+        async with _hx.AsyncClient(timeout=5.0) as hx:
+            resp = await hx.post(url, params={"url": warm_url})
+    except Exception as exc:  # noqa: BLE001 — best-effort warm-up
+        logger.debug("Keep-warm POST failed: %s", exc)
+        return False
+
+    if 200 <= resp.status_code < 300:
+        return True
+
+    # Refused (429 budget) or a transient error — log it, but never claim success.
+    logger.info(
+        "Keep-warm session NOT created (HTTP %s from /session/new) — will retry in %ss",
+        resp.status_code,
+        os.environ.get("BH_KEEP_WARM_INTERVAL", "300"),
+    )
+    return False
+
 
 # Headless session manager
 headless_mgr = HeadlessManager()
