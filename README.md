@@ -395,6 +395,9 @@ curl "http://localhost:8000/service/metrics?format=prometheus"   # p50/p95 per o
 | `API_TOKEN` | *(unset)* | Bearer protection on all endpoints |
 | `PORT` | `8000` | HTTP port (`--port` overrides) |
 | `BH_MAX_SESSIONS` | `30` | Per-client session hard cap (LRU eviction beyond) |
+| `BH_MAX_TABS` | `0` (off) | **Hard tab budget** — `/session/new` beyond it returns `429 tab_budget_exhausted` and opens **no** tab. Unlike `BH_MAX_SESSIONS` this refuses instead of LRU-evicting, so a client that never echoes its session id cannot grow the tab count. See `GET /sessions` for `tab_budget` / `tabs_in_use`. |
+| `BH_SESSION_AUTO` | `0` | Let header-less browser ops auto-mint a session (each one opens a real tab — a common source of tab spam; prefer explicit sessions) |
+| `BH_STRICT_SESSIONS` | `0` | Reject header-less browser ops with `400 Missing session` instead of auto-minting. Pair with `BH_SESSION_AUTO=0`. |
 | `BH_KEEP_WARM_URL` | `http://127.0.0.1:8080/` | Warm-session target |
 | `BH_KEEP_WARM_INTERVAL` | `300` | Keep-warm re-mint cadence (seconds); `BH_KEEP_WARM=0` disables |
 | `CHROME_AUTO_PORT` | `9557` | CDP debug port preference order: env > settings > 9557 |

@@ -15,7 +15,8 @@ kliensekre is, akik továbbra is új sessiont nyitnak minden hívásra.
   tabot**. A `max_sessions`-szal ellentétben nem LRU-zár, hanem megtagad.
 - `TabBudgetExceeded` kivétel a registry-ben, `tab_budget`/`tabs_in_use` a
   `/sessions` válaszban.
-- Teszt: `tests/test_tab_budget.py` (5 teszt).
+- Teszt: `tests/test_tab_budget.py` (6 teszt).
+- README env-táblázat: `BH_MAX_TABS` / `BH_SESSION_AUTO` / `BH_STRICT_SESSIONS` dokumentálva.
 
 ## [1.36.4] — 2026-09-24
 
