@@ -37,17 +37,46 @@ class _Client:
         )
         self.sid: str | None = None
         # Mint an isolated session (own tab) up front.
+        # v1.36.5: the production service runs with BH_MAX_TABS=3, so this
+        # live test can hit the budget when stale sessions linger (a crashed
+        # earlier run, or a real agent).  Fail with a clear message rather
+        # than an opaque 429 deep inside urllib.
         req = urllib.request.Request(
             f"{BH}/session/new?url=about:blank", data=b"", method="POST",
         )
-        with self.opener.open(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode())
+        try:
+            with self.opener.open(req, timeout=30) as resp:
+                body = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise AssertionError(
+                    "POST /session/new returned 429 — the live service's "
+                    "BH_MAX_TABS budget is already spent. Close stale sessions "
+                    "(GET /sessions, POST /session/close) and re-run; this "
+                    "test needs 2 free slots."
+                ) from exc
+            raise
         self.sid = (
             resp.headers.get("X-Session-ID")
             or (body.get("data") or {}).get("session_id")
             or (body.get("result") or {}).get("session_id")
         )
         assert self.sid, f"no session id from /session/new: {body}"
+
+    def close(self):
+        """Release this client's tab so the BH_MAX_TABS budget is not leaked."""
+        if not self.sid:
+            return
+        try:
+            req = urllib.request.Request(
+                f"{BH}/session/close?session_id={self.sid}", data=b"",
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=15).read()
+        except Exception:  # noqa: BLE001 — cleanup is best-effort
+            pass
+        finally:
+            self.sid = None
 
     def post(self, path, data=None, timeout=60):
         headers = {"Content-Type": "application/json"}
@@ -101,28 +130,31 @@ def test_parallel_sessions_get_separate_tabs(_bh_service_ready):
 
     a = _Client()
     b = _Client()
+    try:
+        # Navigate both to distinct Google queries (parallel-ish, sequential
+        # here but each fresh cookie → own session/tab).
+        qa = "parallel_test_alpha_8f9e"
+        qb = "parallel_test_beta_7c31"
+        ra = a.navigate(PROXY_Q.format(q=qa))
+        assert ra.get("status") == "ok", f"agent A navigate failed: {ra}"
+        rb = b.navigate(PROXY_Q.format(q=qb))
+        assert rb.get("status") == "ok", f"agent B navigate failed: {rb}"
 
-    # Navigate both to distinct Google queries (parallel-ish, sequential
-    # here but each fresh cookie → own session/tab).
-    qa = "parallel_test_alpha_8f9e"
-    qb = "parallel_test_beta_7c31"
-    ra = a.navigate(PROXY_Q.format(q=qa))
-    assert ra.get("status") == "ok", f"agent A navigate failed: {ra}"
-    rb = b.navigate(PROXY_Q.format(q=qb))
-    assert rb.get("status") == "ok", f"agent B navigate failed: {rb}"
+        time.sleep(4)  # let pages (and title) settle
 
-    time.sleep(4)  # let pages (and title) settle
+        ta = a.title()
+        tb = b.title()
 
-    ta = a.title()
-    tb = b.title()
-
-    # Each tab title must contain ITS OWN query marker and NOT the other's.
-    assert qa in ta.lower() and qb not in ta.lower(), (
-        f"A's tab was overwritten: A title={ta!r} (wanted {qa})"
-    )
-    assert qb in tb.lower() and qa not in tb.lower(), (
-        f"B's tab was overwritten: B title={tb!r} (wanted {qb})"
-    )
+        # Each tab title must contain ITS OWN query marker and NOT the other's.
+        assert qa in ta.lower() and qb not in ta.lower(), (
+            f"A's tab was overwritten: A title={ta!r} (wanted {qa})"
+        )
+        assert qb in tb.lower() and qa not in tb.lower(), (
+            f"B's tab was overwritten: B title={tb!r} (wanted {qb})"
+        )
+    finally:
+        a.close()
+        b.close()
 
 
 def test_parallel_search_overwrites_no_one(_bh_service_ready):
@@ -132,17 +164,20 @@ def test_parallel_search_overwrites_no_one(_bh_service_ready):
 
     a = _Client()
     b = _Client()
+    try:
+        qa = "parallel search marker alpha q1x"
+        qb = "parallel search marker beta q2y"
+        a.post("/agent/search", {"query": qa, "engine": "google", "timeout": 25})
+        b.post("/agent/search", {"query": qb, "engine": "google", "timeout": 25})
 
-    qa = "parallel search marker alpha q1x"
-    qb = "parallel search marker beta q2y"
-    a.post("/agent/search", {"query": qa, "engine": "google", "timeout": 25})
-    b.post("/agent/search", {"query": qb, "engine": "google", "timeout": 25})
+        # Each search returns some answer text; more importantly each landed on
+        # its own tab. Verify via the returned query marker in title.
+        time.sleep(2)
+        ta = a.title()
+        tb = b.title()
 
-    # Each search returns some answer text; more importantly each landed on
-    # its own tab. Verify via the returned query marker in title.
-    time.sleep(2)
-    ta = a.title()
-    tb = b.title()
-
-    assert qa in ta.lower(), f"A search tab not on A's query: {ta!r} vs {qa}"
-    assert qb in tb.lower(), f"B search tab not on B's query: {tb!r} vs {qb}"
+        assert qa in ta.lower(), f"A search tab not on A's query: {ta!r} vs {qa}"
+        assert qb in tb.lower(), f"B search tab not on B's query: {tb!r} vs {qb}"
+    finally:
+        a.close()
+        b.close()
