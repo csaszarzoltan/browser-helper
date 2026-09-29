@@ -4,6 +4,46 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.8] — 2026-09-28
+
+**Security: `/session/new` csak http(s) és about:blank URL-t nyisson.**
+
+Élőben igazolva Chrome 154.0.8037.57-en: a `POST /session/new?url=data:text/html,…`
+valódi tabot nyitott, aminek tartalmát `/text` és `observe` visszakeresheti.
+Egy caller, akinek csak a loopback API-tokenje van, így tetszőleges dokumentumot
+tud megnyitni saját origin-kontextusában. A `file://` ma a Chrome saját 503-as
+elutasítására támaszkodik — ez böngészőviselkedés, nem nálunk birtolt kontroll.
+
+- `main._validate_tab_url()`: http(s) allowlist + host-ellenőrzés + CRLF/NUL
+  szűrés; a `/session/new` 400 `unsupported_url_scheme`-mel utasít el
+- loopback http megengedve (a keep-warm `http://127.0.0.1:8080/`)
+- élő proof: `data:` → 400, `file://` → 400, `https://…/?a=1&b=2` → 200
+- Teszt: `tests/test_tab_url_scheme_allowlist.py` (15 teszt)
+
+**Fix: teljes teszt-szvit 53 → 0 bukás.** Két valódi szennyező, mind a saját,
+ma írt tesztjeimből:
+
+- `test_agent_v136_api_contract.py` — `importlib.reload(main)` feleslegesen
+  (a FastAPI `app.openapi()`-kor dobja a warningot, nem importkor; élőben
+  igazolva). A reload új fingerprint store-t hozott létre, miközben a conftest
+  a régit tartotta → 33 hamis bukás. A fájlban több teszt még
+  `main.client.navigate = AsyncMock(...)` alakban ír felül metódust, amit a
+  `monkeypatch` nem von vissza → további 4 hamis bukás; erre most egy
+  autouse fixture vigyáz.
+- `test_mcp_integration.py` — a `_args_for` tábla rövid nevekre kulcsolt, a
+  `tools/list` prefixelteket ad, és 13 tool kötelező paraméterét nem fedte
+  (mind pydantic-validáción haltak meg). A kézzel karbantartott
+  `EXPECTED_TOOLS` 104-ből 36-ot nem fedett, és a stdio/HTTP transport
+  eltérő némezőket használ. Mindkét assert most `build_tool_defs()`-ból
+  származik; új `tests/test_mcp_args_coverage.py` (5 teszt) deriválja a
+  kötelező paramétereket a registry saját séma-táblázatából.
+- `test_headless_reaper.py` a v1.36.4 reaper-guard *előtti* szerződést várta
+  („kill minden nem-poolozott headless") — épp a bug volt.
+- `test_fleet_run_batch_v27.py`: a limit-teszt 51-et várt (a cap 100), és a
+  `fake_create` figyelmen kívül hagyta az `url`-t, így a hibaterjedés nem
+  volt demonstrálható.
+- `SKILL.md`: 22 nem dokumentált route pótolva.
+
 ## [1.36.7] — 2026-09-28
 
 **Fix: `/session/new?url=` elvesztette a URL query stringjét** — élőben

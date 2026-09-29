@@ -38,6 +38,40 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(main.app)
 
+_MISSING = object()
+
+
+@pytest.fixture(autouse=True)
+def _restore_global_client_methods():
+    """Undo direct ``main.client.<method> = Mock()`` assignments.
+
+    Several tests below stub methods on the SHARED ``main.client`` singleton
+    with a plain assignment (``main.client.navigate = AsyncMock(...)``) instead
+    of ``monkeypatch.setattr``.  monkeypatch only undoes what IT patched, so
+    those assignments outlived the test that made them and leaked into every
+    later test in the session — 4 spurious failures in test_screenshot_api and
+    test_playwright_backend, on completely unrelated code paths.  Snapshot the
+    instance attributes and restore them after each test in this module.
+    """
+    stubbed = (
+        "navigate",
+        "screenshot",
+        "analyze_page_condensed",
+        "start_network_monitoring",
+        "get_network_log",
+        "evaluate",
+        "get_tabs",
+        "click",
+        "type_text",
+    )
+    saved = {name: main.client.__dict__.get(name, _MISSING) for name in stubbed}
+    yield
+    for name, original in saved.items():
+        if original is _MISSING:
+            main.client.__dict__.pop(name, None)
+        else:
+            main.client.__dict__[name] = original
+
 
 # ─── 1. OpenAPI operationId uniqueness ───
 

@@ -305,7 +305,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.36.7",
+    version="1.36.8",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -380,6 +380,46 @@ chrome_mgr = ChromeManager(settings_mgr)
 # session's tab when the cap is reached (client auto-heals on next call).
 # B8: 30 (was 20) — burst of parallel agents no longer triggers mass eviction.
 session_registry = SessionRegistry(ttl=1800.0, max_sessions=int(os.environ.get("BH_MAX_SESSIONS", "30")))
+
+
+_ALLOWED_TAB_SCHEMES = ("http", "https")
+
+
+def _validate_tab_url(url: str | None) -> str | None:
+    """Return *url* if it is a safe navigable target, else None.
+
+    v1.36.8.  ``POST /session/new?url=`` accepted ANY scheme, so a caller that
+    only holds the loopback API token could open ``data:text/html,…`` and read
+    the document back through ``/text`` and ``observe`` (verified live against
+    Chrome 154.0.8037.57: the ``data:`` tab opened).  ``file://`` is rejected
+    by Chrome itself today — 503 — but that is a browser behaviour, not a
+    control we own.
+
+    ``workflow_catalog.py`` already applies an http(s) allowlist, so this
+    closes an inconsistency rather than inventing a policy.  Loopback http is
+    explicitly allowed: the keep-warm URL is ``http://127.0.0.1:8080/``.
+    """
+    if url is None:
+        return ""
+    if not isinstance(url, str):
+        return None
+    if url.strip() in ("", "about:blank"):
+        return url
+    # Control characters (CR/LF in particular) have no place in a navigable
+    # target and are the raw material of request-splitting attempts.
+    if any(ch in url for ch in ("\r", "\n", "\x00")):
+        return None
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in _ALLOWED_TAB_SCHEMES:
+        return None
+    if not parsed.netloc:
+        return None
+    return url
 
 
 async def _ensure_keep_warm_session(warm_url: str) -> bool:
@@ -2448,6 +2488,21 @@ async def session_new(request: Request,
     With *profile* set, the session gets a dedicated Chrome profile (own
     cookies/storage) — full isolation between clients.
     """
+    # ── URL allowlist (v1.36.8) ──
+    # Only http(s) (and the CDP default about:blank) are navigable targets.
+    # Without this a caller holding just the loopback API token could open a
+    # `data:` document and read it back through /text and /observe.
+    validated = _validate_tab_url(url)
+    if validated is None:
+        return api_error(
+            "session_new",
+            "unsupported_url_scheme",
+            f"Refusing to open {url!r}: only http, https and about:blank are allowed.",
+            400,
+            details={"url": url, "allowed": list(_ALLOWED_TAB_SCHEMES) + ["about:blank"]},
+        )
+    url = validated
+
     # ── Reuse path (v1.36 idempotency) ──
     existing = session_registry.get(_session_id_from_request(request))
     if existing is not None and not profile:
