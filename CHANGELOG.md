@@ -4,6 +4,40 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.9] — 2026-09-28
+
+**Diagnosztika: a Chrome halásakor végre nyom marad.** Két, hónapok óta
+nyitott diagnosztikai rés — mindkettőt Claude review észlelte, mindkettő élőben
+igazolt.
+
+1. `launch()` a stderr-fogást `"w"` móddal nyitotta, tehát **minden
+   újraindítás TÖRÖLTE az előző élet stderr-jét**. A bizonyítékot maga a
+   helyreállítás semmisítette meg, pontosan akkor, amikor a magyarázatot
+   kerestük. Most: `"a"` + `_rotate_stderr_log()` (rename-shift, `STDERR_KEEP=3`,
+   a legrégebbi slot törlődik).
+2. Semmi nem olvasta a `proc.returncode`-ot és nem várt `proc.wait()`-re, így
+   az OOM `SIGKILL` és a tiszta `exit(0)` megkülönböztethetetlen volt, és egyik
+   sem jutott log-vonalba. Most: `_supervisor_task` várja a gyermeket, és
+   `_record_chrome_exit` kiírja a státuszt és a jelet.
+   Élő proof: valódi `SIGKILL` egy valódi gyerekprocesszre → a logban
+   `exit pid=… signal SIGKILL (rc=-9)`.
+
+- `_supervise_chrome`: **mindig logol, csak akkor nulláz, ha még a gazda.**
+  A korábbi `self._pid != pid` korai return elnyelné épp azt a státuszt,
+  amit keresünk: Chrome hal → watchdog relaunch → új launch beállítja a
+  `_pid`-et → a régi supervisor mismatch-e eldobja a valódi halálokmert.
+  A gazdaság **processz-identitással** dől el, nem pid-vel (a pid újrahasznosítható).
+- `stop()` canceleli a supervisort, így a szándékos leállás nem látszik crashnek.
+- `_stderr_fh` a spawn után bezáródik — eddig minden relaunch egy fd-t szivárogott.
+- `_cap_stderr_history`: 20 MB keret a rotált stderr-ekre, mert `/tmp` tmpfs
+  (RAM), egy crash-loop pedig 100 MB+ stack trace-ot termelhet.
+- Új `/tmp/bh-chrome-lifecycle.log`: `launch`/`exit` vonalak, greppelhetők.
+- Teszt: `tests/test_chrome_diagnostics.py` (11 teszt), mind Ruff-tiszta.
+
+Javítva egy teszt-mock hiba is (`test_orphan_reap_guard.py`): a broad és a
+main-port `pgrep` mock ugyanazt a mintát vizsgálta, így a reaper teszt
+no-opként futott és elrejtette a valódi viselkedést.
+
 ## [1.36.8] — 2026-09-28
 
 **Security: `/session/new` csak http(s) és about:blank URL-t nyisson.**

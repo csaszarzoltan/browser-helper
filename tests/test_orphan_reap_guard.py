@@ -46,8 +46,13 @@ def _run_reap(monkeypatch):
 
     def fake_run(cmd, *a, **k):
         m = MagicMock()
-        s = str(cmd)
-        if "remote-debugging-port=9557" in s:
+        # Order matters: the broad scan and the main-port scan BOTH contain
+        # "remote-debugging-port=", so the port-specific pattern must be
+        # tested first.  Matching the wrong one returned the full process
+        # list for the main-port scan, which made every pid look "owned" and
+        # the reaper a no-op — a failure that hid behind a plausible mock.
+        pattern = cmd[2] if len(cmd) > 2 else ""
+        if cmd[0] == "pgrep" and "headless" not in pattern:
             m.stdout = _PGREP_MAIN
         elif cmd[0] == "pgrep":
             m.stdout = _PGREP_ALL
@@ -80,8 +85,8 @@ def test_reaper_never_kills_live_browser_children(monkeypatch):
 
     def fake_run(cmd, *a, **k):
         m = MagicMock()
-        s = str(cmd)
-        if "remote-debugging-port=9557" in s:
+        pattern = cmd[2] if len(cmd) > 2 else ""
+        if cmd[0] == "pgrep" and "headless" not in pattern:
             m.stdout = ""  # main-port scan finds nothing (worst case)
         elif cmd[0] == "pgrep":
             m.stdout = _PGREP_ALL

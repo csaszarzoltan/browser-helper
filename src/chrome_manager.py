@@ -174,7 +174,160 @@ class ChromeManager:
         # (observed 2026-08-11: json/new 500s, double launch storm).
         self._launch_in_progress: bool = False
 
-    # ── Public API ───────────────────────────────────────────────
+    # ── Chrome lifecycle diagnostics (v1.36.9) ──────────────────────
+    # Chrome has been dying every ~40-80 min with no explanation. Two holes
+    # kept us blind, both closed here:
+    #
+    # (a) The stderr sink used mode "w", so every relaunch TRUNCATED the
+    #     previous life's stderr — the crash evidence was destroyed at the
+    #     moment the next Chrome started, long before anyone read it.
+    #     Rotating by rename keeps the last STDERR_KEEP lives on disk.
+    # (b) Nothing read proc.returncode / awaited proc.wait(), so an OOM
+    #     SIGKILL (-9) and a clean exit (0) were indistinguishable and
+    #     neither reached a log line. `_supervisor_task` awaits the child and
+    #     records the status. Chrome is NOT setsid'd, so it shares the service's
+    #     signal group — a group-wide SIGKILL takes BH down too, and in that
+    #     case the supervisor dies with it (no log), which is correct: the
+    #     systemd journal already holds the OOM record for that case.
+    STDERR_KEEP = 3
+    # Total bytes retained across the rotated stderr files.  /tmp is tmpfs
+    # (RAM) on this host and a crash-loop can produce 100MB+ of stack traces
+    # in a single life; without a cap the history is a memory cost on exactly
+    # the box that is already short of it.
+    STDERR_MAX_BYTES = 20 * 1024 * 1024
+    LIFECYCLE_PATH = "/tmp/bh-chrome-lifecycle.log"
+
+    def _append_lifecycle(self, message: str) -> None:
+        """Append one greppable lifecycle line (launch/exit boundaries)."""
+        try:
+            with open(self.LIFECYCLE_PATH, "a", encoding="utf-8") as fh:
+                fh.write(message.rstrip("\n") + "\n")
+        except OSError:  # diagnostics must never break launch
+            logger.debug("lifecycle log write failed", exc_info=True)
+
+    def _cap_stderr_history(self) -> None:
+        """Keep the rotated stderr files newest-first until the total fits.
+
+        Guards against a crash-loop filling tmpfs.  This walks every ``.k``
+        slot (not just up to STDERR_KEEP-1) because a slot can be left over
+        from a previous run with a larger KEEP, and the whole point is a bound
+        on bytes, not on file count.  A file that does not fit is truncated to
+        what remains, or removed when nothing remains: the head of a looping
+        crash is redundant and the exit status is already in the lifecycle log.
+        """
+        try:
+            budget = self.STDERR_MAX_BYTES
+            for k in range(1, self.STDERR_KEEP + 2):
+                path = f"{self._stderr_path}.{k}"
+                if not os.path.exists(path):
+                    continue
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    continue
+                if size <= budget:
+                    budget -= size
+                    continue
+                if budget <= 0:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                    continue
+                try:
+                    with open(path, "r+b") as fh:
+                        fh.truncate(budget)
+                except OSError:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                budget = 0
+        except Exception:
+            logger.debug("stderr history cap failed", exc_info=True)
+
+    def _rotate_stderr_log(self) -> None:
+        """Keep the last ``STDERR_KEEP`` stderr files; the live one stays open.
+
+        The previously-open handle keeps writing to the *renamed* inode, so an
+        older Chrome that is still dying cannot interleave with the new one.
+        """
+        try:
+            # Shift .1->.2, .2->.3 … then drop the oldest (.KEEP) and move
+            # the live log to .1.  Note the shift must go DOWNWARD (highest
+            # first) so no file is overwritten before it has been moved, and
+            # the oldest slot is deleted rather than shifted, otherwise the
+            # history grows without bound.
+            for k in range(self.STDERR_KEEP - 1, 0, -1):
+                src = f"{self._stderr_path}.{k}"
+                dst = f"{self._stderr_path}.{k + 1}"
+                if os.path.exists(src):
+                    os.replace(src, dst)
+            stale = f"{self._stderr_path}.{self.STDERR_KEEP}"
+            if os.path.exists(stale):
+                os.unlink(stale)
+            # /tmp is tmpfs (RAM).  A crash-loop can spew stack traces and one
+            # life can reach 100MB+, so three of those pinned in RAM is a
+            # perverse cost on the very box that is already under memory
+            # pressure.  Cap the retained history, newest files first.
+            self._cap_stderr_history()
+            if os.path.exists(self._stderr_path):
+                os.replace(self._stderr_path, f"{self._stderr_path}.1")
+        except OSError:
+            logger.debug("stderr rotation failed", exc_info=True)
+
+    def _record_chrome_exit(self, pid: int, returncode: int | None, reason: str = "") -> None:
+        """Log the exit status of a Chrome we owned.  Best effort, never raises."""
+        if returncode is None:
+            desc = "unknown"
+        elif returncode < 0:
+            import signal as _sig
+
+            try:
+                desc = f"signal {_sig.Signals(-returncode).name} (rc={returncode})"
+            except ValueError:
+                desc = f"signal rc={returncode}"
+        else:
+            desc = f"exit status {returncode}"
+        line = f"exit pid={pid} {desc} {reason}".rstrip()
+        self._append_lifecycle(line)
+        logger.warning("Chrome process %d: %s %s", pid, desc, reason)
+
+    async def _supervise_chrome(self, proc, pid: int) -> None:
+        """Await the Chrome child and record why it went away.
+
+        Cancelled in ``stop()`` so an intentional stop is never logged as an
+        unexplained death.  Ownership is checked by PROCESS IDENTITY
+        (``self._process is proc``), not by pid: pids get recycled, and a
+        stale supervisor must never clear a live Chrome's state — but it must
+        still LOG the status it saw, because "Chrome died" is exactly the
+        event we are trying to explain.
+        """
+        try:
+            returncode = await proc.wait()
+        except asyncio.CancelledError:
+            self._append_lifecycle(f"exit pid={pid} supervised-cancelled (intentional stop)")
+            raise
+        except Exception as exc:  # noqa: BLE001 — diagnostics only
+            self._record_chrome_exit(pid, None, f"wait() failed: {exc}")
+            return
+        # v1.36.9: log FIRST, clear conditionally.
+        # An earlier version returned early when `self._pid != pid`, which
+        # discarded precisely the status we are hunting: when Chrome dies the
+        # watchdog relaunches, the new launch assigns `self._pid`, and the old
+        # supervisor's mismatch check then swallowed the real death reason.
+        # Ownership is decided by PROCESS IDENTITY, not by pid: an OS can
+        # recycle a pid, and a stale supervisor must never clear a live
+        # Chrome's state.
+        reason = "" if returncode not in (0, -15) else "expected-ish (clean/sigterm)"
+        if self._process is not proc:
+            reason = f"stale supervisor (owner is now pid={self._pid})"
+        self._record_chrome_exit(pid, returncode, reason)
+        if self._process is proc:
+            self._pid = 0
+            self._process = None
+
+    # ── Public API ────────────────────────────────────────────────
 
     async def launch(
         self,
@@ -364,11 +517,15 @@ class ChromeManager:
         try:
             # Chrome stderr → file (NOT DEVNULL): crashes were invisible until
             # now (observed 2026-09-02: 3 silent deaths in 50 min, no dmesg OOM,
-            # no crash dump — the reason died with the process). Rotate by
-            # truncating per launch so the file always holds the latest life.
+            # no crash dump — the reason died with the process).
+            # v1.36.9: mode is now "a" + explicit rotation.  The old "w" truncated
+            # the previous life's stderr at every relaunch, so the evidence of
+            # the crash we are trying to explain was destroyed by the recovery
+            # itself.  Rotating by rename keeps STDERR_KEEP lives on disk.
             self._stderr_path = "/tmp/bh-chrome-stderr.log"
+            self._rotate_stderr_log()
             try:
-                self._stderr_fh = open(self._stderr_path, "w", buffering=1)  # noqa: ASYNC230,SIM115 — once per launch, not a tight loop; must stay open for process lifetime
+                self._stderr_fh = open(self._stderr_path, "a", buffering=1)  # noqa: ASYNC230,SIM115 — once per launch, not a tight loop; must stay open for process lifetime
             except OSError:
                 self._stderr_fh = None
             proc = await asyncio.create_subprocess_exec(
@@ -376,6 +533,21 @@ class ChromeManager:
                 stdout=subprocess.DEVNULL,
                 stderr=(self._stderr_fh if self._stderr_fh is not None else subprocess.DEVNULL),
                 env=child_env,
+            )
+            # The child holds its own duplicate of this descriptor after
+            # fork/exec, so the parent copy can go: without this close, every
+            # relaunch leaked one fd for the lifetime of the service.
+            if self._stderr_fh is not None:
+                try:
+                    self._stderr_fh.close()
+                except OSError:
+                    pass
+                self._stderr_fh = None
+            # v1.36.9: watch the child so its exit status reaches a log line.
+            # A stale supervisor cannot misreport: it re-checks ownership below.
+            self._supervisor_task = asyncio.create_task(self._supervise_chrome(proc, proc.pid))
+            self._append_lifecycle(
+                f"launch pid={proc.pid} port={actual_port} argv0={cmd[0]}"
             )
         except FileNotFoundError:
             self._launch_in_progress = False
@@ -447,6 +619,15 @@ class ChromeManager:
         pid = self._pid or self.settings.get("chrome_pid", 0)
         if pid:
             _kill_process(pid)
+
+        # v1.36.9: cancel the supervisor BEFORE dropping the handle, so an
+        # intentional stop is recorded as intentional rather than as an
+        # unexplained exit status.  Without this every /browser/stop looked
+        # like a Chrome crash in the lifecycle log.
+        task = getattr(self, "_supervisor_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+        self._supervisor_task = None
 
         self._process = None
         self._pid = 0
