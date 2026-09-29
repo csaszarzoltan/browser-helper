@@ -3149,6 +3149,52 @@ High-level agent operations that combine multiple CDP steps into one call:
 
 - `POST /page/content` — main content (nav/sidebar stripped).
 - `POST /page/headline`, `POST /page/links`, `POST /page/forms`, `POST /page/table` — lightweight extractors.
+- `GET|POST /page/visible-text` — visible-text of the page; split per method so
+  FastAPI emits a distinct `operationId` for each (v1.36.0).
+- `GET|POST /page/text` — same split contract: one route per method.
+
+## Interaction & device emulation
+
+- `POST /hover` — move the pointer over a selector without clicking.
+- `POST /press_key` — send a raw key to the focused element.
+- `POST /reload` — reload the current page.
+- `POST /element/{selector:path}` — resolve a selector to its element record
+  (state, box model, attributes).
+- `GET /wait/js` — poll a JS expression until truthy or the timeout expires.
+
+## Dialogs, console, notifications
+
+- `POST /dialog/handle` — `action`: `accept` | `dismiss`; optional
+  `prompt_text` for `prompt()` dialogs.
+- `GET /console/errors` — collected console errors.
+- `GET /logs` — server log tail (diagnostics; not a browser log).
+- `GET /notifications`, `POST /notifications/start` — capture the Web
+  Notification stream via CDP.
+- `GET /network/requests` — recent CDP network activity.
+- `GET /rate_limiter/status` — current request budget state.
+
+## Geo mocking
+
+- `POST /geo/mock` — override reported geolocation.
+- `POST /geo/mock/clear` — drop the override.
+
+## Session auth profiles
+
+- `GET /session/auth-profiles` — list stored auth profiles.
+- `GET /session/auth-profile/{name}` — fetch one.
+- `POST /session/auth-profile/{name}/restore` — replay a stored profile into
+  the live session (cookies + storage).
+
+## Agent one-call extras
+
+- `POST /agent/expect` — assert a condition in one call (selector, text,
+  absence …).
+- `POST /agent/bundle` — run several agent steps in one request.
+
+## Observability
+
+- `GET /service/metrics` — Prometheus-style counters.
+- `WS /ws` — event stream (session created/destroyed, tab events).
 
 ## Recording & network
 

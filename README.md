@@ -455,6 +455,7 @@ sessions), `src/mcp_server/registry.py::build_tool_defs()` (tool source of truth
 | [MCP Server](docs/mcp-server.md) | Transports, client configs, full 68-tool reference |
 | [Perf roadmap](docs/perf-prioritized.md) · [Phase 2](docs/perf-phase2.md) | Speed design + benchmarks |
 | [Tab Auto-Activation](docs/tab-auto-activation.md) | How transparent tab activation works |
+| [Visual workflow builder](docs/visual-workflow-builder.md) | Accessible Automation workspace for the repeated actions (navigate, click, type, wait, screenshot, analyze, page text); edits JSON, never executes |
 | [Condensed Snapshot](docs/condensed-snapshot.md) · [Checkbox Operations](docs/checkbox-operations.md) · [Screenshot Confirmation](docs/screenshot-confirmation.md) | Feature guides |
 | [Anti-Detection Profile Manager](docs/anti-detection-profile-manager.md) · [Fingerprint Randomization](docs/fingerprint-randomization.md) · [Behavioral Simulation](docs/behavioral-simulation.md) · [Cloud Provider Setup](docs/cloud-provider-setup.md) · [Proxy Rotation Manager](docs/proxy-rotation-manager.md) · [Fingerprint Database](docs/fingerprint-database.md) · [Session Persistence](docs/session-persistence.md) · [Anti-Detection Compositor](docs/anti-detection-compositor.md) | Stealth stack docs |
 | [Engineering Standards](docs/engineering-standards.md) | Kötelező olvasmány kódírás előtt |

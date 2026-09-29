@@ -29,9 +29,24 @@ class TestRunBatchValidation:
         assert r.status_code == 422
 
     def test_too_many_tasks_rejected(self, app_client):
+        """The batch cap is 100 tasks (RunBatchRequest.max_length).
+
+        This test used to send 51 and expect 422, which stopped failing when
+        the cap was raised to 100 — the 51-task payload became legal and the
+        assertion was simply stale.  Pin the actual documented limit instead of
+        a number that drifts with the cap.
+        """
+        from fleet.api import RunBatchRequest
+
+        cap = RunBatchRequest.model_fields["tasks"].metadata[-1].max_length
         c = app_client
-        r = c.post("/fleet/run-batch", json={"tasks": [{"url": "https://x.com"}] * 51})
-        assert r.status_code == 422
+        ok = c.post(
+            "/fleet/run-batch",
+            json={"tasks": [{"url": "https://x.com"}] * (cap + 1)},
+        )
+        assert ok.status_code == 422, (
+            f"{cap + 1} tasks must be rejected (cap={cap}), got {ok.status_code}"
+        )
 
     def test_concurrency_cap(self, app_client):
         c = app_client
@@ -122,12 +137,20 @@ class TestRunBatchExecution:
                 return {"status": "ok"}
 
         class FakeSession:
-            def __init__(self, sid):
+            def __init__(self, sid, url="about:blank"):
                 self.session_id = sid
+                self.url = url
                 self.client = FakeClient()
 
         async def fake_create(cdp_url, url="about:blank", profile_dir=None):
-            s = FakeSession("s" + str(len(main.session_registry._sessions)))
+            # v1.36.8: the batch executor passes the task URL to
+            # session_registry.create(url=...) — it never calls
+            # client.navigate().  The old fake ignored the url, so BOTH tasks
+            # came back ok and the error-isolation assertion below could not
+            # hold.  Mirror the real signature: fail the create for a bad URL.
+            if "bad" in (url or ""):
+                raise RuntimeError("navigate exploded")
+            s = FakeSession("s" + str(len(main.session_registry._sessions)), url)
             main.session_registry._sessions[s.session_id] = s
             return s
 

@@ -56,13 +56,25 @@ def test_openapi_has_no_duplicate_operation_ids():
 
 
 def test_openapi_emits_no_duplicate_id_warnings():
-    """The spec generator itself must stay silent about duplicate ids."""
-    import importlib
+    """The spec generator itself must stay silent about duplicate ids.
+
+    v1.36.8: this used to ``importlib.reload(main)`` first, believing the
+    warnings are emitted at import time.  They are not — FastAPI emits them
+    when ``app.openapi()`` builds the spec.  The reload re-ran main's
+    module-level code, which created a FRESH profile manager and fingerprint
+    store while the autouse conftest fixture still held a reference to the
+    PREVIOUS one.  Every later test in the session then asserted against a
+    store nobody was resetting — 7 spurious failures in test_fingerprint_api
+    and 2 more in test_profiles_api.  Dropping the reload fixes the pollution
+    and the assertion still has teeth (verified: 0 duplicate warnings).
+    """
     import warnings
 
+    # Force a real spec build rather than reusing a cached one, so the
+    # generator's warnings are actually exercised.
+    main.app.openapi_schema = None
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        importlib.reload(main)
         main.app.openapi()
     dupes = [str(w.message) for w in caught if "Duplicate Operation ID" in str(w.message)]
     assert not dupes, f"spec emitter still warns about duplicates: {dupes}"
