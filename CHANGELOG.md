@@ -4,6 +4,49 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.10] — 2026-10-03
+
+**A Chrome nem crashelt. Magát öltük meg — 30 percenként, hónapok óta.**
+
+A v1.36.9 lifecycle log utolsó sorai bizonyították, hogy a „40-80 perces
+leállás" nem hiba volt, hanem a saját session-takarításunk:
+
+```
+139 launch sor, 138 exit sor — MINDegyik exit status 0 (tiszta kilépés),
+8/8 kilépés a saját "Session ... destroyed" után 20 másodpercen belül.
+```
+
+Egy ciklus a journalból:
+
+```
+00:37:13  Session 57f6f7ea destroyed   ← a 30 perces session-TTL lejárt
+00:37:13  exit status 0                ← 1 másodperc múlva meghalt a Chrome
+00:38:31  watchdog probe failed (1/2)
+00:43:48  Chrome not running → relaunch
+00:47:01  Keep-warm session ensured    ← új tab, és a ciklus újraindul
+```
+
+**A bug:** a `destroy()` bezárta a session tabját, és ha ez volt az egyetlen
+page tab, a headed Chrome tiszta `exit(0)`-val kilép — ez Chrome természetes
+viselkedése, nem Chrome-hiba. A `cleanup()` viszont *előbb* reapelt, és csak
+*utána* próbált keep-warm tabot mintálni. A Chrome ekkor már halott volt, a
+CDP-hívás `All connection attempts failed`-t kapott, és ez `logger.debug`-ben
+eltűnt: **a védelem soha nem is futott le, és nem is jelezte, hogy nem futott.**
+
+**A javítás:**
+- `destroy()` **a bezárás előtt** mintál anchor-tabot (`_count_page_tabs() <= 1`
+  guard, hogy ne pazzazzon felesleges tabot);
+- új `_ensure_anchor_tab()` / `_count_page_tabs()` / `_cdp_base_url()` helper;
+- a `cleanup()` duplikált utólagos mintája a helperre cserélve;
+- a mintási hiba most `WARNING` szinten látszik, nem `debug`-en.
+
+**Élő proof valós Chrome-pel:**
+- baseline: az utolsó page tab bezárása → `browser alive: False`
+- javítás: anchor elöl, session tab bezárva → `browser alive: True`
+
+Új teszt: `tests/test_last_tab_chrome_exit.py` (3 teszt).
+**2750 passed, 0 failed.**
+
 ## [1.36.9] — 2026-09-28
 
 **Diagnosztika: a Chrome halásakor végre nyom marad.** Két, hónapok óta

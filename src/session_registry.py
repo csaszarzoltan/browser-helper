@@ -374,11 +374,78 @@ class SessionRegistry:
                 logger.debug("post-create navigate to %s failed: %s", url, exc)
         return tab_id
 
+    async def _count_page_tabs(self) -> int:
+        """How many page tabs the browser currently has (0 if unreachable)."""
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as http:
+                resp = await http.get(f"{self._cdp_base_url()}/json")
+                if resp.status_code != 200:
+                    return 0
+                return sum(1 for t in resp.json() if t.get("type") == "page")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("page tab count failed: %s", exc)
+            return 0
+
+    @staticmethod
+    def _cdp_base_url() -> str:
+        import os as _os
+
+        port = (
+            _os.environ.get("CHROME_AUTO_PORT")
+            or _os.environ.get("BH_PORT")
+            or "9557"
+        )
+        return f"http://127.0.0.1:{port}"
+
+    async def _ensure_anchor_tab(self) -> str | None:
+        """Open one ``about:blank`` page tab so the browser cannot self-exit.
+
+        Idempotent: if any page tab already exists this is a no-op, so callers
+        can invoke it before every close without wasting tab budget.
+        """
+        import httpx
+
+        base = self._cdp_base_url()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as http:
+                resp = await http.get(f"{base}/json")
+                if resp.status_code == 200:
+                    pages = [t for t in resp.json() if t.get("type") == "page"]
+                    if pages:
+                        return pages[0].get("id")
+                resp2 = await http.put(f"{base}/json/new", params={"url": "about:blank"})
+                if resp2.status_code < 400:
+                    logger.info("Keep-warm anchor tab minted before a closing tab")
+                    return resp2.json().get("id")
+                logger.warning(
+                    "Could not mint keep-warm anchor: CDP answered %s", resp2.status_code
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not mint keep-warm anchor: %s", exc)
+        return None
+
     async def destroy(self, session_id: str) -> bool:
-        """Close a session's tab + WS and forget it."""
+        """Close the session's tab + WS and forget it.
+
+        Closing the LAST page tab makes headed Chrome exit cleanly — that is
+        Chrome's behaviour, and it is what relaunched our browser every 30
+        minutes (v1.36.10, diagnosed from the v1.36.9 lifecycle log: 138 exits,
+        all ``status 0``, 8/8 within 20s of our own ``Session ... destroyed``).
+        So mint the anchor tab BEFORE the close, not after: ``cleanup()`` used
+        to reap first and mint afterwards, by which time the browser was
+        already dead and the mint silently failed at debug level.
+        """
         sess = self._sessions.pop(session_id, None)
         if sess is None:
             return False
+        # Anchor first — this is the whole point of the reordering.
+        try:
+            if await self._count_page_tabs() <= 1:
+                await self._ensure_anchor_tab()
+        except Exception as exc:  # noqa: BLE001 — never block the close
+            logger.warning("Could not mint a keep-warm anchor before close: %s", exc)
         try:
             await sess.client.close_tab(sess.tab_id)
         except Exception:  # noqa: BLE001
@@ -413,21 +480,13 @@ class SessionRegistry:
                 self._last_reaped = self._last_reaped[-100:]
         if stale:
             logger.info("Reaped %d stale session(s), %d remain", len(stale), len(self._sessions))
-        # CRITICAL (2026-09-02): closing the LAST tab exits headed Chrome
-        # silently. If the stale-session destroy loop above closed every
-        # page tab, mint a keep-warm about:blank tab so the browser (and
-        # the watchdog) stay alive.
+        # v1.36.10: the anchor is now minted inside ``destroy()`` BEFORE each
+        # close, so this post-loop sweep is only a safety net for the case
+        # where the reap closed tabs without going through ``destroy()``.
+        # It stays because a silent debug-level failure here is what hid the
+        # 30-minute relaunch loop for months.
         if stale:
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as http:
-                    resp = await http.get(f"{cdp_url.rstrip('/')}/json")
-                    pages = [t for t in resp.json() if t.get("type") == "page"] if resp.status_code == 200 else []
-                if not pages:
-                    async with httpx.AsyncClient(timeout=5.0) as http:
-                        await http.put(f"{cdp_url.rstrip('/')}/json/new", params={"url": "about:blank"})
-                    logger.info("Keep-warm tab minted — all tabs were closed by session reap")
-            except Exception as exc:  # noqa: BLE001 — best-effort
-                logger.debug("keep-warm tab check failed: %s", exc)
+            await self._ensure_anchor_tab()
         # P3: also reap orphan tabs (about:blank accumulation) while we're here.
         # The per-create reap only runs on session creation; long-lived sessions
         # that accumulate about:blank tabs (e.g. old cross-origin roam leftovers)
