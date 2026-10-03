@@ -18,6 +18,7 @@ client exactly like they did before per-client sessions existed.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -101,6 +102,23 @@ def _no_real_chrome(monkeypatch, request):
         await _noop_ensure_browser()
         return main.client, None
 
+    # v1.36.11: several module-level objects are bound to whatever event loop
+    # first awaited them.  pytest-asyncio gives each test a FRESH loop, so any
+    # of these surviving from a previous test raises
+    #   `... attached to a different loop`
+    # and it only shows in a full sequential run — the file passes alone.
+    #
+    # Rebind the locks to a fresh instance: an asyncio.Lock caches its loop on
+    # first await, and the code reads them as module/instance attributes, so a
+    # new object is the clean fix.  Drop the loop-bound socket and HTTP pool:
+    # neither can be awaited from a sync fixture (the owning loop is already
+    # closed), so clearing the handle is the only safe option.
+    monkeypatch.setattr(main, "_navigate_lock", asyncio.Lock(), raising=False)
+    monkeypatch.setattr(
+        main.session_registry, "_lock", asyncio.Lock(), raising=False
+    )
+    monkeypatch.setattr(main.client, "_ws", None, raising=False)
+    monkeypatch.setattr(main.client, "_http_client", None, raising=False)
     monkeypatch.setattr(main.chrome_mgr, "launch", _noop_launch)
     monkeypatch.setattr(main.session_registry, "create", _no_session)
     monkeypatch.setattr(main, "_ensure_browser", _noop_ensure_browser)

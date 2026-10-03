@@ -61,8 +61,30 @@ eltűnt: **a védelem soha nem is futott le, és nem is jelezte, hogy nem futott
 **Élő proof valós Chrome-pel:** `anchor survived: True, foreign orphan
 removed: True` — a sweep az idegen orbánt zárta, az anchor megmaradt.
 
-Új teszt: `tests/test_last_tab_chrome_exit.py` (8 teszt).
-**2754 passed, 0 failed.**
+**A teszt-pollution lezárása (a regresszió utolsó nyílt hibája):**
+
+`test_screenshot_api.py::TestPostBaseline::test_baseline_requires_connected_cdp`
+izoláltan zöld, teljes szekvenciális futásban néha
+
+    screenshot failed: task ... attached to a different loop
+
+A `main.client` és a két modul-szintű `asyncio.Lock` (`main._navigate_lock`,
+`session_registry._lock`) oraz egy httpx pool — mind az első várakozáskori
+loophoz kötődnek, és a következő teszt, amely friss loopban fut (pytest-asyncio
+loop per test), azonnal bukik. Csak `reg14`-ben bukott, `reg17`-ben épp nem,
+tehát ingadozik.
+
+Javítás: `tests/conftest.py` autouse fixture-e minden teszt előtt
+- mindkét `asyncio.Lock`-ot friss példányra cseréli,
+- a `main.client._ws` socketet és a `_http_client` pool-t nullázza.
+A régi loopból nem lehet `await`-olni (a loop már zárult), csak nullázni.
+
+A négy loop-hoz kötött handle mindegyikét fedi (Claude review: `_pending`
+futures a WS-hez tartoznak, azt nullázni elég).
+
+Új teszt: `tests/test_loop_isolation_invariants.py` (4 teszt)
++ `tests/test_last_tab_chrome_exit.py` ban 8 teszt.
+**2758 passed, 0 failed** (szekvenciális, 297s).
 
 ## [1.36.9] — 2026-09-28
 
