@@ -95,6 +95,12 @@ class SessionRegistry:
         # max_sessions (which is the LRU-eviction ceiling): this one REFUSES a
         # new tab outright so a runaway client cannot keep opening tabs.
         self._tab_budget = int(os.environ.get("BH_MAX_TABS", "0") or 0)
+        # v1.36.10: the id of the keep-warm anchor we minted, so the orphan-tab
+        # sweep can spare it BY IDENTITY.  Counting alone was not enough: with
+        # a live session tab present the "never close the last tab" guard is
+        # skipped entirely, so the sweep would close the very anchor that
+        # exists to keep the browser alive.
+        self._anchor_tab_id: str | None = None
         self._lock = asyncio.Lock()
         self._reaper_task: asyncio.Task | None = None
 
@@ -182,7 +188,19 @@ class SessionRegistry:
             logger.debug("orphan-tab scan failed: %s", exc)
             return 0
         owned = {s.tab_id for s in self._sessions.values()}
-        orphans = [t.get("id") for t in tabs if t.get("type") == "page" and t.get("id") not in owned]
+        # v1.36.10: the keep-warm anchor is unowned by definition, so it looks
+        # exactly like an orphan to this sweep.  Spare it BY ID, not by count:
+        # counting only protected it when it happened to be the last tab, and
+        # closing it would reopen the 30-minute relaunch loop the anchor
+        # exists to prevent.
+        anchor = self._anchor_tab_id
+        orphans = [
+            t.get("id")
+            for t in tabs
+            if t.get("type") == "page"
+            and t.get("id") not in owned
+            and t.get("id") != anchor
+        ]
         # CRITICAL (2026-09-02): never close the LAST page tab. Closing the
         # final tab makes headed Chrome exit cleanly (no crash, no signal —
         # silent disappearance), which the watchdog then "fixed" by
@@ -399,26 +417,54 @@ class SessionRegistry:
         )
         return f"http://127.0.0.1:{port}"
 
-    async def _ensure_anchor_tab(self) -> str | None:
-        """Open one ``about:blank`` page tab so the browser cannot self-exit.
+    async def _ensure_anchor_tab(
+        self, *, doomed_tab_id: str | None = None
+    ) -> str | None:
+        """Guarantee a page tab that is NOT about to be closed.
 
-        Idempotent: if any page tab already exists this is a no-op, so callers
-        can invoke it before every close without wasting tab budget.
+        Adopting an existing tab is only safe when that tab is genuinely
+        free-standing.  Two cases make it unsafe, both found in review
+        (2026-10-03):
+
+        * ``doomed_tab_id`` — ``destroy()`` is about to close exactly that
+          tab.  Adopting it would mint nothing and then close the browser's
+          last page tab, which is the 30-minute relaunch loop this whole
+          change exists to stop.
+        * a tab owned by a live session — recording it as the anchor makes
+          the sweep spare that session's tab and reap the real anchor.
+
+        So: adopt only a page tab that is neither doomed nor session-owned;
+        otherwise mint a fresh one.  The id of what we returned is always
+        recorded, because the sweep spares the anchor by identity, not by
+        counting (a count-based guard is skipped as soon as any live session
+        tab exists).
         """
         import httpx
 
+        owned = {s.tab_id for s in self._sessions.values()}
         base = self._cdp_base_url()
         try:
             async with httpx.AsyncClient(timeout=5.0) as http:
                 resp = await http.get(f"{base}/json")
+                adoptable: str | None = None
                 if resp.status_code == 200:
-                    pages = [t for t in resp.json() if t.get("type") == "page"]
-                    if pages:
-                        return pages[0].get("id")
+                    for t in resp.json():
+                        if t.get("type") != "page":
+                            continue
+                        tid = t.get("id")
+                        if not tid or tid == doomed_tab_id or tid in owned:
+                            continue
+                        adoptable = tid
+                        break
+                if adoptable:
+                    self._anchor_tab_id = adoptable
+                    return adoptable
                 resp2 = await http.put(f"{base}/json/new", params={"url": "about:blank"})
                 if resp2.status_code < 400:
                     logger.info("Keep-warm anchor tab minted before a closing tab")
-                    return resp2.json().get("id")
+                    new_id = resp2.json().get("id")
+                    self._anchor_tab_id = new_id
+                    return new_id
                 logger.warning(
                     "Could not mint keep-warm anchor: CDP answered %s", resp2.status_code
                 )
@@ -448,7 +494,8 @@ class SessionRegistry:
         if keep_alive:
             try:
                 if await self._count_page_tabs() <= 1:
-                    await self._ensure_anchor_tab()
+                    # Pass the doomed id: it must never become the anchor.
+                    await self._ensure_anchor_tab(doomed_tab_id=sess.tab_id)
             except Exception as exc:  # noqa: BLE001 — never block the close
                 logger.warning("Could not mint a keep-warm anchor before close: %s", exc)
         try:

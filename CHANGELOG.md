@@ -44,8 +44,25 @@ eltűnt: **a védelem soha nem is futott le, és nem is jelezte, hogy nem futott
 - baseline: az utolsó page tab bezárása → `browser alive: False`
 - javítás: anchor elöl, session tab bezárva → `browser alive: True`
 
-Új teszt: `tests/test_last_tab_chrome_exit.py` (3 teszt).
-**2750 passed, 0 failed.**
+**Két további bug, amit az első javítás KEZDENEK el (Claude review + élő proof):**
+
+1. **Az anchor-t a bezárandó tab lebegett át.** Ha a session tabja volt az
+   egyetlen page tab, a `_ensure_anchor_tab()` azt fogadta el — majd
+   `destroy()` egy sorral később bezárta. **A javítás visszahozta az eredeti
+   hibát.** Most a `doomed_tab_id` kizáródik az adoptálásból.
+2. **A sweep bezárta az anchort.** Az anchor unowned, tehát a sweep orphannek
+   látja. A „ne zárd be az utolsó tabot" védelem csak akkor fut, ha MINDEN
+   page tab orphan — élő session tab mellett kikapcsol, és a sweep az
+   anchort is bezárja. A védő a számokra épült, nem az identitásra.
+   Most `_anchor_tab_id` szerint spárol (rögzíti az adoptált ÉS a mintált
+   tabot is — az adoptálási ág eredetileg nem rögzített, és ezt csak az élő
+   sweep-proof látta meg).
+
+**Élő proof valós Chrome-pel:** `anchor survived: True, foreign orphan
+removed: True` — a sweep az idegen orbánt zárta, az anchor megmaradt.
+
+Új teszt: `tests/test_last_tab_chrome_exit.py` (8 teszt).
+**2754 passed, 0 failed.**
 
 ## [1.36.9] — 2026-09-28
 
