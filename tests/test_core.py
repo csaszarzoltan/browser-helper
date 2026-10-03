@@ -1,6 +1,7 @@
 """
 Tests for browser-helper CDP client.
 """
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -1310,9 +1311,17 @@ class TestTabActivationRED:
     async def test_close_tab_activates(self, client, activation_spy):
         """close_tab() must call _activate_current() before closing.
 
-        Uses httpx (not _send_command). Will raise connection error.
+        The point of this test is the activation, NOT the network outcome.
+        The old version wrapped the call in ``pytest.raises(...)`` and that
+        made it depend on nothing listening on the fixture's port: whenever
+        another Chrome happened to be up (e.g. a parallel-session test
+        leaving a headless instance on 9555), ``/json/close/tab-123``
+        answered 404, ``close_tab`` returned ``already_closed`` instead of
+        raising, and a correct implementation failed the suite.
+
+        So: call it, tolerate every legitimate outcome, assert the spy.
         """
-        with pytest.raises((httpx.ConnectError, httpx.HTTPError)):
+        with contextlib.suppress(httpx.HTTPError, OSError):
             await client.close_tab("tab-123")
         assert len(activation_spy) > 0, (
             "RED: close_tab() does not call _activate_current()."

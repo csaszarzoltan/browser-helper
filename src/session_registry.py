@@ -426,7 +426,7 @@ class SessionRegistry:
             logger.warning("Could not mint keep-warm anchor: %s", exc)
         return None
 
-    async def destroy(self, session_id: str) -> bool:
+    async def destroy(self, session_id: str, *, keep_alive: bool = True) -> bool:
         """Close the session's tab + WS and forget it.
 
         Closing the LAST page tab makes headed Chrome exit cleanly — that is
@@ -436,16 +436,21 @@ class SessionRegistry:
         So mint the anchor tab BEFORE the close, not after: ``cleanup()`` used
         to reap first and mint afterwards, by which time the browser was
         already dead and the mint silently failed at debug level.
+
+        ``keep_alive=False`` skips the anchor: on server shutdown we are
+        closing the browser on purpose, so minting a tab to preserve it would
+        be a pointless CDP round trip that fights the shutdown.
         """
         sess = self._sessions.pop(session_id, None)
         if sess is None:
             return False
         # Anchor first — this is the whole point of the reordering.
-        try:
-            if await self._count_page_tabs() <= 1:
-                await self._ensure_anchor_tab()
-        except Exception as exc:  # noqa: BLE001 — never block the close
-            logger.warning("Could not mint a keep-warm anchor before close: %s", exc)
+        if keep_alive:
+            try:
+                if await self._count_page_tabs() <= 1:
+                    await self._ensure_anchor_tab()
+            except Exception as exc:  # noqa: BLE001 — never block the close
+                logger.warning("Could not mint a keep-warm anchor before close: %s", exc)
         try:
             await sess.client.close_tab(sess.tab_id)
         except Exception:  # noqa: BLE001
@@ -506,9 +511,13 @@ class SessionRegistry:
         return len(stale)
 
     async def close_all(self) -> None:
-        """Destroy every session (server shutdown)."""
+        """Destroy every session (server shutdown).
+
+        ``keep_alive=False``: we are shutting the browser down on purpose, so
+        no keep-warm anchor is minted — the last tab SHOULD close here.
+        """
         for sid in list(self._sessions):
-            await self.destroy(sid)
+            await self.destroy(sid, keep_alive=False)
         if self._reaper_task:
             self._reaper_task.cancel()
             self._reaper_task = None

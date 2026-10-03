@@ -69,6 +69,10 @@ async def test_closing_the_last_tab_does_not_exhaust_the_browser(monkeypatch):
         minted.append(url)
         return "ANCHOR"
 
+    async def fake_page_count() -> int:
+        return 1                     # this session's tab is the only page
+
+    monkeypatch.setattr(reg, "_count_page_tabs", fake_page_count, raising=False)
     monkeypatch.setattr(reg, "_ensure_anchor_tab", fake_new_tab, raising=False)
 
     await reg.destroy("sess-1")
@@ -98,6 +102,45 @@ async def test_anchor_is_not_minted_when_other_tabs_remain(monkeypatch):
     await reg.destroy("sess-1")
 
     assert minted == [], "minted a needless anchor tab while pages remained"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_mint_an_anchor(monkeypatch):
+    """close_all() must NOT mint: we are killing the browser on purpose.
+
+    Minting on shutdown would be a pointless CDP round trip that fights the
+    teardown, and it briefly resurrects the browser we are closing.
+    """
+    reg = SessionRegistry(ttl=1800.0)
+    minted: list[str] = []
+
+    async def fake_new_tab(url: str = "about:blank") -> str:
+        minted.append(url)
+        return "ANCHOR"
+
+    async def fake_page_count() -> int:
+        return 1
+
+    monkeypatch.setattr(reg, "_count_page_tabs", fake_page_count, raising=False)
+    monkeypatch.setattr(reg, "_ensure_anchor_tab", fake_new_tab, raising=False)
+
+    s1 = MagicMock()
+    s1.tab_id = "T1"
+    s1.last_seen = 0.0
+    s1.client.close_tab = AsyncMock(return_value={})
+    s1.client.close = AsyncMock()
+    s2 = MagicMock()
+    s2.tab_id = "T2"
+    s2.last_seen = 0.0
+    s2.client.close_tab = AsyncMock(return_value={})
+    s2.client.close = AsyncMock()
+    reg._sessions = {"a": s1, "b": s2}
+
+    await reg.close_all()
+
+    assert minted == [], "shutdown minted a keep-warm anchor while closing the browser"
+    s1.client.close_tab.assert_awaited_once_with("T1")
+    s2.client.close_tab.assert_awaited_once_with("T2")
 
 
 # ── the keep-warm mint must stop hiding its failures ─────────────────────────
