@@ -1,26 +1,32 @@
-## Iteration 5 (IN PROGRESS) — a harmadik es negyedik probabilisztikus gate
+## Iteration 5 — SHIPPED v1.36.18 (2026-10-05): a harmadik es negyedik probabilisztikus gate
 
 - what: `tests/test_rate_limiter.py:240-268` — a ket single-draw KS-orakulum cserelje pinnelt-huzas
   determinisztikus kapura (`test_uniform_distribution_ks_test`, `test_log_normal_distribution_ks_test`).
+- SHIPPED: v1.36.18 @ 4b29204, tartalom 507fd61. Test-only, egyetlen fajl.
 - MERES (orchestrator, HELYES kodon): uniform 10/200 = 5.0% elutasitas = a kstest sajat alpha-ja;
-  log-normal 1/200 (Lilliefors-hibas is: a parametereket a tesztelt mintabol becsli). Ez a repo
-  egyetlen piros teszje. A RateLimiter ELESBEN terhelt (`src/cdp_client.py:132` epit, `:665` hiv a
-  `_send_command` human-pacing utjan, API `/rate/config` + MCP `rate_limiter_status`) -> nem dead code.
-- ASK: explore + reviewer FUGGETLENUL ugyanezt nevezte meg; a reviewer a Lilliefors-hibat is
-  hozzátette. Egyetertes -> magas konfidencia. A reviewer 2 elavult/cafolt blokkot is talalt a
-  next-moves.md-ben (IN PROGRESS fejlec, a kontaminalt keyPress-meres + "NEXT: developer") -> azok
-  SUPERSEDED/REFUTED jelolessel FELULIRVA ebben az iteracioban.
-- SPEC-5 kesz (`docs/specs/SPEC-5-deterministic-rate-limiter-gates.md`, 15689B, commitolva).
-- BRIEF-DEFECT (a spec kapta el): a briefbe "orchestrator merte"-kent irt 2000-seed szam (70.15)
-  VALOJABAN az explore szama volt. Az orchestrator sajat sweepje ES a spec fuggetlenul: 91.79/34.26.
-  A 70.15-ot VISSZAVONTAM; a +-150/+-80 tolerancia igy is tart (58ms margin).
-- status: BUILD folyamatban (developer, brief-dev-5).
-- NOTE a szerepekre: `tester` NEM fut kulon — a valtozas TESZT-ONLY, nincs produkcios felulet amit
-  eloben kellene hajtani (a skill "live check" kovetelmenye nem alkalmazhato); a verifikaciot a
-  `test-author` szerep jelenti (a mutans-elkapas bizonyitasa) + a binding `reviewer` gate.
+  log-normal 1/200, plusz Lilliefors-hibas (a parametereket a tesztelt mintabol becsli) -> a p-erteke
+  ERVENYTELEN, nem csak flaky. A `:245` komment olyan pinninget irt le, ami nem letezett.
+- A REGI orakulum VAKSAGA bizonyitva: a rendezett-linear sorozaton `KS p=1.0000` — ATENGEDTE volna.
+- RateLimiter ELESBEN terhelt: `src/cdp_client.py:132` epit, `:665` hiv a `_send_command`
+  human-pacing utjan, API `/rate/config` + MCP `rate_limiter_status` -> nem dead code.
+- ASK: explore + reviewer FUGGETLENUL ugyanezt nevezte meg -> magas konfidencia.
+- SPEC-5: `docs/specs/SPEC-5-deterministic-rate-limiter-gates.md` (15689B). 5 interpretaciot nevesit.
+- GATE-5: **APPROVE 4.8/5** (5·5·5·5·4). A gate MAGA alkalmazta az M1 mutanst in-place, `1 failed`
+  a lag-1 assertion-nel, es a restore md5-je (`100d90b4...`) FUGGETLENUL egyezett az enyemmel.
+  A teljes suite-ot is ujrafuttatta: 2806 passed. Az egyetlen levonas a `tester` kimaradasa, amit
+  LEGITIMNEK itelt (test-only valtozas, nincs wire-protokol felulet).
+- TELJES SUITE A CSERE UTAN: `2806 passed, 0 failed` — a loop egyetlen piros teszje megszunt.
+- BRIEF-DEFECT (a spec kapta el es az orchestrator visszavonta): a briefbe "orchestrator merte"-kent
+  irt 2000-seed szam (70.15) VALOJABAN az `explore` szama volt. Sajat sweep + a spec fuggetlenul:
+  91.79/34.26. A 70.15-ot VISSZAVONTAM; a +-150/+-80 tolerancia igy is tart (58ms margin).
+- DEFECT-001 (repo-root pytest collection): meg NYITOTT, a kovetkezo jelolt. A `explore` egy elavult
+  reszletet is talalt benne: a ket duplikatum mar NEM byte-identical (a `tests/` peldany visz egy
+  defaults-reset hunket `:404`-nel), tehat "torold a root duplikatumot" elott `cmp` kell.
+- OPEN VERDICT: `v20261005134000-741226` (a v1.36.17 mockolt-suite hibat nevezi) MARAD NYITVA — ez az
+  iteracio mas hibat javitott. Ne zarja le, aki ezt olvassa, amig a live-check klauzula nincs bent.
+- CLOSED.
 
-# Iteration 5 kerdes (a kovetkezo session-nek)
-- what: ez az iteracio a KS-kapukat zarja; utana a DEFECT-001 (repo-root pytest collection) a jelolt.
+
 
 # next-moves — browser-helper
 
