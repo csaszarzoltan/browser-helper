@@ -1,0 +1,16 @@
+APPROVE 5.0/5 — SPEC-003 swap ships: boundary exact, 3 events/char from one sender, all 5 items PASS with evidence.
+
+Score table:
+
+| Dimension | Weight | Score | Weighted |
+|---|---|---|---|
+| Correctness | 30% | 5 | 1.50 |
+| Test coverage | 20% | 5 | 1.00 |
+| Spec compliance | 20% | 5 | 1.00 |
+| Code quality | 15% | 5 | 0.75 |
+| Evidence | 15% | 5 | 0.75 |
+| **Total** | 100% | — | **5.00** |
+
+Details: full verdict with pasted command output for all 5 numbered items is at `/tmp/dispatch-log/bh-gate-3.md` (12682 bytes, ends with `SCORE: 5.0/5.0  (SHIP, ...)`).
+
+Key receipts: `git log --oneline -1` = `50de71d chore(loop): iteration 3 in progress`; `git diff --name-only` = exactly the two allowlisted files; full suite `2805 passed, 1 skipped (pre-existing test_cdp_remote.py:559 marker), 8 xfailed, 32 xpassed` exit 0; ruff clean; AC-4/5/6 scripts all `OK`. Per role constraints I wrote nothing to the repo and committed nothing — verdict is the deliverable.

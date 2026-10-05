@@ -1,0 +1,21 @@
+REQUEST-CHANGES 3.2/5 — failed: Test coverage, Code quality
+
+| Dimension | Weight | Score |
+|---|---|---|
+| Correctness | 30% | 4 |
+| Test coverage | 20% | 2 |
+| Spec compliance | 20% | 4 |
+| Code quality | 15% | 2 |
+| Evidence | 15% | 4 |
+| **Total** | | **3.2** |
+
+- tests/test_behavioral_engine.py:274 — `_record_seq(c, char…)` patched as unbound method gets 4 args → TypeError; fix signature/binding — assignee: tester
+- tests/test_behavioral_engine.py:3 — unused `import asyncio` (F401); remove — assignee: tester
+- tests/test_behavioral_engine.py:222 — `[…][0]` → `next(…)` (RUF015) — assignee: tester
+
+Production `src/behavioral_engine.py` is correct (boundary exact, 3/char single-sender, 140/245 translation verified); failures are test-only.
+
+git log --oneline -1 seen: `50de71d chore(loop): iteration 3 in progress — spec done, keyPress risk measured as NOT real`
+Tests run: `/tmp/ac4.py` OK 15/15, `/tmp/ac5.py` OK 6/6, `/tmp/ac6.py` OK 140/245, AC-3 selector 5 passed/1 failed, `ruff check src/behavioral_engine.py tests/test_behavioral_engine.py` 2 errors, full suite 1 failed/2804 passed/1 skipped/8 xfailed/32 xpassed in 302.53s.
+
+Full review: /tmp/dispatch-log/bh-gate-3.md ends with `SCORE: 3.2/5.0  (REWORK, raw-mode test red with TypeError so AC-3/full suite not green)`

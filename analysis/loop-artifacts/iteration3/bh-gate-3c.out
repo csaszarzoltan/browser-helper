@@ -1,0 +1,14 @@
+APPROVE 4.7/5 — the swap is exactly the boundary SPEC-003 specified; all behaviours, ACs, and regressions measure green.
+
+| Dimension | Weight | Score |
+|---|---|---|
+| Correctness | 30% | 5 |
+| Test coverage | 20% | 5 |
+| Spec compliance | 20% | 5 |
+| Code quality | 15% | 4 |
+| Evidence | 15% | 4 |
+| **Weighted total** | | **4.7/5.0** |
+
+`git log --oneline -1` (seen): `8cd91a0 chore(loop): iteration 3 stopped — gate open, work local at 71abe6d` — key finding: the brief's "uncommitted diff" premise is wrong; the swap is committed as WIP `71abe6d`, reviewed via `git diff 50de71d..71abe6d`. Working tree was clean.
+Tests run: full suite `timeout 590 pytest tests/ --ignore=tests/test_parallel_session_isolation.py` → **2805 passed, 1 skipped, 0 failed, 8 xfailed, 32 xpassed, 303.67s, exit 0** (baseline 2796 passed/0 failed); narrow `tests/test_behavioral_engine.py` → 22 passed; AC-3 selector → 6 passed (≥5 required); `ruff check src/behavioral_engine.py tests/test_behavioral_engine.py` → All checks passed; AC-4 → `key events: 15 expected: 15 (_send_command=15 ws.send=0) OK`; AC-5 → `disabled-typing key events: 6 expected: 6 OK`; AC-6 → `cpm_min 140 cpm_max 245 OK`; flaky normality test 10/10 pass in isolation.
+F1 verified correct (real fix, not just passing); F3 verified; F2 silenced with a factually wrong `noqa` reason (non-blocking cosmetic ding); the previous 1-failure is agreed pre-existing flake bisected to `7cdc515` (corroborated, not independently re-bisected). Report at `/tmp/dispatch-log/bh-gate-3.md` (17,370 bytes, ends with `SCORE: 4.7/5.0 (SHIP, ...)`); I wrote/committed nothing — orchestrator must copy it into the repo and record the verdict, or it expires with $TMPDIR.
