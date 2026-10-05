@@ -1,3 +1,27 @@
+## Iteration 5 (IN PROGRESS) — a harmadik es negyedik probabilisztikus gate
+
+- what: `tests/test_rate_limiter.py:240-268` — a ket single-draw KS-orakulum cserelje pinnelt-huzas
+  determinisztikus kapura (`test_uniform_distribution_ks_test`, `test_log_normal_distribution_ks_test`).
+- MERES (orchestrator, HELYES kodon): uniform 10/200 = 5.0% elutasitas = a kstest sajat alpha-ja;
+  log-normal 1/200 (Lilliefors-hibas is: a parametereket a tesztelt mintabol becsli). Ez a repo
+  egyetlen piros teszje. A RateLimiter ELESBEN terhelt (`src/cdp_client.py:132` epit, `:665` hiv a
+  `_send_command` human-pacing utjan, API `/rate/config` + MCP `rate_limiter_status`) -> nem dead code.
+- ASK: explore + reviewer FUGGETLENUL ugyanezt nevezte meg; a reviewer a Lilliefors-hibat is
+  hozzátette. Egyetertes -> magas konfidencia. A reviewer 2 elavult/cafolt blokkot is talalt a
+  next-moves.md-ben (IN PROGRESS fejlec, a kontaminalt keyPress-meres + "NEXT: developer") -> azok
+  SUPERSEDED/REFUTED jelolessel FELULIRVA ebben az iteracioban.
+- SPEC-5 kesz (`docs/specs/SPEC-5-deterministic-rate-limiter-gates.md`, 15689B, commitolva).
+- BRIEF-DEFECT (a spec kapta el): a briefbe "orchestrator merte"-kent irt 2000-seed szam (70.15)
+  VALOJABAN az explore szama volt. Az orchestrator sajat sweepje ES a spec fuggetlenul: 91.79/34.26.
+  A 70.15-ot VISSZAVONTAM; a +-150/+-80 tolerancia igy is tart (58ms margin).
+- status: BUILD folyamatban (developer, brief-dev-5).
+- NOTE a szerepekre: `tester` NEM fut kulon — a valtozas TESZT-ONLY, nincs produkcios felulet amit
+  eloben kellene hajtani (a skill "live check" kovetelmenye nem alkalmazhato); a verifikaciot a
+  `test-author` szerep jelenti (a mutans-elkapas bizonyitasa) + a binding `reviewer` gate.
+
+# Iteration 5 kerdes (a kovetkezo session-nek)
+- what: ez az iteracio a KS-kapukat zarja; utana a DEFECT-001 (repo-root pytest collection) a jelolt.
+
 # next-moves — browser-helper
 
 # Iteration 1 — 2026-10-05 — SHIPPED v1.36.12
@@ -40,6 +64,8 @@
 - what: engine swap — a produkcios ut a `self._typing.type_text`-et hivja (`src/behavioral_engine.py:212`)
 - who: explore + reviewer (both named it) -> spec-author (bh-spec-3.md) -> developer (ticket 146) -> reviewer gate (ticket 155, 3.2/5.0 REWORK)
 - GATE HISTORY: 3.2/5.0 REQUEST-CHANGES named 3 test-only defects (all in the developer's OWN new test file): F1 :274 staticmethod monkeypatch -> TypeError; F2 :3 F401; F3 :222 RUF015. The gate's own words: "Production src/behavioral_engine.py is correct ... failures are test-only."
+
+
 - FIXED in this iteration: all 3. Measured after: tests/test_behavioral_engine.py 22 passed, ruff clean, test_behavioral_engine+typing 88 passed, full suite 2804 passed / 1 failed (flaky AD test, bisected to 7cdc515)
 - STALL: KORRIGALT — a re-gate (ticket 158) IDOKOZBEN LEFUTOTT. A "soha nem indult el" feljegyzesem teves volt: ~40 percen at 0 B-t lattam minden pollnal (a queue-vara, nem halott dispatch), de az artefakt befejezodott. A korrigalt verdikt-sorozat lentebb: 3.2 -> 5.0 -> 4.7. A pollozott 0 B NEM bizonyitek; a ledger sor az.
 - SHIPPED (KORRIGALT): v1.36.14 @ e7fde1a + v1.36.15 @ 7ed30f3 + v1.36.16 @ 7c4df52. A korabbi "NOT SHIPPED" feljegyzes teves volt — a gate 5.0/5.0-t (ticket 158, gate-3b) es 4.7/5.0-t (gate-3c) adott a szallitando fara. A 71abe6d lokalis WIP-commit elveszett/kiveult a force-reset-ig; a tartalma a fenti commitokban el.
