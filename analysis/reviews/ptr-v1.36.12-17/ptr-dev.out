@@ -1,0 +1,24 @@
+dispatch: /tmp/dispatch-log/brief-ptr-dev.txt
+agent: developer
+repo: /home/zoltan/browser-helper @ 16e0677
+brief: sha256:361739546d93
+verdict: none - first pass
+status: DONE — all 13 items answered read-only, report at /tmp/dispatch-log/ptr-dev.md (8371 B). No repo edit, no commit.
+
+Proof model was alive: read `/tmp/dispatch-log/bh-spec-2.md` (602 lines, SPEC-2 AC-1..AC-5) and `git show --name-status 97afc47` (exactly 2 files).
+
+Per-item summary (reader of this message alone can tell completion):
+
+- Q1 DONE — criterion was SPEC-2 AC-1..AC-5 (N-1 gaps, lengths, _compute_cpm=220+raise, tight 220/rel=0.02 gate, 4 xfails removed); verification claimed via bh-dev-2.md pasted outputs + trio (66 passed / 49+8x+32xp / ruff clean). First-hand re-run: not established (read-only).
+- Q2 DONE — AC-3 output `cpm=220.00000000000003, formula_ok=True, instant_raises_ZeroDivisionError=True, PASS exit:0`; AC-5 `8 passed, 58 deselected`, `no P1-3 xfails`. Cited from bh-dev-2.md, not re-measured.
+- Q3 DONE — NOT done: SPEC-2 §7 full-suite guard; reason: budget (15-min limit, stated in bh-dev-2.md item 2). Plus documented AC-1 `nsleeps=3` vs real 2-sleeps deviation.
+- Q4 DONE — Nothing outside allowlist. `git show --name-status --format='' 97afc47` = only `M src/behavioral_typing.py`, `M tests/test_behavioral_typing.py`; diff-stat 2 files/84+/30- matches report.
+- Q5 DONE — First-hand: not established. From record: the one AD-test failure classified as statistical flake on a single re-run (later bisected by loop to 7cdc515).
+- Q6 DONE — Yes: `src/behavioral_typing.py` touched after by 4f06d18 (v1.36.15) and 7c4df52 (v1.36.16); test file also by 73b5d52. Known via `git log --follow -- src/behavioral_typing.py`.
+- Q7 DONE — No developer commit (brief forbade). Work carried by orchestrator commits 7cdc515 (v1.36.12) and 97afc47 (v1.36.13, author/committer csaszarzoltan).
+- Q8 DONE — Would run the deferred §7 full-suite guard + a live end-to-end typing check (loop lesson: 2805 green + 4.7/5.0 gate coexisted with broken v1.36.14 CDP path).
+- Q9 DONE — Interpreted sentence: "answer the questions below about what YOU did" → assumed YOU = prior developer dispatches (bh-dev-1/2/3), since this dispatch did no loop work. Flagged as assumption.
+- Q10 DONE — Did not exhaustively read every file under analysis/next-moves.md + loop-artifacts/ (read head + listing + spec-3 preview). Reason: brief said "may consult", not must (scope/budget). All mandated outputs done.
+- Q11 DONE — Partly: report answers all 13, but second-hand status is explicit (scope note + not-established marks); a reader skipping the scope note could mistake cited record for fresh measurement.
+- Q12 DONE — Grep run on 16e0677: `type_text` HAS production caller (`src/behavioral_engine.py:212`, via `cdp_client.py:1966`); `_compute_cpm` has zero production callers (def at `behavioral_typing.py:232`, only test call sites).
+- Q13 DONE — No: `grep -c` for marker = 0 in all three bh-dev artifacts and not quoted in ptr-dev.md. Notes 81 B `.err` sidecars carry it as noise, and quoting risks false STALL.

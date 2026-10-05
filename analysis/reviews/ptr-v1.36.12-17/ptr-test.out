@@ -1,0 +1,26 @@
+Audit complete — report at `/tmp/dispatch-log/ptr-test.md` (8788 B, header + all 13 items). Per-item summary:
+
+- **Q1 criterion/how verified:** loop had per-iteration specs (SPEC-2, SPEC-003, SPEC-4), verified by reviewer binding gates (e.g. gate's `2805 passed ... in 303.67s`, APPROVE 4.7/5 at `bh-gate-3.md:285-308`). My first-hand verification: not established (read-only, ran nothing).
+- **Q2 command/output:** no tester-produced command exists; loop proof lives in others' records (gate full-suite run; commit `4f06d18` live-check message). First-hand observation: not established.
+- **Q3 not done from brief:** nothing — loop never briefed a tester; this brief's asks all done ("Do not re-do any work" is why Q1/Q2 cite records).
+- **Q4 outside allowlist:** nothing — brief has no allowlist; `git status` empty at `16e0677`, no file changed.
+- **Q5 assumed:** (a) /tmp/dispatch-log/ is the complete record (never checked for a ledger elsewhere); (b) pre-hotfix suite was green (taken from `next-moves.md:31-35`, not re-run).
+- **Q6 collision:** no — wrote nothing before the report, so nothing to collide with.
+- **Q7 commit:** none; brief forbids it. HEAD `16e0677`, orchestrator docs commit.
+- **Q8 differently:** demand live-Chrome CDP gate for wire-protocol changes; pre-write report skeleton; check for a ledger beyond /tmp.
+- **Q9 interpreted clause:** brief:3-4 "answer … about what YOU did" — no tester ran in the loop, so I read "YOU" as the tester-role verification function and marked first-hand gaps "not established".
+- **Q10 brief asks skipped:** none; all 13 answered within budget.
+- **Q11 whole-brief signal:** yes — header, 13 numbered answers with evidence-or-"not established", output path, this summary; only disclosed gap is no repo copy (commit forbidden).
+- **Q12 mock vs production (central):** MOCK. `tests/test_behavioral_typing.py:95-99` (`AsyncMock` `_send_command` returning canned ok) and `tests/test_behavioral_engine.py:69-87` (`_mock_client` stub appending to `_sent`, returning `{}`). Pre-hotfix suite even PINNED the bug green (`call_count == 15 # keyDown/keyPress/keyUp`, `:357-358`; `event_types == ["keyDown","keyPress","keyUp"]`, `:515-521`).
+- **Q13 could verification have caught the defects:** No — neither `keyPress`-invalidity nor `text=null`-rejection is visible to a mock that never talks to Chrome. What would have: live end-to-end against real Chrome (what commit `4f06d18` did post-ship; six-string ALL PASS). The new guard tests (`test_behavioral_typing.py:577-586`, `:589-619`) pin the fix, not the next protocol drift.
+
+```
+dispatch:  /tmp/dispatch-log/brief-ptr-test.txt
+agent:     tester (ptr-test)
+repo:      /home/zoltan/browser-helper @ 16e0677
+brief:     sha256:e796d4ef5f7c
+verdict:   none - first pass
+status:    DONE — all 13 items answered read-only; no code touched, nothing committed (brief forbids it)
+```
+
+Durability note: brief orders output to `$TMPDIR` and forbids committing, so no repo copy exists — this report is a 72-hour lease unless the orchestrator copies it in.

@@ -1,0 +1,37 @@
+ROLE: developer for /home/zoltan/browser-helper. This is a POST-TASK REVIEW. READ-ONLY.
+
+ONE QUESTION: about the work the loop shipped between v1.36.12 and v1.36.17, answer the
+questions below about what YOU did. Do not re-do any work. Do not fix anything.
+
+Answer ALL 13 items. Report each item EVEN IF your answer is NO or "not established",
+and say what you checked to establish that.
+
+For EVERY answer: name the file:line or paste the command output that proves it. If you
+cannot prove it, answer exactly "not established" — do not reason your way to an answer.
+A self-assigned "PASS"/"GREEN"/score is not evidence.
+
+Q1  What was the acceptance criterion, and how did you verify it was met?
+Q2  Which command proved the change works, and what was its ACTUAL output?
+Q3  What did you NOT do that the brief asked for, and why?
+Q4  What did you change that was NOT in your Target Files allowlist?
+Q5  What did you assume without measuring?
+Q6  Did any other dispatch touch a file you wrote? Which file, and how did you know?
+Q7  Did the work you did commit? Which commit SHA is yours?
+Q8  What would you do differently if you ran this again tomorrow?
+Q9  Which clause of THIS BRIEF did you have to interpret, and what did you assume? Name the sentence.
+Q10 Was anything you did NOT do that this brief asked for? Give the reason — budget, scope, or the
+    brief not asking.
+Q11 Would a reader of your report alone know you completed the WHOLE brief? If not, say what signals that.
+Q12 Does the symbol you tested have a PRODUCTION caller? Run the grep and name the call site, or
+    answer "zero callers".
+Q13 Did you quote the stall banner token in your report? If yes, note that the queue's classifier may
+    record your dispatch as STALL for that reason alone.
+
+Ground truth you may consult (do not re-measure): the loop's own record is at
+analysis/next-moves.md and analysis/loop-artifacts/. Commits: 7cdc515, ab50d84, e7fde1a,
+4f06d18, 7c4df52, 73b5d52.
+
+DO NOT DECIDE product behavior. Do not edit, commit, or fix anything — this is a read-only audit.
+BUDGET: 420 seconds. If you run out, report which items you finished and which you did not.
+OUTPUT: write the report to /tmp/dispatch-log/ptr-dev.md AND summarise each numbered answer in your
+final message so a reader of the message alone can tell which items you completed.

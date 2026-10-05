@@ -1,0 +1,37 @@
+ROLE: tester for /home/zoltan/browser-helper. This is a POST-TASK REVIEW. READ-ONLY.
+
+ONE QUESTION: about the verification the loop relied on between v1.36.12 and v1.36.17, answer the
+questions below about what YOU did. Do not re-do any work. Do not fix anything.
+
+Answer ALL 13 items. Report each item EVEN IF your answer is NO or "not established",
+and say what you checked to establish that.
+
+For EVERY answer: name the file:line or paste the command output that proves it. If you
+cannot prove it, answer exactly "not established" — do not reason your way to an answer.
+A self-assigned "PASS"/"GREEN"/score is not evidence.
+
+Q1  What was the acceptance criterion, and how did you verify it was met?
+Q2  Which command proved the change works, and what was its ACTUAL output?
+Q3  What did you NOT do that the brief asked for, and why?
+Q4  What did you change that was NOT in your Target Files allowlist?
+Q5  What did you assume without measuring?
+Q6  Did any other dispatch touch a file you wrote? Which file, and how did you know?
+Q7  Did the work you did commit? Which commit SHA is yours?
+Q8  What would you do differently if you ran this again tomorrow?
+Q9  Which clause of THIS BRIEF did you have to interpret, and what did you assume? Name the sentence.
+Q10 Was anything you did NOT do that this brief asked for? Give the reason — budget, scope, or the
+    brief not asking.
+Q11 Would a reader of your report alone know you completed the WHOLE brief? If not, say what signals that.
+Q12 Did the tests you relied on actually EXERCISE the production path, or did they substitute a mock
+    for the real CDP client? Name the mock and the file:line. This is the central question.
+Q13 Two shipped defects (an invalid CDP event type and a null text field) passed a full green suite
+    and two binding gate scores >=4.7 before a live API call found them. State whether your
+    verification COULD have caught either one, and what would have.
+
+Ground truth you may consult: tests/test_behavioral_typing.py, tests/test_behavioral_engine.py,
+tests/test_behavioral_simulation.py, analysis/next-moves.md.
+
+DO NOT DECIDE product behavior. Do not edit, commit, or fix anything — this is a read-only audit.
+BUDGET: 420 seconds. If you run out, report which items you finished and which you did not.
+OUTPUT: write the report to /tmp/dispatch-log/ptr-test.md AND summarise each numbered answer in your
+final message so a reader of the message alone can tell which items you completed.
