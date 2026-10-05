@@ -354,8 +354,8 @@ class TestTypeTextBehavioral:
         result = await typing.type_text("Hello", mode="raw", client=mock_client)
         assert result["status"] == "ok"
         assert result["chars"] == 5
-        # 5 chars × keyDown/keyPress/keyUp
-        assert mock_client._send_command.call_count == 15
+        # 5 chars × keyDown/keyUp (keyPress is not a valid CDP event type)
+        assert mock_client._send_command.call_count == 10
 
     @pytest.mark.asyncio
     async def test_type_text_raw_mode_no_delay(self, typing, mock_client):
@@ -452,7 +452,7 @@ class TestKeyDispatchBehavioral:
     async def test_dispatch_char_sequence_returns_none(self, mock_client):
         """_dispatch_char_sequence completes without raising."""
         assert await BehavioralTyping._dispatch_char_sequence(mock_client, "a") is None
-        assert mock_client._send_command.call_count == 3
+        assert mock_client._send_command.call_count == 2
 
     @pytest.mark.asyncio
     async def test_dispatch_key_event_returns_command_result(self, mock_client):
@@ -483,25 +483,21 @@ class TestKeyDispatchBehavioral:
 
     @pytest.mark.asyncio
     async def test_full_char_sequence(self, mock_client):
-        """_dispatch_char_sequence sends keyDown → keyPress → keyUp for one char."""
+        """_dispatch_char_sequence sends keyDown → keyUp for one char."""
         await BehavioralTyping._dispatch_char_sequence(mock_client, "a")
 
-        # Must have called _send_command 3 times (keyDown, keyPress, keyUp)
-        assert mock_client._send_command.call_count == 3, (
-            f"Expected 3 calls (keyDown+keyPress+keyUp), got "
+        # Exactly 2 calls: keyDown (inserts, carries text) + keyUp.
+        assert mock_client._send_command.call_count == 2, (
+            f"Expected 2 calls (keyDown+keyUp), got "
             f"{mock_client._send_command.call_count}"
         )
 
-        # Verify call order: keyDown → keyPress → keyUp
         calls = mock_client._send_command.call_args_list
         assert calls[0][0][0] == "Input.dispatchKeyEvent", (
             f"First call should be Input.dispatchKeyEvent, got {calls[0][0][0]}"
         )
         assert calls[1][0][0] == "Input.dispatchKeyEvent", (
             f"Second call should be Input.dispatchKeyEvent, got {calls[1][0][0]}"
-        )
-        assert calls[2][0][0] == "Input.dispatchKeyEvent", (
-            f"Third call should be Input.dispatchKeyEvent, got {calls[2][0][0]}"
         )
 
     @pytest.mark.asyncio
@@ -512,14 +508,51 @@ class TestKeyDispatchBehavioral:
 
         # First param of each call should be the method name
         # Second param should contain the event type
-        event_types = [
-            calls[0][0][1].get("type"),
-            calls[1][0][1].get("type"),
-            calls[2][0][1].get("type"),
-        ]
-        assert event_types == ["keyDown", "keyPress", "keyUp"], (
-            f"Expected [keyDown, keyPress, keyUp], got {event_types}"
+        event_types = [c[0][1].get("type") for c in calls]
+        assert event_types == ["keyDown", "keyUp"], (
+            f"Expected [keyDown, keyUp], got {event_types}"
         )
+        # Regression guard: `keyPress` is NOT a valid CDP dispatchKeyEvent
+        # type — Chrome rejects it with -32602 and the typed character is
+        # lost or racing. Mocked tests cannot see that, so pin it here.
+        assert "keyPress" not in event_types, (
+            "keyPress is not a valid CDP Input.dispatchKeyEvent type; "
+            "Chrome answers -32602 Unexpected event type 'keyPress'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_null_text_is_ever_sent(self, mock_client):
+        """CDP types `text` as `string`, not nullable.
+
+        Sending JSON `null` is rejected with "Invalid parameters", which killed
+        every `/type` call at the first space. Measured against a real Chrome:
+        space needs `text=" "`, Enter/Tab/Backspace need the field absent.
+        A mock cannot see an invalid CDP payload, so assert the shapes here.
+        """
+        for char in ("a", " ", "!", "1", "\n", "\t", "\x08"):
+            mock_client._send_command.reset_mock()
+            await BehavioralTyping._dispatch_char_sequence(mock_client, char)
+            for call in mock_client._send_command.call_args_list:
+                params = call[0][1]
+                # The field must be ABSENT when there is no text (CDP types
+                # `text` as `string`, so JSON null is "Invalid parameters").
+                # When present it must be a real string.
+                assert "text" not in params or isinstance(params["text"], str), (
+                    f"{char!r} sent text={params.get('text')!r} on "
+                    f"type={params.get('type')!r}; CDP rejects null text with "
+                    f"'Invalid parameters'. Payload: {params}"
+                )
+                if params.get("type") == "keyDown" and char.isprintable():
+                    assert params.get("text") == char, (
+                        f"{char!r} keyDown must carry text={char!r}, "
+                        f"got {params.get('text')!r}"
+                    )
+        # A space must actually carry the space character, or it is inserted
+        # as nothing at all.
+        mock_client._send_command.reset_mock()
+        await BehavioralTyping._dispatch_char_sequence(mock_client, " ")
+        down = mock_client._send_command.call_args_list[0][0][1]
+        assert down["text"] == " ", f"space payload text={down.get('text')!r}"
 
 
 class TestComputeCpmBehavioral:

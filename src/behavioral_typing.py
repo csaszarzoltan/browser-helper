@@ -266,12 +266,16 @@ class BehavioralTyping:
         named = _NAMED_KEYS.get(char)
         if named is not None:
             key, code, vk = named
-            # Named keys produce no text payload — CDP expects text absent on
-            # keyDown/keyUp of non-text keys.
+            # Non-printing keys (Enter, Tab, Backspace) carry no text payload.
+            # Space DOES: it is printable and inserting it is the whole point,
+            # so it must send ``text=" "``. Measured against a real Chrome —
+            # ``text=None`` is rejected with "Invalid parameters" (CDP types
+            # ``text`` as a string, not nullable) and ``text=""`` inserts
+            # nothing, so a space would silently vanish.
             return {
                 "key": key,
                 "code": code,
-                "text": None,
+                "text": char if char.isprintable() else None,
                 "windowsVirtualKeyCode": vk,
                 "nativeVirtualKeyCode": vk,
             }
@@ -328,8 +332,10 @@ class BehavioralTyping:
         """
         params = dict(key_params)
         params["type"] = event_type
-        # keyUp carries no text payload; strip it so the CDP schema is honoured.
-        if event_type in ("keyUp", "rawKeyUp"):
+        # `text` is typed `string` by CDP, not nullable: sending JSON null is
+        # rejected with "Invalid parameters". Strip the field entirely whenever
+        # it is absent/None, and always on keyUp.
+        if params.get("text") is None or event_type in ("keyUp", "rawKeyUp"):
             params.pop("text", None)
         return await client._send_command("Input.dispatchKeyEvent", params)
 
@@ -339,7 +345,15 @@ class BehavioralTyping:
         char: str,
         delay_before: float = 0.0,
     ) -> None:
-        """Dispatch keyDown → keyPress → keyUp for a single character.
+        """Dispatch keyDown → keyUp for a single character.
+
+        NOTE: ``keyPress`` is NOT a valid CDP ``Input.dispatchKeyEvent`` type.
+        The protocol accepts ``keyDown``, ``keyUp``, ``rawKeyDown`` and
+        ``char``. Sending ``keyPress`` makes Chrome answer
+        ``-32602 Unexpected event type 'keyPress'``; the error was previously
+        swallowed because each dispatch's result was discarded, so typing
+        appeared to work while every character after the first raced an error.
+        ``keyDown`` carrying ``text`` is what actually inserts the character.
 
         Args:
             client:       CDP client.
@@ -350,6 +364,7 @@ class BehavioralTyping:
             await asyncio.sleep(delay_before)
 
         params = BehavioralTyping._key_identifier(char)
+        # keyDown alone inserts the character (it carries `text`); keyUp
+        # completes the pair. There is no valid `keyPress` type in CDP.
         await BehavioralTyping._dispatch_key_event(client, "keyDown", params)
-        await BehavioralTyping._dispatch_key_event(client, "keyPress", params)
         await BehavioralTyping._dispatch_key_event(client, "keyUp", params)

@@ -126,7 +126,7 @@ class TestBehavioralEngine:
         engine = BehavioralEngine(client)
         with patch("asyncio.sleep", new=AsyncMock()):
             await engine.type_text("#input", "ab")
-        assert len(_key_events(client)) == 3 * 2
+        assert len(_key_events(client)) == 2 * 2
 
     @pytest.mark.asyncio
     async def test_scroll_sends_wheel_events(self):
@@ -201,7 +201,7 @@ class TestBehavioralTypingDelegation:
             "operation": "behavioral_type",
             "result": {"chars": 5},
         }
-        assert len(keys) == 3 * 5
+        assert len(keys) == 2 * 5
         # Single sender: nothing went through the old fire-and-forget ws.send.
         ws_payloads = [json.loads(c.args[0]) for c in client._ws.send.call_args_list]
         ws_keys = [p for p in ws_payloads if p.get("method") == "Input.dispatchKeyEvent"]
@@ -215,7 +215,7 @@ class TestBehavioralTypingDelegation:
         with patch("asyncio.sleep", new=AsyncMock()):
             await engine.type_text("#input", "a\bb")
         keys = _key_events(client)
-        assert len(keys) == 3 * 3
+        assert len(keys) == 2 * 3
         downs = [p for p in keys if p.get("type") == "keyDown"]
         assert [p["key"] for p in downs] == ["a", "Backspace", "b"]
         vk = next(
@@ -231,7 +231,7 @@ class TestBehavioralTypingDelegation:
         with patch("asyncio.sleep", new=AsyncMock()):
             await engine.type_text("#input", "H!")
         keys = _key_events(client)
-        assert len(keys) == 3 * 2
+        assert len(keys) == 2 * 2
         assert all("modifiers" not in p for p in keys)
         downs = [p for p in keys if p.get("type") == "keyDown"]
         assert [p.get("text") for p in downs] == ["H", "!"]
@@ -288,6 +288,6 @@ class TestBehavioralTypingDelegation:
             result = await engine.type_text("#input", "Hi")
         keys = _key_events(client)
         assert result["status"] == "ok"
-        assert len(keys) == 3 * 2
+        assert len(keys) == 2 * 2
         # Raw mode: no inter-key delay between the two chars.
         assert gaps == [0.0, 0.0]
