@@ -51,21 +51,27 @@
 - MEASURED AFTER: 20/20 deterministic; all 6 mutants caught (uniform/constant/exponential/sigma*3/straight-line/linear-sampling); correct code passes; 3 consecutive full suites all 2806 passed.
 - NET GAIN: AD is scale-invariant, so the OLD test was blind to sigma*3 (statistic=0.2215 < 0.7510). The new calibration assertions catch it. Tolerances derived from 2000 seeds (0.02575 / 0.02204 -> 0.03 / 0.05); the spec's proposed 0.02 failed 58/1000 and would have made it worse.
 - FALSE AGENT CLAIMS REFUTED BY OWN MEASUREMENT: the spec's acceptance command had a SyntaxError; its second command printed failures:24 not 0; the gate claimed bare `pytest` cannot run (measured: xdist 3.8.0 installed, 67 passed). Recorded as refuted, not "fixed".
+- [CORRECTED 2026-10-05: NOT closed. The rate-limiter KS gates (`tests/test_rate_limiter.py:240-268`)
+  are the same defect family and SURVIVED — measured 10/200 (5.0%) flake on correct code, the repo's
+  only red test. The claim below was false; iteration 5 owns it.]
 - CLOSED. This was the loop's only real remaining item; the other bisected flaky family is covered by the same fix.
 - GATE-4: APPROVE 4.5/5.0 (reviewer independently reproduced 40/40 deterministic + all 6 mutants). NOTE: the agent wrote its report to bh-gate-4.out; the bh-gate-4.md the brief named was NEVER created. The whole 8167B report (all 6 items, score table, mutant table) is in analysis/loop-artifacts/iteration4/bh-gate-4.out. Durability came from the copy into the repo, not from the brief's path.
 - ARTIFACT DEFECTS THIS LOOP: now SEVEN, all one shape (instruction vs delivered artifact disagree, only the artifact is real): (1) v1.36.11 tag vs 1.36.10 code; (2) v1.36.12 commit msg naming 3 nonexistent methods; (3) README badge 2630 vs 2796; (4) 3 docstrings + test header still asserting the removed keyPress; (5) spec's 0.02 tolerance claimed 0 failures, measured 58/1000; (6) gate note claiming bare pytest cannot run, measured 67 passed; (7) gate-4 report path never written. Countermeasure is a grep/sweep, not a stricter gate. (Anderson-Darling alpha=0.05 over 500 samples; 10/10 isolated pass, fails in full-suite runs depending on RNG order).
 
-# Iteration 3 (eredeti fejlec) — IN PROGRESS
+# Iteration 3 (eredeti fejlec) — SUPERSEDED, ne hajtsd vegre (a szoveg tortenelmi)
+- [SUPERSEDED 2026-10-05: ez a blok IN PROGRESS-kent maradt, de az iteracio HAROM release-t szallitott
+  (v1.36.14 e7fde1a / v1.36.15 7ed30f3 / v1.36.16 7c4df52). Az alabbi "NEXT: developer" utasitas ELAVULT.]
 - what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra
 - who: explore (CONFIRMS) + reviewer (3rd artifact defect) -> spec-author DONE (bh-spec-3.md, 4173B, wall 1316s)
 - spec decisions: boundary = lines 198-216 deleted, no fallback; shift/Backspace owner = BehavioralTyping; speed = TRANSLATED (cpm = wpm*5*speed_factor); disabled = MODE_RAW 3-event sequence
 - allowlist: src/behavioral_engine.py + tests/test_behavioral_engine.py
-- ORCHESTRATOR MEASUREMENT (live Chrome, throwaway instance on 9558): a keyPress TEXT-tel NEM duplikal — keyDown(text)+keyPress(text)+keyUp -> len=1; keyDown(text)+keyUp (regi ut) -> len=1. A dupla-bevitel kockazata NEM valos.
-  MERESI MODSZER: headless Chrome kulon porton + nyers websockets a page targetre, Input.dispatchKeyEvent, majd Runtime.evaluate az input.value-ra.
-- NEXT: developer (build), then binding gate
+- [REFUTED 2026-10-05: ez a meres KONTAMINALT volt — lasd a fenti KORRIGALT sort. A keyPress ERVENYTELEN
+  CDP-tipus, a keyDown(text)+char(text) VALOBAN duplaz. Helyes sorozat: keyDown+keyUp. NE hasznald.]
 
-# Iteration 3 (eredeti kerdes) — ANSWERED by both agents: yes, the engine swap
-- what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra. MOST MAR BLOKKOLATLAN: a N-1 konvencio rendezve, a _compute_cpm implementalva, tehat a swap nem fut a 4 strict xfail-ba es nem kell ujra donteni a konvenciot.
+# Iteration 3 (eredeti kerdes) — SUPERSEDED, ne hajtsd vegre (a szoveg tortenelmi)
+- [SUPERSEDED 2026-10-05: a kerdes meg valaszolva, megtervezve, megbuildelve es lezarva. A "candidate,
+  awaiting the step-2 agents" statusz ELAVULT — az agentek valaszoltak, a swap leszallt v1.36.14-ben.]
+- what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra.
 - who: not yet dispatched — ASK-on kell atmennie, nem orokolheto
 - depends-on: iteration 2
 - status: candidate, awaiting the step-2 agents' independent answers
