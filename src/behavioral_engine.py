@@ -20,6 +20,7 @@ from typing import Any
 
 from behavioral_scroll import BehavioralScroll
 from behavioral_sim import BehavioralSimulator, MouseMovementResult
+from behavioral_typing import BehavioralTyping, TypingConfig
 
 logger = logging.getLogger("browser-helper.behavioral")
 
@@ -82,16 +83,28 @@ class HumanProfile:
 class BehavioralEngine:
     """Kezeli az emberi bemeneteket egy CDP kliens számára."""
 
-    def __init__(self, cdp_client: Any, profile: HumanProfile | None = None):
+    def __init__(self, cdp_client: Any, profile: HumanProfile | None = None, *, typing_config: TypingConfig | None = None):
         self._client = cdp_client
         self._profile = profile or HumanProfile()
         self._last_mouse_pos: tuple[float, float] = (0.0, 0.0)
         self._sim = BehavioralSimulator()
         self._scroll = BehavioralScroll()
+        if typing_config is not None:
+            self._typing = BehavioralTyping(typing_config)
+        else:
+            raw_min = round(self._profile.wpm_range[0] * 5 * self._profile.speed_factor)
+            raw_max = round(self._profile.wpm_range[1] * 5 * self._profile.speed_factor)
+            cpm_min = max(1, raw_min)
+            cpm_max = max(cpm_min, raw_max)
+            self._typing = BehavioralTyping(TypingConfig(cpm_min=cpm_min, cpm_max=cpm_max))
 
     @property
     def profile(self) -> HumanProfile:
         return self._profile
+
+    @property
+    def typing(self) -> BehavioralTyping:
+        return self._typing
 
     # ── Mouse ────────────────────────────────────────────────────────
 
@@ -174,7 +187,7 @@ class BehavioralEngine:
     # ── Keyboard ─────────────────────────────────────────────────────
 
     async def type_text(self, selector: str, text: str) -> dict:
-        """Gépelés emberi időzítéssel (dwell/flight), előbb az elemre kattintva."""
+        """Gépelés a BehavioralTyping modulon keresztül emberi időzítéssel, előbb az elemre kattintva."""
         if not self._profile.enabled:
             return await self._client.type_text(selector, text)
 
@@ -195,54 +208,10 @@ class BehavioralEngine:
                 "error": f"Element not found: {selector}",
             }
 
-        # 2. Gépelés dwell/flight időzítéssel
-        keystrokes = self._sim.keystroke_timing(
-            text, wpm_range=self._profile.wpm_range
-        )
-        for ks in keystrokes:
-            char = ks["char"]
-            dwell = ks.get("dwell_ms", 120) * self._profile.speed_factor
-            flight = ks.get("flight_ms", 250) * self._profile.speed_factor
-
-            if char == "\b":
-                # Backspace
-                await self._send_key_event("Backspace")
-            else:
-                await self._send_key_event(char, shift=char.isupper() or char in '!@#$%^&*()_+{}|:"<>?')
-
-            await asyncio.sleep(dwell / 1000.0)
-            await self._send_key_event(char, type_="keyUp",
-                                       shift=char.isupper() or char in '!@#$%^&*()_+{}|:"<>?')
-            await asyncio.sleep(flight / 1000.0)
+        # 2. Gépelés a BehavioralTyping modulon keresztül
+        await self._typing.type_text(text, mode="human", client=self._client)
 
         return {"status": "ok", "operation": "behavioral_type", "result": {"chars": len(text)}}
-
-    async def _send_key_event(
-        self, key: str, type_: str = "keyDown", shift: bool = False
-    ) -> None:
-        """Küld egy Input.dispatchKeyEvent CDP parancsot."""
-        if not (self._client._connected and self._client._ws):
-            return
-        import json as _json
-
-        params: dict[str, Any] = {
-            "type": type_,
-            "key": key,
-            "code": f"Key{key.upper()}" if len(key) == 1 and key.isalpha() else "",
-            "text": key if type_ == "keyDown" and len(key) == 1 else "",
-            "unmodifiedText": key if type_ == "keyDown" and len(key) == 1 else "",
-            "modifiers": 2 if shift else 0,
-        }
-        try:
-            self._client._message_id += 1
-            payload = {
-                "id": self._client._message_id,
-                "method": "Input.dispatchKeyEvent",
-                "params": params,
-            }
-            await self._client._ws.send(_json.dumps(payload))
-        except Exception as exc:  # noqa: BLE001 — WS send is fire-and-forget
-            logger.debug("CDP key event send failed: %s", exc)
 
     # ── Scroll ───────────────────────────────────────────────────────
 
