@@ -4,7 +4,7 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
-## [1.36.10] — 2026-10-03
+## [1.36.11] — 2026-10-03
 
 **A Chrome nem crashelt. Magát öltük meg — 30 percenként, hónapok óta.**
 
@@ -84,7 +84,8 @@ futures a WS-hez tartoznak, azt nullázni elég).
 
 Új teszt: `tests/test_loop_isolation_invariants.py` (4 teszt)
 + `tests/test_last_tab_chrome_exit.py` ban 8 teszt.
-**2758 passed, 0 failed** (szekvenciális, 297s).
+**2759 passed, 0 failed** — mérve, szekvenciális teljes futás (`-p no:randomly`,
+`--ignore=tests/test_parallel_session_isolation.py`, 309s).
 
 ## [1.36.9] — 2026-09-28
 
