@@ -4,6 +4,23 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.16] — 2026-10-05
+
+- **A v1.36.15 hotfix után maradt hamis dokumentáció javítása.** A `keyPress`
+  küldést a v1.36.15 eltávolította, de **három docstring továbbra is a régi
+  3-eseményes sorozatot állította** — köztük a `_dispatch_key_event`
+  szignatúrája: `event_type: One of "keyDown", "keyPress", "keyUp"`. Ez a
+  **negyedik azonos osztályú artefakt-hiba** a mai loopban (verzióstring,
+  commit-üzenet, README badge, most docstring): a kód helyes, a róla szóló
+  állítás hamis.
+- Mérve: `grep -n 'keyPress' src/behavioral_typing.py` → 7 találat, ebből **3
+  állítás** (modul-docstring, osztály-docstring, szignatúra) és 4 valódi
+  figyelmeztetés. A 3 állítás javítva; a figyelmeztetések maradnak, mert azok
+  épp a hiba újrázását akadályozzák.
+- Ellenőrzés: `grep` a maradék említésekre → **minden említés tiltás vagy
+  figyelmeztetés**, egyetlen küldés sem. **89 passed**, ruff tiszta.
+  Teljes suite: **`2806 passed, 0 failed`**.
+
 ## [1.36.15] — 2026-10-05
 
 - **Két CDP-hiba javítása a gépelési úton — a v1.36.14 élesben törött volt.**

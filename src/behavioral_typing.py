@@ -2,8 +2,8 @@
 Human Typing Patterns Middleware — log-normal delay between keystrokes.
 
 Replaces uniform ``Input.insertText`` with human-like typing that dispatches
-individual key events (keyDown, keyPress, keyUp) with inter-key delays
-drawn from a log-normal distribution.
+individual key events (keyDown, keyUp) with inter-key delays drawn from a
+log-normal distribution.
 
 Two modes:
     - "human"  — log-normal inter-key delays, configurable CPM range
@@ -101,8 +101,8 @@ class TypingConfig:
 class BehavioralTyping:
     """Middleware that types text with human-like inter-key delays.
 
-    Dispatches each character via ``Input.dispatchKeyEvent`` (keyDown,
-    keyPress, keyUp sequence) instead of the uniform ``Input.insertText``.
+    Dispatches each character via ``Input.dispatchKeyEvent`` (keyDown then
+    keyUp) instead of the uniform ``Input.insertText``.
 
     Usage::
 
@@ -324,7 +324,9 @@ class BehavioralTyping:
 
         Args:
             client:     CDP client with ``_send_command(method, params)``.
-            event_type: One of ``"keyDown"``, ``"keyPress"``, ``"keyUp"``.
+            event_type: ``"keyDown"`` or ``"keyUp"``. CDP also accepts
+                ``"rawKeyDown"`` and ``"char"``, but **not** ``"keyPress"`` —
+                that is rejected with ``-32602`` and is never sent.
             key_params: Parameters returned by ``_key_identifier()``.
 
         Returns:
