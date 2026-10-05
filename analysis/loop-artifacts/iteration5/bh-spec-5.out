@@ -1,0 +1,24 @@
+```
+dispatch:  inline brief in session (no brief file supplied)
+agent:     spec-author
+repo:      /home/zoltan/browser-helper @ 0f4c4a8
+brief:     sha256:not attempted — no brief file was supplied; brief arrived inline, nothing to hash
+verdict:   none - first pass
+status:    DONE — items 1-6 answered with measured evidence; spec staged, not committed per brief
+```
+
+Work proves the model was alive: the pinned uniform draw reproduced the brief's numbers exactly (`D=0.0195 p=0.8333 mean=1755.43 lag1=+0.0216`) and the mutant sweep re-measured M2/M3 with sampler-backed reproductions (1365.42/608.32, 877.71/367.80) where they disagreed with the brief — and the 2000-seed sweep set tolerances (±150/±80/0.2/<0.07/<0.06) that clear both the brief's and my windows.
+
+Files touched:
+- `docs/specs/SPEC-5-deterministic-rate-limiter-gates.md` — wrote (staged, 15689 B; byte-identical to `/tmp/dispatch-log/bh-spec-5.md`).
+- `/tmp/dispatch-log/bh-spec-5.md` — wrote (queue copy; 72-hour lease, not committed).
+
+What changed, one line: authored SPEC-5 with the two pinned-draw replacement gates, tolerance justifications, runnable acceptance/mutation criteria, stop command, DEFECT-001 non-decision, and four named interpretations.
+
+Verification the reader can run: `cd /home/zoltan/browser-helper && .venv/bin/python -m pytest tests/test_rate_limiter.py -q 2>&1 | tail -n 1 && git diff --stat -- tests/test_rate_limiter.py` (expect green + empty diff — spec not yet implemented), and `diff /tmp/dispatch-log/bh-spec-5.md docs/specs/SPEC-5-deterministic-rate-limiter-gates.md && echo IDENTICAL`.
+
+Notes:
+- Did NOT commit: the brief explicitly ordered `git add` of the one file and "do not commit" — that instruction wins over the default commit rule for this dispatch. The file is staged (`A docs/specs/SPEC-5-deterministic-rate-limiter-gates.md`); committing is the orchestrator's call.
+- Dirty tree I did not touch and did not stage: `M analysis/next-moves.md` (pre-existing, another writer's). Left alone.
+- Commit-convention measurement (for whoever commits): `git log` shows no dominant `type(scope)` pattern for specs — recent are `docs(loop):`, `docs(spec-4):`, `test(v1.36.17):`; suggested message: `docs(spec-5): deterministic gates for two flaky rate-limiter tests`.
+- Flake rates (10/200, 1/200) taken from the brief as given (`not attempted` — 200-run loop exceeds budget alongside the 2000-seed sweeps actually run).

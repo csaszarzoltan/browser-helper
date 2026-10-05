@@ -1,0 +1,38 @@
+ROLE: reviewer. ONE narrow question: what did the v1.36.17 loop leave incomplete in /home/zoltan/browser-helper?
+
+CONTEXT (all measured by the orchestrator this run, reproduce or refute any of it):
+- The last full-suite result is `1 failed, 2805 passed`; the failure is
+  `tests/test_rate_limiter.py::TestRateLimiterBehavior::test_uniform_distribution_ks_test`,
+  a probabilistic gate on CORRECT code (flake 10/200 = 5.0%, exactly the kstest alpha).
+- Iteration 4's fix replaced two probabilistic gates but missed this third one — same defect class.
+- A post-task-review scored the loop: brief 3, target 4, verification 2, scope 3, honesty 3, evidence 2
+  → REQUEST-CHANGES. The review's sharpest finding: the suite once pinned an INVALID CDP sequence as
+  correct (`assert event_types == ["keyDown", "keyPress", "keyUp"]`) and stayed green because every
+  test mocks the CDP client. Review: `analysis/reviews/post-task-review-v1.36.12-17.md`.
+- Open verdict in the store: `v20261005134000-741226` (REQUEST-CHANGES, on commit 73b5d52).
+- Stale status files may still name shipped work as unfinished — `analysis/next-moves.md` still
+  contains corrected-but-not-superseded lines (MEASURED EARLIER, "Iteration 3 — IN PROGRESS",
+  "NEXT: developer"). A separate review commit `77cb79d` documents DEFECT-001 (repo-root pytest).
+
+ANSWER ALL FIVE ITEMS. Report each one even if your answer is NO, and say what you checked to establish NO.
+
+1. What did the iteration-4 fix get wrong or leave incomplete? Name the concrete gap (file:line).
+2. Is DEFECT-001 (repo-root pytest) above or below the line? Run the reproduction yourself
+   (a bare failing collection vs the loop's `--ignore` command) and say which command proves what.
+3. Is there a stale status claim anywhere that names shipped work as unfinished? Check
+   `analysis/next-moves.md` against `git log` and report every stale line you find, or say you found
+   none and list the lines you checked.
+4. Is the open verdict `v20261005134000-741226` still actionable, or does already-landed work resolve
+   part of it? Name the commit that resolved it, or say it is still fully open.
+5. Anything the reader would get wrong from your report alone? Say what signals it.
+
+BUDGET: 420 seconds. If you run out, report which numbered items you completed and which you did not.
+DO NOT DECIDE what to implement — you name the gap, the orchestrator verifies and plans.
+Do not edit, commit, or run any test that writes to the tree.
+
+TARGET FILES for your reading: tests/test_rate_limiter.py, analysis/next-moves.md,
+analysis/reviews/post-task-review-v1.36.12-17.md, .agent-pipeline/ (DEFECT-001 doc).
+
+WRITE YOUR REPORT TO: /tmp/dispatch-log/bh-review-5.md
+A second copy inside the repo, so it outlives /tmp: <repo>/analysis/loop-artifacts/iteration5/bh-review-5.md
+ACCEPTANCE: all five items numbered and answered, each with a file:line or a command output.

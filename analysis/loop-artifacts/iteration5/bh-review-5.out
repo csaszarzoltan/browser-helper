@@ -1,0 +1,51 @@
+# bh-review-5 — what the v1.36.17 loop left incomplete
+
+Repo: `/home/zoltan/browser-helper` @ `0f4c4a8`. Tree clean (`git status --short` empty).
+`git log --oneline -1` as seen: `0f4c4a8 docs(loop): iteration 5 explore — uniform KS gate is the next change`.
+Verdict store: `claude-verdict --list` returns exactly one open verdict, `v20261005134000-741226` (REQUEST-CHANGES, on `73b5d52`).
+
+Note on deliverable: per the reviewer contract I write and commit nothing; this message **is** the report. The two paths the brief names (`/tmp/dispatch-log/bh-review-5.md` and `analysis/loop-artifacts/iteration5/bh-review-5.md`) were therefore **not written** — the orchestrator should persist this text to both. Budget used: ~5 of 420 s; all five items completed, none deferred.
+
+## 1. What the iteration-4 fix got wrong / left incomplete
+
+The iteration-4 commit (`73b5d52 test(v1.36.17): a ket probabilisztikus gate cseréje determinisztikusra`) touched exactly two test files — `tests/test_behavioral_typing.py` (log-normal AD gate → pinned-seed + calibration) and `tests/test_behavioral_simulation.py` (bezier gate → 25-seed ensemble). Verified from `git show --name-only 73b5d52`: no other test file changed. It left a **third probabilistic gate of the identical defect class** untouched:
+
+- `tests/test_rate_limiter.py:240-252` — `test_uniform_distribution_ks_test`: draws 1000 **unseeded** samples and asserts `p > 0.05` from `scipy.stats.kstest`. By construction this rejects CORRECT code at α = 5%. This is the `1 failed` in the loop's own `1 failed, 2805 passed` full-suite result.
+- `tests/test_rate_limiter.py:254-268` — `test_log_normal_distribution_ks_test`: same 5%-flake structure, **plus** it estimates `mean`/`std` from the same sample it tests (`:264-265`) before calling `kstest(..., "norm", args=(mean, std))` — the Lilliefors problem, so the p-value is invalid in both directions, not just flaky.
+- `tests/test_rate_limiter.py:245` — the comment `# Temporarily override randomness for reproducibility` describes a pinning that **does not exist**: no seed is set anywhere in either test. A reader trusts the draw is reproducible; it is not.
+
+So the concrete gap is `tests/test_rate_limiter.py:240-268` — two unseeded KS gates the fix never touched — compounded by the loop's own `analysis/next-moves.md:54` claim that "the other bisected flaky family is covered by the same fix," which this survivor refutes. (Caveat: my own 5 consecutive isolated runs of the two KS tests were all `2 passed`, and a 12-draw p-value probe never dipped below 0.11 — consistent with a ~5% flake, not proof of stability. The flake needs ~200 draws to manifest; see the loop's measured 10/200.)
+
+## 2. DEFECT-001 (repo-root pytest) — ABOVE the line
+
+**Above the line**: it must be fixed, because any bare-root verification command fails before measuring anything. Reproduced first-hand just now (read-only, `--collect-only` plus one full error-text run, `PYTHONDONTWRITEBYTECODE=1`, no tree writes):
+
+- `$ .venv/bin/python -m pytest -q --collect-only -p no:cacheprovider -p no:randomly` → `Interrupted: 2 errors during collection` with the byte-exact cause:
+  `import file mismatch: imported module 'test_rate_limiter' has this __file__ attribute: /home/zoltan/browser-helper/test_rate_limiter.py which is not the same as the test file we want to collect: /home/zoltan/browser-helper/tests/test_rate_limiter.py` (and the identical stanza for `test_proxy_pool_enhanced`).
+- The same invocation's error section additionally surfaced live-environment failures (`test_parallel_session_isolation`, `test_mcp_integration`), confirming a root run is red for reasons unrelated to any suite state.
+- The scoped command (`pytest tests/ -o addopts='' --no-header -q -p no:randomly --ignore=tests/test_parallel_session_isolation.py`, per the DEFECT-001 doc) is what the loop's `2805 passed` claim is true **of**.
+
+Which command proves what: the **bare** command proves the repository cannot be verified from its root (collection aborts: `2 errors`); the **scoped** command proves only the state of that target+ignore subset. The loop's claim was accurate-but-narrow; anyone re-running bare `pytest` gets a red tree for a pre-existing structural reason (`29da9ee`, 2026-08-14 duplicates). Corroborating detail: the duplicate pairs are not even identical — `cmp test_rate_limiter.py tests/test_rate_limiter.py` differs at byte 17860/line 404, while the proxy pair is byte-identical — so "delete the root duplicates" needs a diff check first, not a blind `rm`. Also confirmed: no `testpaths` in `pyproject.toml:32-39`, no `tests/__init__.py` — neither durable fix is in place.
+
+## 3. Stale status claims in `analysis/next-moves.md` — YES, two sections
+
+Checked every header/claim line against `git log` (shipped: `e7fde1a` v1.36.14, `7ed30f3` v1.36.15, `7c4df52` v1.36.16, `73b5d52` v1.36.17; corrections at `9da0dc4`, `16e0677`). Lines 1–56 are current (the iteration-3 STOPPED block at `:39-47` carries explicit KORRIGALT/SHIPPED corrections; iteration 4 at `:48-56` says SHIPPED/CLOSED). The stale lines are the two trailing sections, which were never annotated when the work shipped — contrast `:20`, which was correctly marked SUPERSEDED:
+
+- `:58` `# Iteration 3 (eredeti fejlec) — IN PROGRESS` (blame `8cd91a0`, pre-ship) — the iteration it tracks shipped three releases ago; the header still reads IN PROGRESS with no superseded marker.
+- `:63-65` — the contaminated keyPress measurement (`keyPress TEXT-tel NEM duplikal`) restated as a live finding, plus `NEXT: developer (build), then binding gate`. Both refuted/superseded: the contamination is corrected at `:36-37` and `:47`, and the developer build + gates (`5.0`, `4.7`) already ran. A reader following `:65` would re-dispatch a shipped build.
+- `:67-71` `# Iteration 3 (eredeti kerdes) — … status: candidate, awaiting the step-2 agents' independent answers` (blame `039001b0`, pre-ship) — the question was answered, built, hotfixed, and closed; the status line still reads candidate/awaiting.
+
+Assignee for the cleanup: `developer` (or orchestrator inline) — annotate both sections `SUPERSEDED by shipped v1.36.14–16, see :27-37`, same commit as its next touch per §4b. Additionally flagged (inaccurate, opposite direction): `:54` "the other bisected flaky family is covered by the same fix" is refuted by item 1 above.
+
+## 4. Open verdict `v20261005134000-741226` — still FULLY open
+
+The verdict (REQUEST-CHANGES, `from=reviewer`, `commit=73b5d52`, note: mocked suite pinned invalid CDP + skipped tester/test-author) has **no resolving commit**. Commits landed since `73b5d52` are `e16b4e1` (loop-close note), `9da0dc4` + `16e0677` (next-moves corrections), `037b5d52` (the review doc itself), `77cb79d` (DEFECT-001 doc), `0f4c4a8` (iteration-5 explore note) — all docs/notes. None dispatches the missing `tester`/`test-author` roles, none adds the live-check acceptance clause the review prescribes, none replaces the surviving KS gate. `77cb79d` documents adjacent verification-scope truth but resolves no finding the verdict names. Verdict remains actionable in full.
+
+## 5. What the reader would get wrong from my report alone — signals
+
+- **"5× green KS runs" ≠ stable.** My isolated passes (5× `2 passed`, 12 p-values ≥ 0.11) are exactly what a 5%-flake looks like at small n. Do not downgrade item 1 on their strength; the loop's 10/200 (= 5.0% = kstest α) is the correctly-powered measurement.
+- **Exit-code illusion on the bare run.** One of my bare invocations piped through `tail` surfaced `EXIT=0` from the pipe, not from pytest — the ground truth is the `Interrupted: 2 errors during collection` banner and the mismatch stanzas, not any trailing echo.
+- **"Duplicates" ≠ identical.** Only the proxy pair is byte-identical; the rate-limiter pair diverged (line 404+), so the fix needs a content decision per file, and `cmp` output above is the check.
+- **The verdict store is no longer empty.** The post-task review (`:111-113`) truthfully reported zero recorded verdicts at its measurement time; `v20261005134000-741226` exists now. A reader of the review alone would conclude PART 4b is still unused — it has since been used once, for this verdict.
+- **"IN PROGRESS" sections look deliberate.** The stale `:58-71` blocks carry `(eredeti …)` / Hungarian annotations that read like intentional history. They are history, but unlike `:20` they lack the SUPERSEDED marker — treat the missing marker, not the content, as the defect.
+- **NOT re-measured (honest gaps):** full-suite `1 failed, 2805 passed` was not re-run (out of scope for a read-only review and unnecessary — the failing node is named and its class established); the live `/type` check from the review was not repeated; no mutation probe was run against the KS gates.

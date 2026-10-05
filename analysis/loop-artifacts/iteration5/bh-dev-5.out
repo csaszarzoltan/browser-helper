@@ -1,0 +1,27 @@
+```
+dispatch:  inline brief in session (no brief file supplied)
+agent:     developer
+repo:      /home/zoltan/browser-helper @ 092b00f
+brief:     sha256:not attempted — brief arrived inline, nothing to hash
+verdict:   none - first pass
+status:    DONE — SPEC-5 Items 1–4 implemented; all 5 acceptance items measured YES
+```
+
+**Modified Target Files:**
+- `M tests/test_rate_limiter.py` (only file; 94 insertions, 17 deletions — both KS-oracle bodies replaced with SPEC-5 pinned gates, seed 20260905)
+- `?? analysis/loop-artifacts/iteration5/bh-dev-5.md` (durable report copy, 5420 B, identical to /tmp copy)
+- `git status --short` at end: exactly those two lines. `src/cdp_client.py` restored byte-exactly after mutation checks (diff empty).
+- NOT COMMITTED per brief ("DO NOT: commit, push"). No commit SHA to report; base is 092b00f.
+
+**Evidence (all run from /home/zoltan/browser-helper with .venv/bin/python):**
+1. `pytest tests/test_rate_limiter.py -p no:warnings` → `43 passed in 6.70s`, exit 0. Whole file green.
+2. Same 5× → `43 passed` all five times (4.66s/4.66s/5.31s/4.94s/4.70s). No flake.
+3. Pin byte-identity proof (SPEC-5 3A) → `pin byte-identical: True`.
+4. Mutation check (SPEC-5 3B), each applied **in place** in `src/cdp_client.py`, gate re-run, then restored: M1 sorted-linspace → FAILED (lag-1=+0.9970, D=0.0010); M2 log-normal branch → FAILED (mean=1365.42 Δ−384.58, sd=608.32, D=0.2899); M3 draw×0.5 → FAILED (mean=877.71 Δ−872.29, sd=367.80, D=0.6001); M4 constant 1750 → FAILED (D=0.5000, sd=0). All rc=1 before → FAIL; correct code 43 passed. After: `git diff --stat -- src/cdp_client.py` empty, `git status --short` clean except target file.
+5. `git diff --stat` → only `tests/test_rate_limiter.py | 111 +++... (94+/17-)`. YES.
+
+**Stop command output (SPEC-5 item 4):** pytest tail shows Docs footer on `tail -n 1` under xdist (pass line `43 passed` needs more tail lines — pasted in report item 1); `git diff --stat -- tests/test_rate_limiter.py` → 1 file, 94+/17-. Exit 0, zero failed.
+
+**Notes:** Tolerances are SPEC-5's (±150/±80 etc.), not tightened. False :245 comment deleted with replacement 1. Full suite not run per brief. Reports at `/tmp/dispatch-log/bh-dev-5.md` and `analysis/loop-artifacts/iteration5/bh-dev-5.md` (both 5420 B).
+
+No defects filed; allowlist was correct, no widening needed.

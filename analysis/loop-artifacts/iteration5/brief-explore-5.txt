@@ -1,0 +1,38 @@
+ROLE: explore. ONE narrow question: what is the highest-value NEXT CHANGE in /home/zoltan/browser-helper?
+
+CONTEXT (all measured by the orchestrator this run, reproduce or refute any of it):
+- HEAD 77cb79d, tree clean, origin/main in sync. Suite: 1 failed, 2805 passed.
+- The failure is `tests/test_rate_limiter.py::TestRateLimiterBehavior::test_uniform_distribution_ks_test`.
+  Measured flake rate on CORRECT code: 10/200 rejections (5.0%) — the test asserts `p > 0.05` from
+  `scipy.stats.kstest(scaled, "uniform")`, which rejects 5% of correct draws BY DESIGN.
+- The class is known and was worked twice already: v1.36.17 replaced two other probabilistic gates
+  (Anderson-Darling log-normal, Bezier max/min) with pinned-draw calibration assertions. Those fixes
+  are in `tests/test_behavioral_typing.py` and `tests/test_behavioral_simulation.py`.
+- A repo-root `pytest` does not collect: 2 collection errors (duplicate module names, no `tests/__init__.py`).
+  Documented in `.agent-pipeline/` DEFECT-001, not yet fixed.
+- The loop that shipped v1.36.12..v1.36.17 never dispatched `tester` or `test-author`.
+
+ANSWER ALL FIVE ITEMS. Report each one even if your answer is NO, and say what you checked to establish NO.
+
+1. What is the single highest-value next change in this repo? Name the file:line and the evidence.
+2. Is `test_uniform_distribution_ks_test` the right item? If yes, say what the corrected gate should
+   assert instead of a single `kstest` — name the statistic and the tolerance, with the measurement
+   that fixes the number. If NO (a different item outranks it), name the other item and its evidence.
+3. Is there any candidate item that is ALREADY DONE? Check `analysis/` and `git log --grep`. List every
+   one you checked and the result, even when the answer is "nothing already done".
+4. Does the item's symbol have a PRODUCTION caller? Run the grep and paste it. (`RateLimiter` is
+   constructed at `src/cdp_client.py:132` and `get_delay()` is called at `src/cdp_client.py:665` —
+   reproduce or refute.) If your recommended item's symbol has zero callers, say so and recommend the
+   wiring slice instead.
+5. Anything the reader would get wrong from your report alone? Say what signals it.
+
+BUDGET: 420 seconds. If you run out, report which numbered items you completed and which you did not.
+DO NOT DECIDE whether the work should ship — you propose, the orchestrator verifies, a different agent
+implements. Do not edit, commit, or run any test that writes to the tree.
+
+TARGET FILES for your reading: src/cdp_client.py, src/rate_limiter.py (if it exists), tests/test_rate_limiter.py,
+tests/test_behavioral_typing.py, analysis/next-moves.md.
+
+WRITE YOUR REPORT TO: /tmp/dispatch-log/bh-explore-5.md
+A second copy inside the repo, so it outlives /tmp: <repo>/analysis/loop-artifacts/iteration5/bh-explore-5.md
+ACCEPTANCE: all five items numbered and answered, each with a file:line or a command output.

@@ -238,34 +238,111 @@ class TestRateLimiterBehavior:
         assert all(500.0 <= d <= 1000.0 for d in log_normal_delays)
 
     def test_uniform_distribution_ks_test(self):
-        """Uniform delays pass KS test (p > 0.05) over 1000 samples."""
+        """Uniform delays match the calibrated [500, 3000] draw, deterministically.
+
+        The old gate ran ``kstest`` on ONE unpinned 1000-draw and asserted
+        p > 0.05: a hypothesis test that rejects 5% of CORRECT draws by
+        construction (10/200 = 5.0% red on correct code, per brief), and the
+        comment claiming reproducibility pinned nothing. This pins the
+        instance RNG and asserts three deterministic invariants on the pinned
+        draw (seed 20260905, n=1000):
+          1. shape: KS-D against Uniform[500,3000] under the α=0.05 critical value
+          2. calibration: mean/sd of the draw match the interval's moments
+          3. order: lag-1 autocorrelation near zero (the draw is iid, not sorted)
+        Invariant 3 is mandatory, not decoration: a sorted-linear mutant
+        scores KS-D=0.0010 with exact mean/sd and passes 1+2 — only the order
+        invariant catches it (lag-1 r=+0.9970).
+        """
+        import math
+        import random
+        import statistics
+
         from cdp_client import RateLimitConfig, RateLimiter
+        from scipy.stats import kstest
+
         cfg = RateLimitConfig(enabled=True, min_delay_ms=500, max_delay_ms=3000, distribution="uniform")
         rl = RateLimiter(config=cfg)
-        # Temporarily override randomness for reproducibility
+        rl._rng = random.Random(20260905)
         delays = [rl.get_delay() for _ in range(1000)]
-        # Scale to [0,1] for KS test against uniform
-        scaled = [(d - 500.0) / 2500.0 for d in delays]
-        scaled.sort()
-        from scipy.stats import kstest
-        _, p = kstest(scaled, "uniform")
-        assert p > 0.05, f"KS p={p} < 0.05 — not uniform?"
+        assert all(500.0 <= d <= 3000.0 for d in delays), "pinned draw left [500, 3000]"
+
+        # --- 1. Shape ------------------------------------------------------
+        scaled = sorted((d - 500.0) / 2500.0 for d in delays)
+        stat, _ = kstest(scaled, "uniform")
+        critical = 1.36 / math.sqrt(1000)  # ~= 0.0430, KS α=0.05 asymptote
+        assert stat <= critical, (
+            f"KS-D {stat:.4f} exceeds critical {critical:.4f} on the pinned draw — "
+            "not uniform over [500, 3000]"
+        )
+
+        # --- 2. Calibration: moments of Uniform[500, 3000] ------------------
+        # mean = (500+3000)/2 = 1750.0; pop-sd = 2500/sqrt(12) ~= 721.69.
+        mean = statistics.fmean(delays)
+        pop_sd = statistics.pstdev(delays)
+        assert abs(mean - 1750.0) <= 150.0, (
+            f"pinned mean {mean:.2f} departs from 1750.0 by more than 150 ms — "
+            "draw is not centred on [500, 3000]"
+        )
+        assert abs(pop_sd - 721.69) <= 80.0, (
+            f"pinned pop-sd {pop_sd:.2f} departs from 721.69 by more than 80 ms — "
+            "draw has the wrong spread (this is the case KS-D alone cannot see)"
+        )
+
+        # --- 3. Order: the draw is iid, not sorted --------------------------
+        denom = sum((x - mean) ** 2 for x in delays)
+        lag1 = sum((a - mean) * (b - mean) for a, b in zip(delays, delays[1:])) / denom
+        assert abs(lag1) < 0.2, (
+            f"lag-1 autocorrelation {lag1:+.4f} on the pinned draw — "
+            "delays are ordered (e.g. sorted), not independent draws"
+        )
 
     def test_log_normal_distribution_ks_test(self):
-        """Log-normal delays pass KS test (p > 0.05) over 1000 samples."""
-        import numpy as np
+        """Log-normal delays match the documented (mu, sigma) calibration, deterministically.
+
+        The old gate estimated mean/std FROM the sample it tested (Lilliefors
+        problem: the p-value is invalid, not merely flaky) on an unpinned draw
+        (1/200 = 0.5% red on correct code, per brief). This pins the instance
+        RNG (same mechanism as the uniform twin) and tests against the
+        THEORETICAL parameters the implementation derives — a valid KS test —
+        plus deterministic calibration bounds.
+        """
+        import math
+        import random
+        import statistics
 
         from cdp_client import RateLimitConfig, RateLimiter
+        from scipy.stats import kstest
+
         cfg = RateLimitConfig(enabled=True, min_delay_ms=500, max_delay_ms=3000, distribution="log-normal")
         rl = RateLimiter(config=cfg)
+        rl._rng = random.Random(20260905)
         delays = [rl.get_delay() for _ in range(1000)]
-        # Log-transform for KS test against normal
-        log_delays = np.log(delays)
-        mean = np.mean(log_delays)
-        std = np.std(log_delays)
-        from scipy.stats import kstest
-        _, p = kstest(log_delays, "norm", args=(mean, std))
-        assert p > 0.05, f"KS p={p} < 0.05 — log-normal check failed?"
+        assert all(500.0 <= d <= 3000.0 for d in delays), "pinned draw left [500, 3000]"
+
+        # Theoretical parameters: same derivation as src/cdp_client.py:100-101.
+        mu = (math.log(500.0) + math.log(3000.0)) / 2      # 7.11049
+        sigma = (math.log(3000.0) - math.log(500.0)) / 4   # 0.44794
+
+        # --- 1. Shape: KS against the theoretical normal in log space -------
+        log_delays = [math.log(d) for d in delays]
+        stat, _ = kstest(log_delays, "norm", args=(mu, sigma))
+        critical = 1.36 / math.sqrt(1000)  # ~= 0.0430
+        assert stat <= critical, (
+            f"KS-D {stat:.4f} exceeds critical {critical:.4f} on the pinned draw — "
+            "log(delays) is not normal with the documented (mu, sigma)"
+        )
+
+        # --- 2. Calibration ---------------------------------------------------
+        log_mean = statistics.fmean(log_delays)
+        log_sd = statistics.pstdev(log_delays)
+        assert abs(log_mean - mu) <= 0.07, (
+            f"log-mean {log_mean:.5f} deviates from mu {mu:.5f} by more than 0.07 — "
+            "delays are drawn with the wrong centre"
+        )
+        assert abs(log_sd - sigma) <= 0.06, (
+            f"log-sd {log_sd:.5f} deviates from sigma {sigma:.5f} by more than 0.06 — "
+            "delays are log-normal but with the wrong spread"
+        )
 
     def test_wide_bounds_still_respected(self):
         """Very wide bounds still work."""

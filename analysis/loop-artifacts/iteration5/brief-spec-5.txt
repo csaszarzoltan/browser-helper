@@ -1,0 +1,62 @@
+ROLE: spec-author (planner). Turn the accepted item below into an implementation SPEC. You do NOT
+implement anything — you write the spec another agent will execute.
+
+ACCEPTED ITEM (agreed by `explore` and `reviewer` independently, then verified by the orchestrator):
+Replace the two single-draw KS oracles in `tests/test_rate_limiter.py` with pinned-draw deterministic
+gates of the same class v1.36.17 already applied to two other gates.
+
+WHY (measured, all by the orchestrator on CORRECT code this run — reproduce any of it):
+- `tests/test_rate_limiter.py:240-252` `test_uniform_distribution_ks_test` — 1000 unpinned draws,
+  `assert p > 0.05` from `scipy.stats.kstest(scaled, "uniform")`. Measured flake: 10/200 (5.0%)
+  rejections of CORRECT code — the test's own type-I rate. This is the repo's only red test.
+- `tests/test_rate_limiter.py:254-268` `test_log_normal_distribution_ks_test` — same structure, plus
+  it estimates `mean`/`std` FROM the sample it tests (Lilliefors problem → the p-value is invalid, not
+  merely flaky). Measured flake 1/200 (0.5%).
+- `tests/test_rate_limiter.py:245` — the comment `# Temporarily override randomness for reproducibility`
+  describes a pinning that DOES NOT EXIST. No seed is set.
+- v1.36.17 (`73b5d52`) fixed the same defect class in `tests/test_behavioral_typing.py:279-332` and
+  `tests/test_behavioral_simulation.py:547-594`. Read those two first — this spec must be the same shape.
+
+MEASURED NUMBERS the spec must use (do not invent your own; if you re-measure, paste the command):
+- `RateLimiter._rng` is a per-instance `random.Random()` (`src/cdp_client.py:78`), so a module-level
+  `random.seed` cannot reach it. Pin by assigning `rl._rng = random.Random(<seed>)` on the instance.
+- Pinned draw, uniform, lo=500 hi=3000, n=1000, seed 20260905:
+  KS D=0.0195 (critical value 1.36/sqrt(1000)=0.0430), K-S p=0.8333,
+  mean=1755.43 (Δ from 1750.0 = +5.43), population sd=735.60 (Δ from 721.69 = +13.91),
+  lag-1 autocorrelation r=+0.0216.
+- Over 2000 seeds on correct code: worst |mean−1750| = 70.15 ms, worst |pop_sd−721.69| = 34.10 ms,
+  worst KS-D = 0.0678. (Independent 300-seed run by the orchestrator: 65.64 / 31.56.)
+- MUTANTS the gate MUST catch (orchestrator-measured):
+  * sorted-linear (sorted linspace over the interval): KS D=0.0010, p=1.0000, meanΔ=0.00, pop_sdΔ=0.72
+    — it PASSES shape+mean+sd and is only caught by the order invariant → lag-1 r=+0.9970.
+  * uniform-path-returns-log-normal: mean=1349.78, pop_sd=571.55.
+  * half-scale: mean=853.93, pop_sd=363.23.
+  * constant: KS D=0.5000.
+- Pinned log-normal theoretical parameters: mu=(ln 500+ln 3000)/2=7.11049, sigma=(ln 3000−ln 500)/4=0.44794.
+  Pinned draw deltas: logmean Δ=+0.01466, logsd Δ=−0.01425, KS-D vs theoretical=0.0228.
+
+WHAT THE SPEC MUST CONTAIN (every item; report each even if NO, with what you checked):
+1. **Target Files allowlist**, line-level, exact paths. Note: there is NO `src/rate_limiter.py` — the
+   symbol lives in `src/cdp_client.py`. Production code and the RNG are CORRECT; this is a test-only
+   change, same as v1.36.17. If you believe any `src/` file must change, say so and justify it.
+2. **The exact replacement code** for both tests — the assertions with the tolerance numbers above,
+   including the order invariant and why it is mandatory.
+3. **Acceptance criteria as RUNNABLE commands**, each with the expected output. Include:
+   - the deterministic run of the two tests, repeated enough to show it is deterministic
+   - the mutation check (which mutations, and what each must make fail)
+   - whether the log-normal twin rides the same commit (yes/no + why)
+4. **The stop command** — the exact command whose output means this item is done.
+5. **Do NOT decide** whether to also fix DEFECT-001 (repo-root pytest collection) in this commit —
+   that is a separate item and the orchestrator decides its ordering.
+6. Anything you had to INTERPRET in this brief — name the sentence and the assumption. An interpreted
+   clause is a brief defect, not yours to hide.
+
+BUDGET: 500 seconds. If you run out, report which numbered items are complete and which are not.
+Do not implement, do not edit product or test files, do not commit. Do not run the full suite
+(it takes >5 minutes); a targeted `pytest tests/test_rate_limiter.py -q` is allowed and encouraged.
+
+EVIDENCE / OUTPUT:
+- Write the spec to /tmp/dispatch-log/bh-spec-5.md
+- Write a second copy INSIDE the repo at docs/specs/SPEC-5-deterministic-rate-limiter-gates.md and
+  `git add` that one file (the spec is durable evidence; the /tmp copy is a 72-hour lease).
+- ACCEPTANCE: all six items numbered and answered, every number traceable to a command.

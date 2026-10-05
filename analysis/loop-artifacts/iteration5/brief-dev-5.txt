@@ -1,0 +1,50 @@
+ROLE: developer. Implement SPEC-5 exactly. You do NOT decide anything — the spec is the contract.
+
+READ FIRST: /home/zoltan/browser-helper/docs/specs/SPEC-5-deterministic-rate-limiter-gates.md
+(303 lines, committed at the tip). Items 1–4 are your work order; item 5 tells you what NOT to touch.
+
+THE CHANGE, in one line: replace the two single-draw KS oracles in `tests/test_rate_limiter.py`
+(lines 240–268) with pinned-draw deterministic gates — the same shape v1.36.17 already applied in
+`tests/test_behavioral_typing.py:279-332`.
+
+TARGET FILES allowlist — line-level, do not widen silently:
+- `tests/test_rate_limiter.py` — ONLY the two test methods `test_uniform_distribution_ks_test`
+  (240–252) and `test_log_normal_distribution_ks_test` (254–268). Also fix the false comment at :245
+  ("Temporarily override randomness for reproducibility" — no pin exists today).
+- NOTHING ELSE. No `src/` file (the production code and the RNG are CORRECT), no other test file,
+  and do NOT fold DEFECT-001 (repo-root pytest collection) into this commit. If you believe the
+  allowlist is wrong, STOP and say so — do not widen it.
+
+CORRECTIONS TO THE SPEC (the spec is right on the mechanism; two numbers in it are now measured):
+- The brief the spec worked from stated "over 2000 seeds: worst |mean−1750| = 70.15 ms". THAT NUMBER
+  WAS NOT THE ORCHESTRATOR'S — it was the `explore` agent's. The orchestrator has since run the sweep
+  itself (seeds 20260905–20262904, n=1000, real `RateLimiter`): **worst |mean−1750| = 91.79 ms,
+  worst |pop_sd−721.69| = 34.26 ms.** The spec measured 91.79/34.26 independently. USE THE SPEC'S
+  TOLERANCES (±150 ms mean, ±80 ms sd) — they hold on 91.79 with 58 ms margin, and every mutant in
+  the spec's table fails them by ≥2×. Do not tighten them to fit the retracted 70.15.
+- Everything else in the spec reproduced exactly when the orchestrator ran it: pinned uniform
+  D=0.0195/p=0.8333/meanΔ=+5.43/sdΔ=+13.91/lag1=+0.0216; the pin is byte-identical across two
+  instances with the same seed.
+
+ACCEPTANCE — run these, paste the output, and report each item even if your answer is NO:
+1. `.venv/bin/python -m pytest tests/test_rate_limiter.py -q` → the whole file green.
+2. The same command 5× → identical `N passed` every time (no flake).
+3. The pin byte-identity proof from SPEC-5 item 3A → `pin byte-identical: True`.
+4. The mutation check from SPEC-5 item 3B: apply each of M1–M4 **in place** in `src/cdp_client.py`,
+   confirm the new gate FAILS, then restore byte-exactly (`git checkout -- src/cdp_client.py`,
+   then `git status --short` must be empty). A mutation applied only under /tmp proves nothing —
+   the test calls the repo's module. Report the before/after counts and the mutant's measured numbers.
+5. `git diff --stat` → touches ONLY `tests/test_rate_limiter.py`.
+Report the stop command's exact output (SPEC-5 item 4) at the end.
+
+BUDGET: 700 seconds. If you run out, report which acceptance items are done and which are not —
+a partial report is expected and useful, a false "all green" is not.
+
+DO NOT: commit, push, run the full suite (>5 min), or touch any file outside the allowlist.
+A `pytest tests/test_rate_limiter.py -q` run is the gate; that is enough.
+
+EVIDENCE / OUTPUT:
+- Write your report to /tmp/dispatch-log/bh-dev-5.md
+- Second copy inside the repo at analysis/loop-artifacts/iteration5/bh-dev-5.md and leave the tree
+  otherwise clean (that copy is the durable evidence; /tmp is a 72-hour lease).
+- ACCEPTANCE: every item above numbered and answered, each with the command and its real output.
