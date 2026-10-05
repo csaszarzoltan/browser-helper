@@ -24,8 +24,9 @@
 - depends-on: iteration 1 (must be green first)
 - status: queued, not started
 
-# Iteration 3 — SHIPPED v1.36.14 + v1.36.15 (2026-10-05)
-- SHIPPED: v1.36.14 @ e7fde1a (engine swap, gate 4.7/5.0 SHIP) + v1.36.15 @ 7ed30f3 (hotfix)
+# Iteration 3 — SHIPPED v1.36.14 + v1.36.15 + v1.36.16 (2026-10-05)
+- SHIPPED: v1.36.14 @ e7fde1a (engine swap, gate 4.7/5.0 SHIP) + v1.36.15 @ 7ed30f3 (hotfix) + v1.36.16 @ 7c4df52 (docs)
+- ARTIFACT-CLASS DEFECTS THIS LOOP (4, all same shape — code right, claim wrong): v1.36.11 tag vs 1.36.10 code; v1.36.12 commit msg naming 3 nonexistent methods; README badge 2630 vs 2796; docstrings still asserting keyDown+keyPress+keyUp after the dispatch was removed. Countermeasure is a grep, not a stricter gate — no reviewer scoring src/ reads a CHANGELOG line or a docstring param list.
 - THE HOTFIX WAS MANDATORY: v1.36.14 was BROKEN IN PRODUCTION. Live /type -> HTTP 400, input.value 'h' (1 of 11 chars).
   Two real CDP defects, both invisible to the mocked tests and to the 4.7/5.0 gate:
     (a) `keyPress` is NOT a valid Input.dispatchKeyEvent type (valid: keyDown/keyUp/rawKeyDown/char) -> Chrome -32602, result discarded so the error was SILENT.
