@@ -13,7 +13,7 @@ Pre-development tests for Human Typing Patterns Module (P1-3).
 ║    3. Non-determinism (different delays each sequence)                 ║
 ║    4. Raw mode pass-through (no delay)                                 ║
 ║    5. Disabled mode falls through to raw CDP dispatch                  ║
-║    6. Valid key event dispatch (keyDown → keyPress → keyUp)            ║
+║    6. Valid key event dispatch (keyDown → keyUp; no keyPress in CDP)   ║
 ║    7. POST/GET /typing/config endpoint round-trips                     ║
 ║    8. Invalid CPM range (min > max) returns 422                        ║
 ║    9. Mode switching at runtime                                        ║
