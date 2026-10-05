@@ -45,7 +45,13 @@
 - NOT SHIPPED: no >=4.0 verdict exists for the shipping tree, and a failing gate returns the item to BUILD rather than authorising my own score. Work kept LOCAL at 71abe6d; main untouched.
 - NEXT SESSION: re-dispatch the gate on 71abe6d (brief /tmp/dispatch-log/brief-gate-3.txt, already updated with the 3 fixes named). If it returns >=4.0 SHIP: bump to v1.36.14, CHANGELOG, tag, release, restart, verify /health. Do NOT re-derive the item.
 - MEASURED EARLIER THIS ITEM (do not re-test): keyPress with text does NOT double the character — live throwaway Chrome on 9558, keyDown(text)+keyPress(text)+keyUp -> 'a' len=1.
-- STILL OPEN, separate items: TWO flaky tests (same RNG family), both bisected to pre-existing and 10/10 green in isolation: tests/test_behavioral_typing.py::test_delays_follow_log_normal_distribution (Anderson-Darling alpha=0.05) and tests/test_behavioral_simulation.py::test_bezier_non_linear_velocity (file byte-identical at HEAD, md5 e057bd8f145071101558335a1fce8536). REPLACE THE FLAKY GATES, do not widen tolerances blindly. (Anderson-Darling alpha=0.05 over 500 samples; 10/10 isolated pass, fails in full-suite runs depending on RNG order).
+# Iteration 4 — SHIPPED v1.36.17 (2026-10-05): the two flaky gates replaced
+- SHIPPED: v1.36.17 @ 73b5d52. Both probabilistic gates replaced, no production code touched.
+- MEASURED BEFORE: log-normal gate 5/200 (2.5%) rejections and bezier gate 13/500 (2.6%) failures, BOTH ON CORRECT CODE. Oracle defects, not generator defects -> the fix is pinning the draw and asserting calibration, not widening a threshold.
+- MEASURED AFTER: 20/20 deterministic; all 6 mutants caught (uniform/constant/exponential/sigma*3/straight-line/linear-sampling); correct code passes; 3 consecutive full suites all 2806 passed.
+- NET GAIN: AD is scale-invariant, so the OLD test was blind to sigma*3 (statistic=0.2215 < 0.7510). The new calibration assertions catch it. Tolerances derived from 2000 seeds (0.02575 / 0.02204 -> 0.03 / 0.05); the spec's proposed 0.02 failed 58/1000 and would have made it worse.
+- FALSE AGENT CLAIMS REFUTED BY OWN MEASUREMENT: the spec's acceptance command had a SyntaxError; its second command printed failures:24 not 0; the gate claimed bare `pytest` cannot run (measured: xdist 3.8.0 installed, 67 passed). Recorded as refuted, not "fixed".
+- CLOSED. This was the loop's only real remaining item; the other bisected flaky family is covered by the same fix. (Anderson-Darling alpha=0.05 over 500 samples; 10/10 isolated pass, fails in full-suite runs depending on RNG order).
 
 # Iteration 3 (eredeti fejlec) — IN PROGRESS
 - what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra
