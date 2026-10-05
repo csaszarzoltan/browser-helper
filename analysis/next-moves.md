@@ -24,7 +24,16 @@
 - depends-on: iteration 1 (must be green first)
 - status: queued, not started
 
-# Iteration 3 — CANDIDATE (needs ASK verification)
+# Iteration 3 — IN PROGRESS (2026-10-05)
+- what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra
+- who: explore (CONFIRMS) + reviewer (3rd artifact defect) -> spec-author DONE (bh-spec-3.md, 4173B, wall 1316s)
+- spec decisions: boundary = lines 198-216 deleted, no fallback; shift/Backspace owner = BehavioralTyping; speed = TRANSLATED (cpm = wpm*5*speed_factor); disabled = MODE_RAW 3-event sequence
+- allowlist: src/behavioral_engine.py + tests/test_behavioral_engine.py
+- ORCHESTRATOR MEASUREMENT (live Chrome, throwaway instance on 9558): a keyPress TEXT-tel NEM duplikal — keyDown(text)+keyPress(text)+keyUp -> len=1; keyDown(text)+keyUp (regi ut) -> len=1. A dupla-bevitel kockazata NEM valos.
+  MERESI MODSZER: headless Chrome kulon porton + nyers websockets a page targetre, Input.dispatchKeyEvent, majd Runtime.evaluate az input.value-ra.
+- NEXT: developer (build), then binding gate
+
+# Iteration 3 (eredeti kerdes) — ANSWERED by both agents: yes, the engine swap
 - what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra. MOST MAR BLOKKOLATLAN: a N-1 konvencio rendezve, a _compute_cpm implementalva, tehat a swap nem fut a 4 strict xfail-ba es nem kell ujra donteni a konvenciot.
 - who: not yet dispatched — ASK-on kell atmennie, nem orokolheto
 - depends-on: iteration 2
