@@ -24,7 +24,18 @@
 - depends-on: iteration 1 (must be green first)
 - status: queued, not started
 
-# Iteration 3 — STOPPED, GATE OPEN @ local 71abe6d (2026-10-05)
+# Iteration 3 — SHIPPED v1.36.14 + v1.36.15 (2026-10-05)
+- SHIPPED: v1.36.14 @ e7fde1a (engine swap, gate 4.7/5.0 SHIP) + v1.36.15 @ 7ed30f3 (hotfix)
+- THE HOTFIX WAS MANDATORY: v1.36.14 was BROKEN IN PRODUCTION. Live /type -> HTTP 400, input.value 'h' (1 of 11 chars).
+  Two real CDP defects, both invisible to the mocked tests and to the 4.7/5.0 gate:
+    (a) `keyPress` is NOT a valid Input.dispatchKeyEvent type (valid: keyDown/keyUp/rawKeyDown/char) -> Chrome -32602, result discarded so the error was SILENT.
+    (b) `text=null` is "Invalid parameters" (CDP types text as string, not nullable) -> EVERY SPACE aborted the call.
+  Fixed both. Live re-verification: 'hello world' / 'a b c' / 'UPPER' / 'a!b' / 'x1y2' / 'Mix 123!' ALL PASS.
+- LESSON (goes in the skill): a mocked CDP client accepts ANY payload. 2805 green tests + a 4.7/5.0 binding gate coexisted with a dead production typing path. Any change that speaks a real wire protocol needs a LIVE end-to-end check.
+- MY OWN ERROR: an earlier in-iteration "measurement" that keyPress does not double the character was CONTAMINATED — taken while Chrome was already rejecting keyPress, the rejection swallowed the event. Re-measured clean: char+text genuinely doubles ('aa'); keyPress is simply invalid. A measurement taken on a broken system measures the breakage.
+- NEW GUARD TESTS: 2-event sequence pinned, `keyPress` banned, text never null. 89 passed on the two touched files.
+
+# Iteration 3 (korabbi allapot) — STOPPED, GATE OPEN @ local 71abe6d
 - what: engine swap — a produkcios ut a `self._typing.type_text`-et hivja (`src/behavioral_engine.py:212`)
 - who: explore + reviewer (both named it) -> spec-author (bh-spec-3.md) -> developer (ticket 146) -> reviewer gate (ticket 155, 3.2/5.0 REWORK)
 - GATE HISTORY: 3.2/5.0 REQUEST-CHANGES named 3 test-only defects (all in the developer's OWN new test file): F1 :274 staticmethod monkeypatch -> TypeError; F2 :3 F401; F3 :222 RUF015. The gate's own words: "Production src/behavioral_engine.py is correct ... failures are test-only."
@@ -33,7 +44,7 @@
 - NOT SHIPPED: no >=4.0 verdict exists for the shipping tree, and a failing gate returns the item to BUILD rather than authorising my own score. Work kept LOCAL at 71abe6d; main untouched.
 - NEXT SESSION: re-dispatch the gate on 71abe6d (brief /tmp/dispatch-log/brief-gate-3.txt, already updated with the 3 fixes named). If it returns >=4.0 SHIP: bump to v1.36.14, CHANGELOG, tag, release, restart, verify /health. Do NOT re-derive the item.
 - MEASURED EARLIER THIS ITEM (do not re-test): keyPress with text does NOT double the character — live throwaway Chrome on 9558, keyDown(text)+keyPress(text)+keyUp -> 'a' len=1.
-- STILL OPEN, separate item: tests/test_behavioral_typing.py::test_delays_follow_log_normal_distribution is flaky (Anderson-Darling alpha=0.05 over 500 samples; 10/10 isolated pass, fails in full-suite runs depending on RNG order).
+- STILL OPEN, separate items: TWO flaky tests (same RNG family), both bisected to pre-existing and 10/10 green in isolation: tests/test_behavioral_typing.py::test_delays_follow_log_normal_distribution (Anderson-Darling alpha=0.05) and tests/test_behavioral_simulation.py::test_bezier_non_linear_velocity (file byte-identical at HEAD, md5 e057bd8f145071101558335a1fce8536). REPLACE THE FLAKY GATES, do not widen tolerances blindly. (Anderson-Darling alpha=0.05 over 500 samples; 10/10 isolated pass, fails in full-suite runs depending on RNG order).
 
 # Iteration 3 (eredeti fejlec) — IN PROGRESS
 - what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra
