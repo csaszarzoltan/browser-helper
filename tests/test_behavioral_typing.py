@@ -259,10 +259,10 @@ class TestDelayGenerationBehavioral:
     """Tests for log-normal delay generation."""
 
     def test_generate_delays_returns_list_of_floats(self, typing):
-        """_generate_delays(N) returns a list of N floats."""
+        """_generate_delays(N) returns a list of max(0, N-1) floats."""
         delays = typing._generate_delays(10)
         assert isinstance(delays, list)
-        assert len(delays) == 10
+        assert len(delays) == 9
         assert all(isinstance(d, float) for d in delays)
 
     def test_generate_delays_zero_chars(self, typing):
@@ -272,7 +272,7 @@ class TestDelayGenerationBehavioral:
     def test_delays_are_positive(self, typing):
         """All generated delays must be > 0 seconds."""
         delays = typing._generate_delays(100)
-        assert len(delays) == 100
+        assert len(delays) == 99
         assert all(d > 0.0 for d in delays), "All delays must be positive"
 
     def test_delays_follow_log_normal_distribution(self, typing):
@@ -282,7 +282,7 @@ class TestDelayGenerationBehavioral:
         We reject if the AD statistic exceeds the critical value at α=0.05.
         """
         n_samples = 500
-        delays = typing._generate_delays(n_samples)
+        delays = typing._generate_delays(n_samples + 1)
         assert len(delays) >= 500, f"Need 500+ samples, got {len(delays)}"
 
         # Log-normal test: log(delays) should be normally distributed
@@ -298,7 +298,6 @@ class TestDelayGenerationBehavioral:
             "log(delays) is not normally distributed (not log-normal)"
         )
 
-    @pytest.mark.xfail(strict=True, reason="P1-3 not implemented: CPM bounds")
     def test_cpm_bounds_enforced(self, typing):
         """Effective CPM stays within configured cpm_min/cpm_max."""
         delays = typing._generate_delays(100)
@@ -307,7 +306,6 @@ class TestDelayGenerationBehavioral:
             f"CPM {cpm:.1f} not in [{typing.config.cpm_min}, {typing.config.cpm_max}]"
         )
 
-    @pytest.mark.xfail(strict=True, reason="P1-3 not implemented: custom CPM bounds")
     def test_custom_cpm_bounds_enforced(self, custom_config):
         """Custom CPM bounds are enforced."""
         bt = BehavioralTyping(config=custom_config)
@@ -330,7 +328,7 @@ class TestDelayGenerationBehavioral:
         """500 samples from 5 consecutive calls show statistical variance."""
         all_samples = []
         for _ in range(5):
-            all_samples.extend(typing._generate_delays(100))
+            all_samples.extend(typing._generate_delays(101))
         assert len(all_samples) == 500
 
         # Variance must be > 0 (trivial check that delays aren't constant)
@@ -527,24 +525,68 @@ class TestKeyDispatchBehavioral:
 class TestComputeCpmBehavioral:
     """Tests for the _compute_cpm method."""
 
-    def test_compute_cpm_not_implemented(self, typing):
-        """_compute_cpm raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            typing._compute_cpm([0.1, 0.2, 0.15])
+    def test_compute_cpm_returns_float(self, typing):
+        """_compute_cpm returns a float for a normal delay list."""
+        cpm = typing._compute_cpm([0.1, 0.2, 0.15])
+        assert isinstance(cpm, float)
+        assert cpm == pytest.approx(60 * 4 / 0.45, rel=0.02)
 
-    @pytest.mark.xfail(strict=True, reason="P1-3 not implemented: CPM calculation")
     def test_compute_cpm_known_delays(self, typing):
-        """_compute_cpm with uniform 0.3s delays gives 200 CPM."""
-        uniform_300ms = [0.3] * 10  # 10 delays = 3 seconds total typing time
+        """_compute_cpm with uniform 0.3s delays gives 220 CPM."""
+        uniform_300ms = [0.3] * 10  # 10 gaps = 11 chars in 3.0 s
         cpm = typing._compute_cpm(uniform_300ms)
-        # 11 characters typed in 3.0 seconds = 220 CPM (60/3.0 * 11)
-        assert cpm == pytest.approx(200, rel=1.0)  # Roughly 200 CPM
+        # 11 chars in 3.0 s = 60*11/3.0 = 220 CPM
+        assert cpm == pytest.approx(220, rel=0.02)  # 11 chars in 3.0 s = 220 CPM
 
-    @pytest.mark.xfail(strict=True, reason="P1-3 not implemented: CPM formula")
     def test_compute_cpm_instant(self, typing):
-        """_compute_cpm with zero delays returns large (infinite) CPM."""
+        """_compute_cpm with zero delays raises ZeroDivisionError."""
         with pytest.raises(ZeroDivisionError):
             typing._compute_cpm([0.0] * 10)  # Zero total time
+
+    def test_generate_delays_one_char_returns_empty(self, typing):
+        assert typing._generate_delays(1) == []
+
+    def test_compute_cpm_empty_returns_zero(self, typing):
+        assert typing._compute_cpm([]) == 0.0
+
+    def test_compute_cpm_single_gap(self, typing):
+        assert typing._compute_cpm([0.25]) == pytest.approx(480, rel=0.02)
+
+    @pytest.mark.asyncio
+    async def test_type_text_first_char_no_delay(self, typing, mock_client):
+        """First char has no preceding wait; total_delay_ms == sum of N-1 delays."""
+        import unittest.mock as um
+
+        sleeps: list[float] = []
+        delay_befores: list[float] = []
+        real_dispatch = BehavioralTyping._dispatch_char_sequence
+
+        async def spy_dispatch(client, char, delay_before: float = 0.0) -> None:
+            delay_befores.append(delay_before)
+            await real_dispatch(client, char, delay_before)
+
+        async def fake_sleep(d: float) -> None:
+            sleeps.append(d)
+
+        with (
+            um.patch(
+                "behavioral_typing.asyncio.sleep", side_effect=fake_sleep
+            ),
+            um.patch.object(
+                BehavioralTyping,
+                "_dispatch_char_sequence",
+                staticmethod(spy_dispatch),
+            ),
+        ):
+            result = await typing.type_text("abc", mode="human", client=mock_client)
+        delays = typing._generate_delays(3)
+        assert len(delays) == 2
+        # 3 chars dispatched, but the first has no preceding wait.
+        assert len(delay_befores) == 3
+        assert delay_befores[0] == 0.0
+        # Zero delay means the sleep call is skipped: only 2 positive sleeps.
+        assert len(sleeps) == 2
+        assert result["total_delay_ms"] == pytest.approx(sum(sleeps) * 1000.0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

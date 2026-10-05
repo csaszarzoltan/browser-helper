@@ -174,18 +174,18 @@ class BehavioralTyping:
                 "total_delay_ms": 0.0,
             }
 
-        # Human mode draws one delay per character; the first key goes out with
-        # no preceding wait (nothing has been typed yet).
+        # Human mode: N-1 inter-key gaps for N chars; first char has no preceding wait.
         delays = (
             self._generate_delays(char_count)
             if effective_mode == self.MODE_HUMAN
-            else [0.0] * char_count
+            else ([0.0] * (char_count - 1) if char_count > 1 else [])
         )
 
         total_delay = 0.0
         if client is not None:
             for index, char in enumerate(text):
-                delay_before = delays[index]
+                # Gaps are between chars: char 0 has no preceding gap.
+                delay_before = 0.0 if index == 0 else delays[index - 1]
                 await self._dispatch_char_sequence(client, char, delay_before)
                 total_delay += delay_before
 
@@ -209,9 +209,12 @@ class BehavioralTyping:
             char_count: Number of characters to generate delays for.
 
         Returns:
-            List of *char_count* delays in seconds.
+            List of ``max(0, char_count-1)`` delays in seconds.
+            Empty for 0 or 1 character (no inter-key gap exists).
+            The first character has no preceding delay; delays[i] is the
+            gap before character i+1.
         """
-        if char_count <= 0:
+        if char_count <= 1:
             return []
 
         # delay = 60 / cpm  →  cpm = 60 / delay.  Calibrate (mu, sigma) so that
@@ -224,20 +227,29 @@ class BehavioralTyping:
         # A new Random per call keeps the draws independent of any caller state
         # while still being non-deterministic across sequences.
         rng = random.Random()
-        return [rng.lognormvariate(mu, sigma) for _ in range(char_count)]
+        return [rng.lognormvariate(mu, sigma) for _ in range(char_count - 1)]
 
     def _compute_cpm(self, delays: list[float]) -> float:
         """Compute effective characters-per-minute from a list of delays.
 
         Args:
-            delays: Inter-key delays in seconds (length = N-1 for N chars,
-                    or N for N chars if the last delay represents total
-                    typing time).
+            delays: Inter-key delays in seconds. Length is N-1 for N
+                    characters (N>=1); empty for 0 or 1 character.
 
         Returns:
-            Effective CPM value.
+            Effective CPM as ``60 * (len(delays)+1) / sum(delays)``.
+            Returns 0.0 for empty input. Raises ZeroDivisionError if
+            sum(delays) == 0 for non-empty input (instant typing).
+
+        Raises:
+            ZeroDivisionError: if delays is non-empty and total time is zero.
         """
-        raise NotImplementedError("BehavioralTyping._compute_cpm")  # TODO: P1-3
+        if not delays:
+            return 0.0
+        total = sum(delays)
+        if total == 0:
+            raise ZeroDivisionError("total delay is zero")
+        return 60.0 * (len(delays) + 1) / total
 
     # ── Key event dispatch helpers ─────────────────────────────────────
 
