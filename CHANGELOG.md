@@ -4,6 +4,30 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.14] — 2026-10-05
+
+- **A produkciós gépelési út átkötve a `BehavioralTyping` modulra.** A
+  `BehavioralEngine.type_text` a régi `behavioral_sim.keystroke_timing` helyett
+  `await self._typing.type_text(text, mode="human", client=self._client)`-et hív
+  (`src/behavioral_engine.py:212`); a régi per-karakter hurk (198-216) törölve,
+  fallback nélkül — két küldő fennhagyása dupla-küldés kockázata lenne.
+  **Ez az, amiért a v1.36.12 és v1.36.13 eddig nulla produkciós hatással bírt.**
+- **A viselkedések, amiknek túl kellett élniük:** az element-not-found dict-út,
+  a kis/nagybetű és a shiftelt írásjelek, a named key-ek (`\n`, `\t`, `space`,
+  `\b` → vk 8), és a letiltott profil (`client.type_text`-re delegál, 0 event).
+- **Speed TRANSLATED, nem elhanyagolva:** `cpm = round(wpm * 5 * speed_factor)`,
+  konstrukciókor egyszer, `cpm_min = max(1, …)`, `cpm_max = max(cpm_min, …)`.
+  Default profil: `cpm_min=225 cpm_max=400`; `speed_factor=2.0` → `450/800`
+  (az irány megmaradt).
+- **Eseményszám 2 → 3 karakterenként** (keyDown+keyPress+keyUp), egyetlen
+  küldőtől. **A dupla-bevitel nem valós:** élő Chrome-bal mérve
+  `keyDown(text)+keyPress(text)+keyUp` → `'a'`, `len=1`.
+  **2805 passed, 0 failed** (szekvenciális, 301s, mérve). Gate: 4.7/5.0 SHIP.
+- **Két REWORK-kör:** a gate 3.2/5.0-t adott a javítás előtti fára, három
+  teszt-oldali hibát nevezve meg (staticmethod monkeypatch → TypeError, F401,
+  RUF015). A gate a termékről: *"Production `src/behavioral_engine.py` is
+  correct … failures are test-only."* Mindhárom javítva.
+
 ## [1.36.13] — 2026-10-05
 
 - **A gépelési késleltetés konvenciója: N−1 gap N karakterre.** A v1.36.12-ben a
