@@ -1,8 +1,8 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.36.14-blue)
+![Version](https://img.shields.io/badge/version-1.36.15-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Tests](https://img.shields.io/badge/tests-2805%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2806%20passed-brightgreen)
 
 > ### 🔑 **You log in as a human. Your agent works as a machine.**
 >
@@ -479,6 +479,6 @@ Release process: feature branch → FF-merge to main → version bump
 (`pyproject.toml`, `src/main.py`, `Dockerfile`, README badge) → CHANGELOG entry →
 `release-validate.sh` green → tag → GitHub release → systemd restart → live `/health` check.
 
-Current state: **2805 passed, 0 failed** (sequential, `-o addopts='' -p no:randomly`,
+Current state: **2806 passed** (sequential, `-o addopts='' -p no:randomly`,
 ~307 s; 1 skipped, 8 xfailed, 32 xpassed); the fast gate used per release is
 the selective suite above. Version history in [CHANGELOG.md](CHANGELOG.md).

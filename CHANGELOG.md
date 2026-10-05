@@ -4,6 +4,30 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.15] — 2026-10-05
+
+- **Két CDP-hiba javítása a gépelési úton — a v1.36.14 élesben törött volt.**
+  Az engine swap után az élő `/type` elhalt; a **mockolt gate 4.7/5.0-t adott és
+  a suite zöld volt**, a hibát csak az élő API-verifikáció kapta el.
+- **`keyPress` nem érvényes CDP-típus.** Az `Input.dispatchKeyEvent` csak
+  `keyDown`/`keyUp`/`rawKeyDown`/`char`-t ismer; a Chrome
+  `-32602 Unexpected event type 'keyPress'`-szal válaszolt, és a
+  `_dispatch_key_event` eldobta az eredményt, így a hiba **néma** maradt.
+  Élőben mérve: `'hello world'` → `input.value == 'h'` (1 karakter), HTTP 400.
+  Fix: `keyDown` (viszi a `text`-et) + `keyUp`, `keyPress` nélkül.
+- **`text=null` a CDP-nek = `Invalid parameters`.** A `_key_identifier` a named
+  key-ekre `text: None`-t adott; a CDP a `text`-et `string`-ként típusozza, nem
+  nullable-ként, így **bármely szóköz** elhalt. Mérve eldobható Chrome-bal:
+  `text=None` → üres, `text=''` → üres, `text=' '` → helyes.
+  Fix: `text = char if char.isprintable() else None`, és a `_dispatch_key_event`
+  elhagyja a `text` mezőt, ha `None`.
+- **Élő verifikáció a javítás után** (valós Chrome, futó service):
+  `'hello world'`, `'a b c'`, `'UPPER'`, `'a!b'`, `'x1y2'` — mind **PASS**.
+- **Új őrtesztek:** a 2-eseményes sorozat, a `keyPress` tiltása, és hogy `text`
+  soha ne menjen `null`-ként. **89 passed**, ruff tiszta.
+  Teljes suite: `2805 passed`, 1 failed (pre-existing flaky, a fájl bitre azonos
+  a HEAD-en, 10/10 izoláltan PASS).
+
 ## [1.36.14] — 2026-10-05
 
 - **A produkciós gépelési út átkötve a `BehavioralTyping` modulra.** A
