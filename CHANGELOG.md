@@ -4,6 +4,32 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.18] — 2026-10-05
+
+- **A harmadik és negyedik probabilisztikus gate cseréje — a loop v1.36.17-ben csak kettőt talált
+  el, és a `tests/test_rate_limiter.py`-ban ugyanaz a minta két példányban megmaradt.**
+- **Mérve a csere előtt (helyes kódon):** `test_uniform_distribution_ks_test` — 10 elutasítás / 200
+  futás (5,0%), pontosan a `scipy.stats.kstest` α=0,05-ös saját téves-riasztási rátája; ez volt a
+  repo egyetlen piros teszje. A `test_log_normal_distribution_ks_test` ugyanaz a szerkezet, **plusz
+  Lilliefors-hiba**: a `mean`/`std` paramétert abból a mintából becsli, amit vizsgál, így a p-érték
+  érvénytelen. A `:245` komment („Temporarily override randomness for reproducibility") olyan
+  rögzítést írt le, ami nem létezett.
+- **A csere:** a húzás rögzítése (`rl._rng = random.Random(20260905)`), majd három determinisztikus
+  invariáns — (1) KS-D alak a kritikus érték alatt, (2) kalibráció a mean/pop-sd momentumokra
+  (±150 ms / ±80 ms), (3) **order-invariáns: lag-1 autokorreláció |r| < 0,2.** A harmadik kötelező:
+  a rendezett-lineáris húzás KS-D=0,0010-nel, pontos mean/sd-vel **átmegy** az első kettőn, és csak
+  az order-invariáns fogja el (r=+0,9970). A log-normal twin az elméleti μ=7,11049 / σ=0,44794-re
+  asszertál.
+- **A régi orákulum vaksága bizonyítva:** a rendezett-lineáris sorozaton a régi kapu `KS p=1.0000`-t
+  ad — **átengedte volna**. Az új kapu mind a négy mutánst (sorted-linear / log-normal ág / felezés /
+  konstans) elkapja, in-place alkalmazva, byte-exact restore-tal (md5 egyezik).
+- **Teljes suite a csere után: `2806 passed, 0 failed`** (a loop egyetlen piros teszje megszűnt).
+- **Állapot: az egyetlen commit `507fd61` kizárólag `tests/test_rate_limiter.py`-t érinti** — a
+  produkciós kód és az RNG helyes volt, ez orákulum-hiba volt. A `RateLimiter` élesben terhelt
+  (`src/cdp_client.py:132` épít, `:665` hív a `_send_command` human-pacing útján).
+- **Gate: APPROVE 4,8/5** (5·5·5·5·4); a levonás a `tester` szerep kimaradása, amit a gate
+  legitimnek ítélt (teszt-only változás, nincs wire-protokoll felület).
+
 ## [1.36.17] — 2026-10-05
 
 - **A két probabilisztikus gate cseréje determinisztikusra — a suite eddig ~1 a 40-hez

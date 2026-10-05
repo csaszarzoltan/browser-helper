@@ -1,0 +1,43 @@
+ROLE: reviewer — the binding gate. Score the commit and print a verdict. Do NOT edit, commit, or revert.
+
+COMMIT: `507fd61` in /home/zoltan/browser-helper (test-only; SPEC-5).
+DIFF: `git show 507fd61` — it should touch `tests/test_rate_limiter.py` and only it (plus docs/analysis).
+SPEC: `docs/specs/SPEC-5-deterministic-rate-limiter-gates.md`.
+ARTIFACTS: `analysis/loop-artifacts/iteration5/` (explore, reviewer, spec, dev reports).
+
+WHAT WAS DONE: the two single-draw KS oracles at `tests/test_rate_limiter.py:240-268` were replaced by
+pinned-draw deterministic gates — pin `rl._rng = random.Random(20260905)`, then three invariants
+(KS-D shape under the critical value, mean/pop-sd calibration, lag-1 autocorrelation order check).
+
+CLAIMS TO ATTACK — verify each by running it yourself, in place:
+1. The NEW gate fails on the pre-fix tree's blind spot: a sorted-linear draw passes the OLD oracle
+   with p=1.0000 and the new gate catches it (lag-1 ≈ +0.9970). Apply the mutant IN PLACE in
+   `src/cdp_client.py`, show the new gate failing, then `git checkout -- src/cdp_client.py` and prove
+   `git status --short` is clean. A mutant applied only under /tmp is not a mutation.
+2. `.venv/bin/python -m pytest tests/ -o addopts='' --no-header -q -p no:randomly --ignore=tests/test_parallel_session_isolation.py`
+   reports `2806 passed, 0 failed`. This takes ~5.5 minutes — run it, do not trust the claim.
+3. The change is test-only: `git show --stat 507fd61` touches no `src/` file.
+4. Load-bearingness: `RateLimiter` has production callers (`src/cdp_client.py:132` constructs,
+   `:665` calls `get_delay()` on the `_send_command` path). Reproduce the grep.
+5. Mandated-step audit: this iteration ran `explore`, `reviewer`, `spec-author`, `developer`,
+   `reviewer` (gate). It did NOT run `tester`. Rule on whether that was legitimate here, given the
+   change is test-only and touches no wire protocol — or name it a finding.
+
+SCORE FIVE DIMENSIONS 1–5, then the average: brief quality · target choice · verification ·
+scope discipline · process honesty. Threshold 4.0.
+
+PRINT, in this order:
+- the five scores and the average (one line)
+- the mutants you applied, the file:line, and the before/after test counts
+- the full-suite line you actually saw
+- **one word on its own line: APPROVE or REQUEST-CHANGES**
+- then your findings, most severe first
+
+Write the report FIRST (after you have item 1 and 2 measured), then refine it.
+
+BUDGET: 900 seconds. If you run out, print what you have plus the word `PARTIAL` — a partial scored
+report beats a silent timeout.
+
+OUTPUT: /tmp/dispatch-log/bh-gate-5.out (the queue captures this). Second copy inside the repo:
+analysis/loop-artifacts/iteration5/bh-gate-5.md
+ACCEPTANCE: a number per dimension, the average, and one of the two verdict words.
