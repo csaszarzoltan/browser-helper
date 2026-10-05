@@ -24,7 +24,18 @@
 - depends-on: iteration 1 (must be green first)
 - status: queued, not started
 
-# Iteration 3 — IN PROGRESS (2026-10-05)
+# Iteration 3 — STOPPED, GATE OPEN @ local 71abe6d (2026-10-05)
+- what: engine swap — a produkcios ut a `self._typing.type_text`-et hivja (`src/behavioral_engine.py:212`)
+- who: explore + reviewer (both named it) -> spec-author (bh-spec-3.md) -> developer (ticket 146) -> reviewer gate (ticket 155, 3.2/5.0 REWORK)
+- GATE HISTORY: 3.2/5.0 REQUEST-CHANGES named 3 test-only defects (all in the developer's OWN new test file): F1 :274 staticmethod monkeypatch -> TypeError; F2 :3 F401; F3 :222 RUF015. The gate's own words: "Production src/behavioral_engine.py is correct ... failures are test-only."
+- FIXED in this iteration: all 3. Measured after: tests/test_behavioral_engine.py 22 passed, ruff clean, test_behavioral_engine+typing 88 passed, full suite 2804 passed / 1 failed (flaky AD test, bisected to 7cdc515)
+- STALL: the re-gate (ticket 158) NEVER STARTED — 2055s in the global queue, no ledger row, 3 consecutive gateway stalls this item (151, 3b, 158). Per skill 6b step 4: stopped, did not re-ask.
+- NOT SHIPPED: no >=4.0 verdict exists for the shipping tree, and a failing gate returns the item to BUILD rather than authorising my own score. Work kept LOCAL at 71abe6d; main untouched.
+- NEXT SESSION: re-dispatch the gate on 71abe6d (brief /tmp/dispatch-log/brief-gate-3.txt, already updated with the 3 fixes named). If it returns >=4.0 SHIP: bump to v1.36.14, CHANGELOG, tag, release, restart, verify /health. Do NOT re-derive the item.
+- MEASURED EARLIER THIS ITEM (do not re-test): keyPress with text does NOT double the character — live throwaway Chrome on 9558, keyDown(text)+keyPress(text)+keyUp -> 'a' len=1.
+- STILL OPEN, separate item: tests/test_behavioral_typing.py::test_delays_follow_log_normal_distribution is flaky (Anderson-Darling alpha=0.05 over 500 samples; 10/10 isolated pass, fails in full-suite runs depending on RNG order).
+
+# Iteration 3 (eredeti fejlec) — IN PROGRESS
 - what: `src/behavioral_engine.py:199` swap — a produkcios gepelesi ut atkotese a BehavioralTyping modulra
 - who: explore (CONFIRMS) + reviewer (3rd artifact defect) -> spec-author DONE (bh-spec-3.md, 4173B, wall 1316s)
 - spec decisions: boundary = lines 198-216 deleted, no fallback; shift/Backspace owner = BehavioralTyping; speed = TRANSLATED (cpm = wpm*5*speed_factor); disabled = MODE_RAW 3-event sequence
