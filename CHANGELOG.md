@@ -4,6 +4,32 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.17] — 2026-10-05
+
+- **A két probabilisztikus gate cseréje determinisztikusra — a suite eddig ~1 a 40-hez
+  arányban pirosra váltott helyes kódon.** Ez a loop egyetlen nyitott itemje volt, és épp azt
+  rontotta el, amire a loop támaszkodik: a „suite zöld" jelzést.
+- **Mérve a csere előtt:** `test_delays_follow_log_normal_distribution` — 5 elutasítás / 200
+  futás (2,5%) helyes kódon; a csupasz α=0.05-es Anderson-Darling **tervezésénél fogva**
+  elutasít. `test_bezier_non_linear_velocity` — 13 bukás / 500 (2,6%), mert a `max/min > 1.2`
+  küszöb **egyetlen húzásra** vonatkozott, holott az eloszlás mediánja 1,711.
+- **A csere:** a delay-teszt a mintát a `random.Random` ideiglenes cseréjével rögzíti
+  (`_generate_delays` a saját példányát építi — modulszintű seed nem érné el), és az AD mellé
+  **kalibrációs** állítások kerültek; a bezier-teszt 25 rögzített seedre méri a görbületet és
+  a szórás minimumát.
+- **A csere nem lazítás, hanem erősítés:** az AD **skála-invariáns**, ezért a régi teszt
+  **vak volt a rossz `sigma`-ra** (`sigma*3` → `statistic=0.2215 < critical 0.7510`). Az új
+  kalibrációs állítások elkapják.
+- **Mérve a csere után:** 20/20 determinisztikus futás; **mind a 6 mutáns elkapva**
+  (uniform, konstans, exponenciális, `sigma*3`, egyenes vonal, lineáris mintavétel), a helyes
+  implementáció átmegy. A tűrések mérésből: 2000 seeden a legrosszabb `|log_mean-mu|` 0,02575
+  és `|log_sd-sigma|` 0,02204 → 0,03 / 0,05.
+- **A dokumentált hatókör őszinte:** a 0,05-es `sigma`-korlát a ≥50%-os szóráshibát 200/200
+  alkalommal elkapja, a `sigma*1.2`-t viszont csak az esetek 4,5%-ában — ez a docstringben
+  kimondva, nem túlállítva.
+- **Gate: APPROVE 4.5/5.0** — a reviewer maga is reprodukálta (40/40 determinisztikus, mind a
+  6 mutáns, `git diff --name-only` = csak a két tesztfájl). Teljes suite: `2806 passed, 0 failed`.
+
 ## [1.36.16] — 2026-10-05
 
 - **A v1.36.15 hotfix után maradt hamis dokumentáció javítása.** A `keyPress`

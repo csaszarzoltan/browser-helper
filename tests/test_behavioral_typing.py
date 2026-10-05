@@ -276,26 +276,91 @@ class TestDelayGenerationBehavioral:
         assert all(d > 0.0 for d in delays), "All delays must be positive"
 
     def test_delays_follow_log_normal_distribution(self, typing):
-        """500+ inter-key delays pass the Anderson-Darling test for log-normal.
+        """Delays match the documented LogNormal calibration, deterministically.
 
-        The null hypothesis is that log(delays) is normally distributed.
-        We reject if the AD statistic exceeds the critical value at α=0.05.
+        WHY THIS IS NOT A BARE ANDERSON-DARLING TEST
+        --------------------------------------------
+        A naked ``assert statistic < critical_value`` at α=0.05 rejects 5% of
+        *correct* draws by construction. Measured over 200 fresh draws of the
+        unmodified implementation: 5 rejections = 2.5%, so full-suite runs went
+        red roughly 1 in 40 with nothing wrong. That is a defective oracle, not
+        a defective generator.
+
+        AD is also **scale-invariant**: a log-normal draw with the wrong sigma
+        is still perfectly normal in log space. Measured: ``sigma * 3`` gives
+        ``statistic=0.2215 < critical 0.7510`` — the old test was BLIND to it.
+        The calibration assertions below are therefore not decoration; they are
+        the half of the oracle AD cannot supply.
+
+        SCOPE OF THE SPREAD CHECK — measured, so it is not overstated:
+        the 0.05 sigma bound catches a >=50% spread error 200/200 times
+        (``sigma * 1.5`` departs by 0.0884) but a ``sigma * 1.2`` error only
+        4.5% of the time (it departs by 0.0354, under the bound). The bound is
+        calibrated to distinguish "right spread" from "wrong spread", not to
+        resolve small multipliers.
+
+        The pin is done by replacing ``random.Random`` for the duration of the
+        draw, because ``_generate_delays`` builds its own ``random.Random()``
+        (src/behavioral_typing.py:229) and a module-level seed cannot reach it.
+
+        Tolerances are measured, not chosen: over 2000 independent seeds the
+        worst ``|log_mean - mu|`` is 0.02575 and the worst ``|log_sd - sigma|``
+        is 0.02204, so the drift bounds below hold with margin while every
+        mutation in the class this guards (uniform, constant, exponential,
+        wrong spread) departs by far more. The draw is pinned to seed 20260905,
+        whose actual deviations are much smaller, so the assertions below are
+        deterministic; the 2000-seed figures bound how far a future edit to the
+        seed or the sample count could move them.
         """
+        import statistics
+
+        import behavioral_typing as bt_mod
+
         n_samples = 500
-        delays = typing._generate_delays(n_samples + 1)
-        assert len(delays) >= 500, f"Need 500+ samples, got {len(delays)}"
+        real_random = bt_mod.random.Random
+        bt_mod.random.Random = lambda *a, **k: real_random(20260905)
+        try:
+            delays = typing._generate_delays(n_samples + 1)
+        finally:
+            bt_mod.random.Random = real_random
 
-        # Log-normal test: log(delays) should be normally distributed
-        log_delays = [math.log(d) for d in delays if d > 0]
+        assert len(delays) >= n_samples, f"Need {n_samples}+ samples, got {len(delays)}"
+        assert all(d > 0.0 for d in delays), "All delays must be positive (log taken below)"
 
-        # Anderson-Darling test for normality
+        # --- 1. Shape: log(delays) is normal ---------------------------------
+        log_delays = [math.log(d) for d in delays]
         result = scipy_stats.anderson(log_delays, dist="norm")
-        # Critical value at 5% significance level is index 2
         critical_value = result.critical_values[2]
         assert result.statistic < critical_value, (
             f"Anderson-Darling statistic {result.statistic:.4f} exceeds "
             f"critical value {critical_value:.4f} at α=0.05 — "
             "log(delays) is not normally distributed (not log-normal)"
+        )
+
+        # --- 2. Calibration: the draw used the documented mu/sigma -----------
+        # Same derivation as src/behavioral_typing.py:222-225.
+        fast_delay = 60.0 / typing.config.cpm_max
+        slow_delay = 60.0 / typing.config.cpm_min
+        mu = (math.log(fast_delay) + math.log(slow_delay)) / 2.0
+        sigma = (math.log(slow_delay) - math.log(fast_delay)) / (2.0 * 1.959963985)
+
+        log_mean = statistics.fmean(log_delays)
+        log_sd = statistics.stdev(log_delays)
+        assert abs(log_mean - mu) <= 0.03, (
+            f"log-mean {log_mean:.5f} deviates from calibrated mu {mu:.5f} by "
+            f"more than 0.03 — delays are drawn with the wrong centre"
+        )
+        assert abs(log_sd - sigma) <= 0.05, (
+            f"log-sd {log_sd:.5f} deviates from calibrated sigma {sigma:.5f} by "
+            f"more than 0.05 — delays are log-normal but with the wrong spread "
+            f"(this is the case Anderson-Darling alone cannot see)"
+        )
+
+        # --- 3. The ensemble lands inside the configured CPM band ------------
+        geo_mean = math.exp(log_mean)
+        assert fast_delay * 0.95 <= geo_mean <= slow_delay * 1.05, (
+            f"geometric mean {geo_mean:.4f}s outside the configured CPM band "
+            f"[{fast_delay:.4f}, {slow_delay:.4f}]"
         )
 
     def test_cpm_bounds_enforced(self, typing):

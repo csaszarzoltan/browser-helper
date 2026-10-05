@@ -16,6 +16,7 @@ behavioral tests validate the acceptance criteria:
 from __future__ import annotations
 
 import inspect
+import math
 import random
 import sys
 from pathlib import Path
@@ -538,22 +539,62 @@ class TestMouseSimulatorBezierBehavior:
         assert all(len(p) == 2 for p in points)
 
     def test_bezier_non_linear_velocity(self):
-        """Bezier path produces non-linear velocity variation >20%.
+        """Bezier paths are curved and non-uniformly sampled, deterministically.
 
-        Verifies that consecutive point distances vary by more than 20%
-        along the path, confirming non-linear (human-like) motion.
+        WHY THIS IS NOT A SINGLE-DRAW THRESHOLD
+        ---------------------------------------
+        The old gate asserted ``max(dist)/min(dist) > 1.2`` on ONE randomly
+        generated path. Measured over 1000 seeds, the distribution's own median
+        ratio is 1.711 but 24/1000 draws fall below 1.2 (worst 1.120), so
+        correct code failed ~2.4% of the time. The threshold was never wrong;
+        applying it to a single draw made it a coin flip.
+
+        The fix keeps the 1.2 floor and the same intuition but measures it over
+        a pinned 25-seed ensemble, and adds a curvature invariant that is
+        exactly zero for a straight line. ``bezier_path`` draws from the global
+        ``random`` module (src/anti_detection/behavioral_simulation.py:145-149),
+        so ``random.seed`` genuinely reaches it — no patching needed here.
+
+        Measured on the unmodified implementation over these 25 seeds:
+        curvature ranges 15.56px to 60.42px, ratio min/median/max =
+        1.3518 / 1.8505 / 2.7292.
         """
-        points = MouseSimulator.bezier_path(100, 100, 500, 300, steps=20)
-        if len(points) > 2:
+        seeds = range(20260905, 20260930)  # 25 pinned seeds
+        ratios = []
+        for seed in seeds:
+            random.seed(seed)
+            points = MouseSimulator.bezier_path(100, 100, 500, 300, steps=20)
+            assert len(points) == 21
+
+            # Invariant 1 — curvature. Zero iff the path is the straight line.
+            (x0, y0), (x1, y1) = points[0], points[-1]
+            dx, dy = x1 - x0, y1 - y0
+            chord = math.hypot(dx, dy)
+            max_dev = max(
+                abs(dx * (y0 - yi) - (x0 - xi) * dy) / chord
+                for xi, yi in points
+            )
+            assert max_dev > 1.0, (
+                f"seed {seed}: path deviates only {max_dev:.4f}px from the "
+                f"straight line — bezier control points are not bending the path"
+            )
+
             distances = [
-                ((points[i][0] - points[i - 1][0]) ** 2
-                 + (points[i][1] - points[i - 1][1]) ** 2) ** 0.5
+                math.hypot(points[i][0] - points[i - 1][0],
+                           points[i][1] - points[i - 1][1])
                 for i in range(1, len(points))
             ]
-            if len(distances) > 1:
-                max_d = max(distances)
-                min_d = min(distances)
-                assert min_d > 0 and max_d / min_d > 1.2
+            assert min(distances) > 0, f"seed {seed}: path has a zero-length segment"
+            ratios.append(max(distances) / min(distances))
+
+        # Invariant 2 — non-uniform speed over the pinned ensemble. The measured
+        # minimum is 1.3518, so 1.2 is a floor the correct implementation clears
+        # with ~13% headroom and no draw can dip under.
+        assert min(ratios) > 1.2, (
+            f"least non-uniform of {len(ratios)} pinned bezier paths has "
+            f"max/min segment length {min(ratios):.4f} <= 1.2 — motion is "
+            f"effectively constant-speed (straight line or linear sampling)"
+        )
 
     def test_bezier_velocity_200_800ms_per_200px(self):
         """Movement velocity varies within 200-800ms per 200px."""

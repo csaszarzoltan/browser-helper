@@ -1,0 +1,40 @@
+ROLE: spec-author for /home/zoltan/browser-helper. You write a SPEC, not code.
+
+ONE QUESTION: the full suite fails intermittently on two probabilistic tests.
+Specify how to replace both gates so they are deterministic WITHOUT weakening
+what they detect.
+
+ALREADY MEASURED (do not redo; spot-check if cheap):
+- tests/test_behavioral_typing.py:278 test_delays_follow_log_normal_distribution
+  runs scipy.stats.anderson on log(delays) and asserts statistic < critical_values[2]
+  (alpha=0.05). Measured over 200 independent runs: 5 rejections = 2.5%.
+  Median stat/crit 0.45, worst 1.33. The implementation IS log-normal; the gate is a
+  statistical test that rejects by design, so full-suite runs go red ~1 in 40.
+- tests/test_behavioral_simulation.py:540 test_bezier_non_linear_velocity asserts
+  max(dist)/min(dist) > 1.2 on ONE randomly generated path. Measured over 500 runs:
+  13 failures = 2.6%. Ratios seen: 1.67, 1.68, 2.22, 1.74, 1.13.
+NOTE: src/behavioral_typing.py `_generate_delays` builds its own `random.Random()`
+(no caller seed), so a test-side seed CANNOT make test #1 deterministic.
+src/anti_detection/behavioral_simulation.py `bezier_path` uses the GLOBAL `random`
+module, so a test-side seed CAN.
+
+Item 1 is mandatory. Answer EVERY item even if your answer is NO, and say what you
+checked to establish NO.
+
+1. For each test: is the root cause the random draw, or the assertion threshold?
+   One sentence each, with the evidence you used.
+2. The replacement assertion for each, as exact code. Constraint: deterministic in
+   practice AND it must still FAIL on a broken implementation.
+3. For each: the mutation that must still be caught (e.g. uniform delays instead of
+   log-normal; a straight-line path with equal segment lengths) and what that mutated
+   code would score under your proposed gate.
+4. The exact command that proves the new gate's failure rate is 0 over >=1000 trials,
+   and the command that proves the mutation is still caught.
+5. Target Files allowlist (be minimal) and the path of each test file you change.
+6. State explicitly what your proposal does NOT fix.
+
+DO NOT DECIDE production behavior. Do not change src/ logic. Do not fix this by raising
+an alpha or a ratio threshold. If you believe production code must change, say so and stop.
+BUDGET: 600 seconds. If you run out, report which items you completed and which you did not.
+OUTPUT: write the spec to /tmp/dispatch-log/bh-spec-4.md and make your final message the
+path plus a one-line summary.

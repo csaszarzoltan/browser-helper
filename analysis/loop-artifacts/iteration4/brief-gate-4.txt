@@ -1,0 +1,41 @@
+ROLE: reviewer for /home/zoltan/browser-helper. You REVIEW and MEASURE. You do not write code.
+
+ONE QUESTION: do the two rewritten tests below replace a flaky gate with a
+DETERMINISTIC one WITHOUT losing detection power? Print a score and a verdict word.
+
+WHAT CHANGED (uncommitted, working tree):
+  tests/test_behavioral_typing.py:278      test_delays_follow_log_normal_distribution
+  tests/test_behavioral_simulation.py:540  test_bezier_non_linear_velocity
+No production code was touched. Verify that: `git diff --name-only` must list ONLY those two.
+
+WHY (measured earlier, spot-check it):
+- Old test 1 was a bare Anderson-Darling assert at alpha=0.05: 5 rejections / 200 runs
+  on CORRECT code. An AD test on a log-normal sampler rejects by design.
+- Old test 2 asserted max/min > 1.2 on ONE random draw: 13 failures / 500 runs.
+- Test 1 could not be fixed by seeding: `_generate_delays` builds its own
+  `random.Random()` at src/behavioral_typing.py:229.
+- IMPORTANT known deviation from the spec this implements: the spec proposed tolerance
+  0.02 for |log_sd - sigma|. I measured 58 failures / 1000 seeds at 0.02, so I changed it
+  to 0.05 (measured worst deviation over 2000 seeds: 0.02204; the wrong-sigma mutant
+  departs by 0.3424). The |log_mean - mu| tolerance is 0.03 (measured worst 0.02575).
+
+Answer EVERY item, even if your answer is NO, and say what you checked to establish NO.
+
+1. Does each new test FAIL on a broken implementation? Construct the mutants yourself and
+   run them: (a) uniform delays, (b) constant delays, (c) exponential delays,
+   (d) log-normal with sigma*3, (e) straight-line bezier path, (f) linear-in-t sampling.
+   Name each mutant CAUGHT or NOT CAUGHT, with the failing assertion.
+2. Is each new test deterministic? Run each one 20 times (`pytest ... -p no:randomly`) and
+   report the pass count. A single failure is a REQUEST-CHANGES.
+3. Is the 0.05 sigma tolerance a disguised weakening? Compare the measured correct-code
+   deviation (say your own number) against the mutation distance. If 0.05 sits closer to
+   the mutant than to the correct distribution, say so.
+4. Did any detection power get LOST versus the old tests? Name it, or establish that none did.
+5. Compute the full-suite flake rate you would now expect from these two files. State the
+   command you used.
+6. `git diff --name-only` — paste it. Any file outside the two named above is a violation.
+
+DO NOT decide architecture. Do not edit or commit anything.
+BUDGET: 600 seconds. If you run out, say which items you completed.
+OUTPUT: write the full report to /tmp/dispatch-log/bh-gate-4.md AND make your final message
+contain BOTH a score line `SCORE: X.X/5.0` and one word: APPROVE or REQUEST-CHANGES.
