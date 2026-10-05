@@ -16,7 +16,26 @@ REST API:
 
 from __future__ import annotations
 
+import asyncio
+import math
+import random
 from typing import Any
+
+# Two-sided normal quantile for 95 % coverage — the log-normal is calibrated
+# so that 95 % of sampled inter-key delays land inside the configured CPM range.
+_Z95 = 1.959963985
+
+# Non-printable / named keys: char → (key, code, windowsVirtualKeyCode).
+# A char not in this table and not alphanumeric gets its own face value.
+_NAMED_KEYS: dict[str, tuple[str, str, int]] = {
+    "\n": ("Enter", "Enter", 13),
+    "\r": ("Enter", "Enter", 13),
+    "\t": ("Tab", "Tab", 9),
+    " ": (" ", "Space", 32),
+    "\b": ("Backspace", "Backspace", 8),
+    "\x1b": ("Escape", "Escape", 27),
+    "\x7f": ("Delete", "Delete", 46),
+}
 
 # ---------------------------------------------------------------------------
 # Typing Configuration
@@ -133,7 +152,49 @@ class BehavioralTyping:
                  "mode": str,
                  "total_delay_ms": float}
         """
-        raise NotImplementedError("BehavioralTyping.type_text")  # TODO: P1-3
+        effective_mode = mode
+        if not self._config.enabled:
+            # Disabled profile falls through to raw CDP dispatch.
+            effective_mode = self.MODE_RAW
+
+        if effective_mode not in (self.MODE_HUMAN, self.MODE_RAW):
+            return {
+                "status": "error",
+                "chars": 0,
+                "mode": effective_mode,
+                "total_delay_ms": 0.0,
+            }
+
+        char_count = len(text)
+        if char_count == 0:
+            return {
+                "status": "ok",
+                "chars": 0,
+                "mode": effective_mode,
+                "total_delay_ms": 0.0,
+            }
+
+        # Human mode draws one delay per character; the first key goes out with
+        # no preceding wait (nothing has been typed yet).
+        delays = (
+            self._generate_delays(char_count)
+            if effective_mode == self.MODE_HUMAN
+            else [0.0] * char_count
+        )
+
+        total_delay = 0.0
+        if client is not None:
+            for index, char in enumerate(text):
+                delay_before = delays[index]
+                await self._dispatch_char_sequence(client, char, delay_before)
+                total_delay += delay_before
+
+        return {
+            "status": "ok",
+            "chars": char_count,
+            "mode": effective_mode,
+            "total_delay_ms": total_delay * 1000.0,
+        }
 
     # ── Delay generation ───────────────────────────────────────────────
 
@@ -150,7 +211,20 @@ class BehavioralTyping:
         Returns:
             List of *char_count* delays in seconds.
         """
-        raise NotImplementedError("BehavioralTyping._generate_delays")  # TODO: P1-3
+        if char_count <= 0:
+            return []
+
+        # delay = 60 / cpm  →  cpm = 60 / delay.  Calibrate (mu, sigma) so that
+        # 95 % of draws fall between the fast and slow ends of the CPM range.
+        fast_delay = 60.0 / self._config.cpm_max
+        slow_delay = 60.0 / self._config.cpm_min
+        mu = (math.log(fast_delay) + math.log(slow_delay)) / 2.0
+        sigma = (math.log(slow_delay) - math.log(fast_delay)) / (2.0 * _Z95)
+
+        # A new Random per call keeps the draws independent of any caller state
+        # while still being non-deterministic across sequences.
+        rng = random.Random()
+        return [rng.lognormvariate(mu, sigma) for _ in range(char_count)]
 
     def _compute_cpm(self, delays: list[float]) -> float:
         """Compute effective characters-per-minute from a list of delays.
@@ -177,7 +251,52 @@ class BehavioralTyping:
              "windowsVirtualKeyCode": int | None,
              "nativeVirtualKeyCode": int | None}
         """
-        raise NotImplementedError("BehavioralTyping._key_identifier")  # TODO: P1-3
+        named = _NAMED_KEYS.get(char)
+        if named is not None:
+            key, code, vk = named
+            # Named keys produce no text payload — CDP expects text absent on
+            # keyDown/keyUp of non-text keys.
+            return {
+                "key": key,
+                "code": code,
+                "text": None,
+                "windowsVirtualKeyCode": vk,
+                "nativeVirtualKeyCode": vk,
+            }
+
+        if len(char) == 1 and char.isascii() and char.isalpha():
+            code = f"Key{char.upper()}"
+            vk = ord(char.upper())
+            return {
+                "key": char,
+                "code": code,
+                "text": char,
+                "windowsVirtualKeyCode": vk,
+                "nativeVirtualKeyCode": vk,
+            }
+
+        if len(char) == 1 and char.isascii() and char.isdigit():
+            # Digits sit on the number row: "4" → code Digit4.
+            code = f"Digit{char}"
+            vk = ord(char)
+            return {
+                "key": char,
+                "code": code,
+                "text": char,
+                "windowsVirtualKeyCode": vk,
+                "nativeVirtualKeyCode": vk,
+            }
+
+        # Punctuation and non-ASCII: no dedicated key code exists, so the char
+        # doubles as its own face value.  Shift is implied by the char itself.
+        vk = ord(char) if len(char) == 1 and ord(char) < 256 else None
+        return {
+            "key": char,
+            "code": "",
+            "text": char,
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk,
+        }
 
     @staticmethod
     async def _dispatch_key_event(
@@ -195,7 +314,12 @@ class BehavioralTyping:
         Returns:
             CDP command result.
         """
-        raise NotImplementedError("BehavioralTyping._dispatch_key_event")  # TODO: P1-3
+        params = dict(key_params)
+        params["type"] = event_type
+        # keyUp carries no text payload; strip it so the CDP schema is honoured.
+        if event_type in ("keyUp", "rawKeyUp"):
+            params.pop("text", None)
+        return await client._send_command("Input.dispatchKeyEvent", params)
 
     @staticmethod
     async def _dispatch_char_sequence(
@@ -210,4 +334,10 @@ class BehavioralTyping:
             char:         Single character to type.
             delay_before: Seconds to wait before this character.
         """
-        raise NotImplementedError("BehavioralTyping._dispatch_char_sequence")  # TODO: P1-3
+        if delay_before > 0:
+            await asyncio.sleep(delay_before)
+
+        params = BehavioralTyping._key_identifier(char)
+        await BehavioralTyping._dispatch_key_event(client, "keyDown", params)
+        await BehavioralTyping._dispatch_key_event(client, "keyPress", params)
+        await BehavioralTyping._dispatch_key_event(client, "keyUp", params)

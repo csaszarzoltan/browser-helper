@@ -305,7 +305,7 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(
     title="Browser Helper API",
-    version="1.36.11",
+    version="1.36.12",
     description="REST + WebSocket API for browser automation via CDP.",
     lifespan=lifespan,
 )
@@ -647,6 +647,18 @@ class StealthConfigRequest(BaseModel):
 
 class DOMClickAllRequest(BaseModel):
     selector: str
+
+
+class TypingConfigRequest(BaseModel):
+    """Human typing configuration — every field optional (partial update).
+
+    ``None`` means "leave unchanged"; the handler merges onto the stored
+    config and re-validates the merged result.
+    """
+
+    enabled: bool | None = None
+    cpm_min: int | None = Field(default=None, ge=1)
+    cpm_max: int | None = Field(default=None, ge=1)
 
 
 class ScriptRequest(BaseModel):
@@ -2791,6 +2803,49 @@ async def get_stealth_config():
         "patches": LEVEL_PATCHES.get(level, []),
         "available": list(injector.patches.keys()),
     }
+
+
+@app.get("/typing/config")
+async def get_typing_config():
+    """Return the current human-typing configuration."""
+    from behavioral_typing import TypingConfig
+
+    config = state.get("typing_config")
+    if config is None:
+        config = TypingConfig()
+        state["typing_config"] = config
+    return {"status": "ok", **config.to_dict()}
+
+
+@app.post("/typing/config")
+async def post_typing_config(body: TypingConfigRequest | None = None):
+    """Update the human-typing configuration (partial updates merge).
+
+    Body: ``{"enabled": bool, "cpm_min": int, "cpm_max": int}`` — every field
+    is optional; omitted fields keep their current value.  An inverted or
+    non-positive CPM range is rejected with 422.
+    """
+    from behavioral_typing import TypingConfig
+
+    current = state.get("typing_config")
+    if current is None:
+        current = TypingConfig()
+        state["typing_config"] = current
+
+    payload = current.to_dict()
+    if body is not None:
+        for key in ("enabled", "cpm_min", "cpm_max"):
+            value = getattr(body, key)
+            if value is not None:
+                payload[key] = value
+
+    # TypingConfig._validate raises ValueError, which would surface as a 500;
+    # the route contract requires 422.
+    try:
+        state["typing_config"] = TypingConfig(**payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return await get_typing_config()
 
 
 @app.post("/stealth/config")

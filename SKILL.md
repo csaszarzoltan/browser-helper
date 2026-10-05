@@ -2866,6 +2866,21 @@ The following features and improvements were added in v0.8:
 | `POST /form/select/by-label` | Alias | Alias for `/form/select` with `by=label` |
 | `GET /api/tabs` | Alias | Backward-compatible alias for `/tabs` |
 | `POST /api/screenshot` | Alias | Backward-compatible alias for `/screenshot` |
+| `POST /typing/config` | New | Human-typing profile knobs (enabled, CPM range) — inverts return 422 |
+| `GET /typing/config` | New | Read the current human-typing profile |
+
+#### /typing/config — human-typing profile
+
+`POST /typing/config` sets the human-typing profile; `GET /typing/config`
+reads it back. The request body:
+
+```json
+{"enabled": true, "cpm_min": 200, "cpm_max": 500}
+```
+
+An inverted range (`cpm_min > cpm_max`) returns **422**, not 500 — validated
+before the profile is stored. The round-trip rule holds: POSTing then GETting
+reflects the change.
 
 #### /click/label "label" Alias
 

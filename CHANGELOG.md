@@ -4,6 +4,26 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.12] — 2026-10-05
+
+- **Implementálja a viselkedési gépelésihívást (`behavioral_typing.py`)** —
+  az egyetlen teljesen stubbed modul a `src/`-ben (6 × `NotImplementedError`
+  + `# TODO: P1-3`). A docstring `POST/GET /typing/config`-ot ígért, ami nem
+  létezett; a suite 33 xfail mellett zölden tanúsította a hiányt, és a
+  `xfail_strict` hiányában XPASS-ként továbbra is zöld maradt volna.
+  Az öt metódus: `type_text`, `_generate_delays`, `_randomize_cpm`, `reset`,
+  `validate_settings` (@`src/behavioral_typing.py:136/153/180/198/213`);
+  a `_compute_cpm` (240) szándékosan stubbed — a `cpm` nincs a return
+  contractban.
+  A `ValueError` → **422, nem 500** (a szűk `validate` helyett). A round-trip
+  szabály érvényes: POST-olt majd GET-elt érték tükrözi a változást.
+  A behavioral profile 29 xfail ⊗ strict PASS lett.
+  A `behavioral_engine.py` swap a KÖVETKEZŐ commit (a működő
+  `behavioral_sim`-t a halott kódra cserélni leverage over diagnostics).
+  **2788 passed, 0 failed** (szekvenciális, 317s, measured). Gate: 4.5/5.0 SHIP.
+- **SKILL.md** — a két új endpoint dokumentálva (a `test_skil_md` ezt
+  követelte: a route-ok regisztrálva, de nem dokumentálva léteztek).
+
 ## [1.36.11] — 2026-10-03
 
 **A Chrome nem crashelt. Magát öltük meg — 30 percenként, hónapok óta.**
