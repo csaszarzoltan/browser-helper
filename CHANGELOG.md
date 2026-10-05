@@ -4,6 +4,27 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.13] — 2026-10-05
+
+- **A gépelési késleltetés konvenciója: N−1 gap N karakterre.** A v1.36.12-ben a
+  `type_text` hurk a `delays[index]`-et használta minden indexre, így **az első
+  karakter is várt**, holott a saját kommentje (`:177-178`) azt írta, nem kell.
+  Mérve: a slept lista `[0, 175, 137]` ms, a falidő **682 → 314 ms** 3 karakterre;
+  `sum(slept) == total_delay_ms` most pontosan egyezik.
+- **`_generate_delays(n)` → `max(0, n−1)`.** N delay-t adott N karakterre, a
+  docstring N−1-et dokumentált. Mérve: `0/1/3/100 → 0/0/2/99`.
+- **`_compute_cpm` implementálva** — `NotImplementedError` stub volt, 4 strict
+  xfail blokkolta. Most `60*(len(delays)+1)/sum(delays)`: **220.0** a `[0.3]*10`-re
+  (a komment 220-at mondott, az assertion 200-at — a **komment** volt a helyes);
+  üres bemenetre `0.0`, all-zero-ra `ZeroDivisionError`.
+- **A laza gate javítva:** `pytest.approx(200, rel=1.0)` (100% tolerancia,
+  `[100,400]`-et elfogadott, off-by-2x formulát sem fogott volna meg) →
+  `approx(220, rel=0.02)`. A négy xfail marker eltávolítva; azok a tesztek most
+  valóban futnak.
+  **2796 passed, 0 failed** (szekvenciális, 307s, mérve), xfailed 12 → 8.
+  Gate: 5.0/5.0 SHIP.
+- **Nem ebben a commitban:** a `behavioral_engine.py:199` swap (következő item).
+
 ## [1.36.12] — 2026-10-05
 
 - **Implementálja a viselkedési gépelésihívást (`behavioral_typing.py`)** —
