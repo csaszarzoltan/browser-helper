@@ -1,6 +1,5 @@
 """Tests for behavioral_engine — HumanProfile + BehavioralEngine."""
 
-import asyncio  # noqa: F401 — patch("asyncio.sleep", ...) resolves it by name
 import json
 import sys
 from pathlib import Path
