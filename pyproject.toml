@@ -37,6 +37,11 @@ markers = [
 ]
 addopts = "-n auto -q"
 asyncio_mode = "auto"
+# A passing xfail means the mark is stale - the feature is implemented and the marker is
+# absorbing the regression it was written to catch. Measured 2026-10-06: 32 of 40 marks were
+# stale, and breaking add_template left the suite green because XPASS is not a failure by
+# default. With strict, a stale mark fails loudly until someone fixes the mark.
+xfail_strict = true
 testpaths = ["tests"]
 
 [tool.ruff]
