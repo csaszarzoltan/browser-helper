@@ -1,0 +1,40 @@
+ROLE: developer. Implement SPEC-6 exactly. You do NOT decide anything — the spec is the contract.
+
+READ FIRST: /home/zoltan/browser-helper/docs/specs/SPEC-6-defect-001-repo-root-collection.md
+
+THE CHANGE, in one line: make a bare repo-root `pytest` collect — delete the two stale root test
+duplicates and pin `testpaths`.
+
+TARGET FILES allowlist — do not widen:
+- `git rm test_proxy_pool_enhanced.py test_rate_limiter.py` (both at the REPO ROOT, not under tests/)
+- `pyproject.toml` — add `testpaths = ["tests"]` under `[tool.pytest.ini_options]` (:32-39)
+- `.agent-pipeline/04_defects/DEFECT-001-repo-root-pytest-cannot-collect.md` — apply the three
+  corrections from SPEC-6 item 4 and set `Status:` to fixed.
+- NOTHING ELSE. Do NOT add `tests/__init__.py` (SPEC-6 explains why). Do NOT touch the open verdict.
+  Do NOT change the version. Do NOT touch `tests/test_parallel_session_isolation.py` (its guard was
+  already fixed in `38e9def` — SPEC-6 item 4.2). If you think the allowlist is wrong, STOP and say so.
+
+WHY THIS IS SAFE (the orchestrator and two agents each measured it — reproduce if you doubt it):
+- Root `test_proxy_pool_enhanced.py` is byte-identical to its `tests/` twin (`md5 a2dc186a...`).
+- Root `test_rate_limiter.py` is the OLDER copy: 431 lines vs 512, and it still contains the flaky
+  `kstest(p > 0.05)` oracle that commit `507fd61` replaced in the `tests/` copy. `diff` shows the only
+  deltas are the `507fd61` hunk and a `:403` defaults-reset. Nothing unique is wanted.
+- Zero importers outside the files themselves (`grep -rn` across *.py/*.toml).
+- Today's failure: `pytest --collect-only` → `2849 tests collected, 2 errors, Interrupted`.
+
+ACCEPTANCE — run all four, paste the output, report each item even if your answer is NO:
+1. `git ls-files | grep -E '^test_.*\.py$'` → no output (exit 1): the root duplicates are gone.
+2. `grep -n 'testpaths' pyproject.toml` → `testpaths = ["tests"]`.
+3. `timeout 200 .venv/bin/python -m pytest --collect-only -q -p no:randomly -o addopts='' 2>&1 | tail -3`
+   → NO `ERROR` lines, NO `Interrupted`. This is the command that fails today; it must pass now.
+4. `timeout 590 .venv/bin/python -m pytest tests/ -o addopts='' --no-header -q -p no:randomly --ignore=tests/test_parallel_session_isolation.py`
+   → `2806 passed, 0 failed`. This takes ~5.5 minutes — run it, do not assume.
+
+BUDGET: 700 seconds. If you run out, report which acceptance items are done and which are not.
+
+DO NOT: commit, push. Leave the tree with your changes staged/unstaged for the orchestrator.
+The `git rm` is the one deletion the spec authorises — no other file may be removed.
+
+OUTPUT: /tmp/dispatch-log/bh-dev-6.md — plus a second copy inside the repo at
+analysis/loop-artifacts/iteration6/bh-dev-6.md.
+ACCEPTANCE: every item numbered and answered, each with the command and its real output.

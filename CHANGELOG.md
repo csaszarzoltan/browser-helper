@@ -4,6 +4,30 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.19] — 2026-10-05
+
+- **A repo-gyökérben futtatott `pytest` mostantól collectál — három hónapja el sem indult.** A hiba:
+  `2849 tests collected, 2 errors, Interrupted`. Az ok: `tests/__init__.py` nem létezik, így a
+  pytest két különböző gyökérből **ugyanazon a modulnéven** importálja ugyanazt a fájlnevet
+  (`import file mismatch`).
+- **A fix:** (a) a két elavult gyökér-duplikátum törölve (`test_rate_limiter.py`,
+  `test_proxy_pool_enhanced.py`), (b) `testpaths = ["tests"]` a `pyproject.toml`-ban.
+  **(c) `tests/__init__.py` szándékosan NEM került be:** az ~2800 teszt import-rezsimjét billentené,
+  és egyedül hagyva **mindkét** példányt collectálhatóvá tenné — visszahozva a flaky `kstest`
+  orákulumot, amit a v1.36.18 épp lecserélt.
+- **A törölt gyökér-`test_rate_limiter.py` elavult volt:** 431 sor a `tests/` példány 512 sorával
+  szemben, és **még mindig a régi, flaky `kstest(p > 0.05)` orákulumot tartalmazta** — a cáfolt
+  állítás túlélte a kódot, ezúttal fájl-szinten. A törléssel semmi egyedi, még kívánt tartalom nem
+  veszett el (a `test_proxy_pool_enhanced` pár byte-identikus volt, `md5 a2dc186a…`).
+- **Mérve:** A1 a gyökér-duplikátumok eltűntek (`git ls-files` üres); A2 `testpaths = ["tests"]` a
+  `pyproject.toml:40`-ben; A3 a bare-root collect **`2849 collected, 0 error, exit 0`** (előtte 2
+  error); A4 a scoped kapu **`2806 passed, 0 failed`**; bónusz: a **teljes bare-root futás
+  `2808 passed, exit 0`** (előtte el sem indult).
+- **A `DEFECT-001` fájl három elavult állítása javítva** (a „byte-identical" már csak az egyik párra
+  igaz; a Chrome-guard **már javítva** `38e9def`-ben — nem javítottuk újra; a „two failing tests"
+  valójában skip), `Status: fixed`.
+- **Gate: APPROVE 5,0/5,0** (5·5·5·5·5).
+
 ## [1.36.18] — 2026-10-05
 
 - **A harmadik és negyedik probabilisztikus gate cseréje — a loop v1.36.17-ben csak kettőt talált

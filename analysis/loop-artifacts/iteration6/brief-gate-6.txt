@@ -1,0 +1,41 @@
+ROLE: reviewer — the binding gate. Score the commit and print a verdict. Do NOT edit, commit, revert, or delete.
+
+COMMIT: `13ac740` in /home/zoltan/browser-helper. SPEC: `docs/specs/SPEC-6-defect-001-repo-root-collection.md`.
+
+WHAT IT DOES: makes a bare repo-root `pytest` collect. Two stale root test duplicates were deleted
+(`git rm test_rate_limiter.py test_proxy_pool_enhanced.py`) and `testpaths = ["tests"]` was added to
+`pyproject.toml:40`. The DEFECT-001 doc's three stale claims were corrected.
+
+CLAIMS TO ATTACK — verify each by running it yourself:
+1. `git show --stat 13ac740` deletes ONLY the two root duplicates and modifies only `pyproject.toml`
+   + the DEFECT-001 doc. Nothing else. No `src/`, no `tests/` file.
+2. `git ls-files | grep -E '^test_.*\.py$'` → no output. Both root duplicates are gone from the INDEX.
+3. `timeout 200 .venv/bin/python -m pytest --collect-only -q -p no:randomly -o addopts=''` → NO
+   `ERROR`, NO `Interrupted`, exit 0. (Before this commit it was `2849 collected, 2 errors`.)
+4. `timeout 590 .venv/bin/python -m pytest tests/ -o addopts='' --no-header -q -p no:randomly --ignore=tests/test_parallel_session_isolation.py`
+   → `2806 passed, 0 failed`. Takes ~5 min — run it.
+5. The deleted root `test_rate_limiter.py` contained nothing that is still wanted. Check
+   `git show 13ac740 -- test_rate_limiter.py` and confirm the remaining
+   `tests/test_rate_limiter.py` covers the same 43 test names.
+6. `tests/__init__.py` was NOT added (SPEC-6 says it changes the import regime for the whole suite
+   and would re-collect the stale copy). Confirm it is absent and rule on whether skipping it was right.
+7. Mandated-step audit: this iteration ran `explore`, `reviewer`, `spec-author` (as SPEC-6),
+   `developer`, `reviewer` (gate). It did NOT run `tester`. Rule whether that was legitimate here —
+   the change is a deletion + one config line — or name it a finding.
+
+SCORE FIVE DIMENSIONS 1–5, then the average: brief quality · target choice · verification ·
+scope discipline · process honesty. Threshold 4.0.
+
+PRINT, in this order:
+- the five scores and the average (one line)
+- the command output you actually saw for items 2, 3 and 4
+- **one word on its own line: APPROVE or REQUEST-CHANGES**
+- then your findings, most severe first
+
+Write the report FIRST (once you have items 2-4 measured), then refine it.
+
+BUDGET: 900 seconds. If you run out, print what you have plus the word `PARTIAL`.
+
+OUTPUT: /tmp/dispatch-log/bh-gate-6.out (the queue captures this). Second copy inside the repo:
+analysis/loop-artifacts/iteration6/bh-gate-6.md
+ACCEPTANCE: a number per dimension, the average, and one of the two verdict words.
