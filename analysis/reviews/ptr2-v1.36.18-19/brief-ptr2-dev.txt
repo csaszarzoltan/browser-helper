@@ -1,0 +1,42 @@
+ROLE: developer. Answer these questions about the work YOU did in /home/zoltan/browser-helper.
+This is an audit, not a new task. Do not edit, commit, or run anything that writes.
+
+YOU ARE ONE OF TWO DEVELOPER DISPATCHES. Two iterations ran today:
+- Iteration 5 (v1.36.18): replaced the two single-draw KS oracles in `tests/test_rate_limiter.py`
+  with pinned-draw deterministic gates. Brief: `analysis/loop-artifacts/iteration5/brief-dev-5.txt`,
+  report `bh-dev-5.md`, commit `507fd61`.
+- Iteration 6 (v1.36.19): made a bare repo-root `pytest` collect — deleted the two root test
+  duplicates, added `testpaths = ["tests"]`. Brief: `analysis/loop-artifacts/iteration6/brief-dev-6.txt`,
+  report `bh-dev-6.out` (58 bytes), commit `13ac740`.
+
+ANSWER ALL 13. Report each even if your answer is NO. If you cannot prove an answer with a file:line
+or a command output, answer exactly `not established` — do not reason your way to one.
+
+Q1  What was the acceptance criterion, and how did you verify it was met?
+Q2  Which command proved the change works, and what was its actual output?
+Q3  What did you NOT do that the brief asked for, and why?
+Q4  What did you change that was NOT in your Target Files allowlist?
+Q5  What did you assume without measuring?
+Q6  Did any other dispatch touch a file you wrote? Which file, and how did you know?
+Q7  Did the work you did commit? Which commit SHA is yours?
+Q8  What would you do differently if you ran this again tomorrow?
+Q9  Which clause of THIS BRIEF did you have to interpret, and what did you assume? Name the sentence.
+Q10 Was anything you did NOT do that this brief asked for? Answer with the reason — budget, scope, or
+    the brief not asking.
+Q11 Would a reader of your report alone know you completed the WHOLE brief? If not, say what signals it.
+Q12 Does the symbol you tested have a production caller? Run the grep and name the call site.
+Q13 Did you quote the stall banner token in your report?
+
+SPECIFIC QUESTION FOR THE ITERATION-6 DISPATCH: your artifact was **58 bytes**:
+`"All four edits are in. Now running the acceptance checks."` — the timeout killed you before the
+acceptance items were reported, but the four edits had already landed. **Say plainly which acceptance
+items you had actually RUN when you were cut off, and which you had only intended to run.** The
+orchestrator re-ran all four itself (A1 exit 1, A2 `testpaths = ["tests"]`, A3 `2849 collected 0
+error`, A4 `2806 passed`) — so this is about what YOUR report could have proved, not about whether the
+work was right.
+
+BUDGET: 500 seconds. If you run out, say which items you completed.
+
+OUTPUT: /tmp/dispatch-log/ptr2-dev.out (the queue captures this). Second copy inside the repo at
+analysis/reviews/ptr2-v1.36.18-19/ptr2-dev.md
+ACCEPTANCE: all 13 numbered and answered, each with a file:line or command output or `not established`.

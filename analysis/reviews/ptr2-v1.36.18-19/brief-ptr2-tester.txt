@@ -1,0 +1,42 @@
+ROLE: tester. Answer these questions about a loop that ran in /home/zoltan/browser-helper.
+This is an audit. Do not edit, commit, or run anything that writes.
+
+**You were NOT dispatched in this loop.** That is the thing being audited — not by you as an accused
+party, but because you are the role whose absence has a measurable consequence. Read what shipped and
+answer honestly about what a `tester` dispatch would and would not have added.
+
+What shipped today (two iterations, both gated APPROVE):
+- v1.36.18 (`507fd61`): `tests/test_rate_limiter.py:240-268` — two single-draw KS oracles replaced by
+  pinned-draw deterministic gates. The OLD oracle rejected 5.0% of CORRECT draws (measured 10/200) and
+  was blind to a sorted-linear draw (KS p=1.0000). Test-only; no `src/` file changed.
+- v1.36.19 (`13ac740`): a bare repo-root `pytest` did not collect (`2849 collected, 2 errors`,
+  three months old). Fixed by `git rm`ing two stale root test duplicates + `testpaths = ["tests"]`.
+  `tests/__init__.py` was deliberately NOT added.
+
+Evidence you can read: `analysis/loop-artifacts/iteration5/`, `analysis/loop-artifacts/iteration6/`,
+`analysis/reviews/post-task-review-v1.36.12-17.md`, `docs/specs/SPEC-5-*.md`, `docs/specs/SPEC-6-*.md`.
+
+ANSWER ALL SIX. Report each even if your answer is NO. If you cannot prove an answer with a file:line
+or a command output, answer exactly `not established`.
+
+1. For each of the two changes, state whether **a `tester` dispatch would have added any verification
+   the `reviewer` gate could not**. Name the specific check you would have run, or say `none`.
+2. The skill's rule is: *a green mocked suite is not acceptance for anything that speaks a wire
+   protocol.* Do either of these two changes touch a wire protocol? Cite the file:line that decides it.
+3. `tests/test_rate_limiter.py` exercises `RateLimiter.get_delay()`, which IS called in production
+   (`src/cdp_client.py:665`). Does that make the pinned-draw gate an end-to-end verification, or still
+   a unit verification? Say what a `tester` would do differently.
+4. The v1.36.19 change DELETED two tracked test files. Name the check you would run before accepting a
+   deletion like that, and whether the loop's evidence already covers it (`git show 13ac740`,
+   `git show 13ac740^:test_rate_limiter.py | grep -c 'def test_'`).
+5. The reviewer gate scored both changes 5.0 and 4.8. Is a gate score a substitute for your role?
+   Answer with the measurement the skill cites about what a gate re-running the developer's own suite
+   can and cannot see.
+6. Name the ONE test you would add to this repo today if you had 10 minutes, and the defect class it
+   would guard. Or say `none` and why.
+
+BUDGET: 400 seconds. If you run out, say which items you completed.
+
+OUTPUT: /tmp/dispatch-log/ptr2-tester.out. Second copy inside the repo at
+analysis/reviews/ptr2-v1.36.18-19/ptr2-tester.md
+ACCEPTANCE: all six numbered and answered, each with a file:line or command output or `not established`.
