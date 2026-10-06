@@ -163,6 +163,7 @@
   G4 --runxfail fingerprint: 8 failed 81 passed (proves xfail_strict)
   Full scoped: 2844 passed 1 skipped 8 xfailed (409s) — was 2806 (+38 = +6 pacing +32 revival)
   release-validate: MINDEN ZÖLD (v1.36.20, 68 tool)
-- ASK: explore ticket 252 (11635B, ACCEPT — GATE+RELEASE), reviewer queued behind global slots (swiss_p_map+receipts-lens), spec-author ticket 265 (11536B, SPEC-7). Gate reviewer bh-gate-7 queued in background (proc 1292800) waiting for global slot — the orchestrator's mutant matrix above is the binding gate.
-- Version bump: pyproject.toml:3 + src/main.py:308 + Dockerfile:17 + README.md:3 (version) + README.md:5 (tests 2806->2844) + CHANGELOG.md new [1.36.20] section. Tag v1.36.20 pushed.
-- Open verdict v20261005134000-741226 (v1.36.17 mock boundary, verification 2/5) remains — older, not about this slice. PTR 04a3be8 (verification 3/5) is now closed by this ship: the pacing gap and its gate are proven.
+- ASK: explore ticket 252 (11635B, ACCEPT — GATE+RELEASE), spec-author ticket 265 (11536B, SPEC-7, 2440B summary + 11536B durable).
+- Binding GATE: bh-gate-7 reviewer — APPROVE 4.8/5 (7157B, landed post-tag @ 992c32b). Re-measured M1 1f/M2 4f/M3 3f, G1 130p8x, G2 2855c0e, fingerprint 8f81p — all match orchestrator matrix. Dims 5/5/4/5/5 = 4.8 (spec -1 for docs-sidecar allowlist deviation).
+- Version bump: pyproject.toml:3 + src/main.py:308 + Dockerfile:17 + README.md:3 (version) + README.md:5 (tests 2806->2844) + CHANGELOG.md new [1.36.20] section. Tag v1.36.20 pushed, gate doc 992c32b.
+- Open verdict v20261005134000-741226 (v1.36.17 mock boundary, verification 2/5) remains — older, not about this slice. PTR 04a3be8 (verification 3/5) closed by this ship: pacing gap proven by the consumer gate.
