@@ -1,0 +1,19 @@
+DONE — both report copies written, identical content, tree contains only my report.
+
+```
+dispatch:  (inline brief, no brief file)
+agent:     explore
+repo:      /home/zoltan/browser-helper @ 3cb1bf2
+brief:     n/a — inline brief, no file to hash (sha not attempted)
+verdict:   none - first pass (open verdict v20261005134000-741226 observed in analysis/next-moves.md:24, left open per its own instruction)
+status:    DONE — all 5 items answered with file:line / command evidence. NOT committed per brief's explicit "do not commit" (orchestrator commits after reviewer gate); repo copy staged by no one, tree shows only my untracked dir.
+```
+
+**Answers in one line each:**
+1. **YES, DEFECT-001(a) is the highest-value next item** — `.agent-pipeline/04_defects/` holds only DEFECT-001, and I reproduced the failure (`2849 collected, 2 errors`, `Interrupted: 2 errors`). But **part (b) is already fixed** by `38e9def` (`tests/test_parallel_session_isolation.py:112-123` now asserts `browser_available`) — the defect file's guard paragraph is STALE.
+2. **Ship (a)+(b), skip (c):** (a) `git rm` of the two root duplicates removes the collision (nothing imports them — zero hits); (b) `testpaths = ["tests"]` in `pyproject.toml:32-39` is the durable half. (c) `tests/__init__.py` alone would double-collect the stale root gates and interact with both `conftest.py:32` / `tests/conftest.py:26` path hacks — widest blast radius, zero residual benefit.
+3. **Root `test_rate_limiter.py` is safe to delete:** root 431 lines vs `tests/` 512, same 43 test names; every differing hunk is old-probabilistic-gate → new-pinned-gate (uniform KS p-value, log-normal Lilliefors-invalid gate, missing `:404` defaults-reset hunk). Root contains nothing wanted. Proxy-pool pair is byte-identical (917 lines each).
+4. **Post-fix must:** `git ls-files | grep -E '^test_.*\.py'` empty; `grep testpaths pyproject.toml` set; bare-root `--collect-only` exit 0 with zero ERRORs; scoped 5-min suite re-run shows `failed=0, error=0` (I did NOT re-run it — 400 s budget; counts quoted from defect file).
+5. **Misleading signals:** defect file overstates work (guard done); my suite counts are quoted not re-measured; brief SHA is n/a by construction; diff direction by content-match to SPEC-5/CHANGELOG/`507fd61`, not per-hunk blame.
+
+Artifacts: `/tmp/dispatch-log/bh-explore-6.md` (10530 B) + identical repo copy `analysis/loop-artifacts/iteration6/bh-explore-6.md` (10530 B). `git status --short` shows exactly `?? analysis/loop-artifacts/iteration6/` and nothing else — no product/test file touched.

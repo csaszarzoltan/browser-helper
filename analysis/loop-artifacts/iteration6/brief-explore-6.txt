@@ -1,0 +1,43 @@
+ROLE: explore. ONE narrow question: is DEFECT-001 the highest-value next item in
+/home/zoltan/browser-helper, and what is the correct fix?
+
+CONTEXT (orchestrator-measured this run — reproduce or refute):
+- HEAD `3cb1bf2`, tree clean, `origin/main` in sync, tag `v1.36.18`. Suite via the scoped command:
+  `2806 passed, 0 failed`. A bare repo-root `pytest` does not collect: `Interrupted: 2 errors during
+  collection` (duplicate module names `test_rate_limiter` and `test_proxy_pool_enhanced` imported from
+  both the repo root and `tests/`).
+- `tests/__init__.py`: absent. `testpaths` in `pyproject.toml`: absent.
+- The root duplicates are git-tracked. `cmp` says `test_proxy_pool_enhanced.py` is BYTE-IDENTICAL to
+  its `tests/` twin, while `test_rate_limiter.py` DIFFERS (the `tests/` copy carries a
+  defaults-reset hunk near :404 that the root copy lacks — the root copy is the STALE one).
+- DEFECT-001 is filed at `.agent-pipeline/04_defects/DEFECT-001-repo-root-pytest-cannot-collect.md`,
+  Status open. The previous iteration's two agents both ranked it second; a reviewer ruled it
+  "ABOVE the line".
+
+ANSWER ALL FIVE ITEMS. Report each even if your answer is NO, and say what you checked to establish NO.
+
+1. Is DEFECT-001 the highest-value next item, or does something outrank it? Name file:line evidence.
+2. The fix has (at least) three candidate shapes. For EACH, say whether it is correct and what it
+   costs: (a) delete the two stale root duplicate files; (b) add `testpaths = ["tests"]` to
+   `pyproject.toml`; (c) add `tests/__init__.py`. Name which combination you would ship and WHY,
+   including what each one does NOT fix.
+3. Is the root `test_rate_limiter.py` copy safe to delete, given it DIFFERS from the `tests/` copy?
+   Diff them and say what the root copy contains that the maintained copy does not. If the root copy
+   has anything unique that is still wanted, say so.
+4. After the fix, what EXACTLY must be true? Give the commands and their expected output — both the
+   bare-root command that must now collect, and the scoped command that must stay green.
+5. Anything the reader would get wrong from your report alone? Say what signals it.
+
+BUDGET: 400 seconds. If you run out, report which numbered items you completed and which you did not.
+DO NOT decide that the fix ships, do not edit/commit anything, do not delete files. You propose; the
+orchestrator verifies and a different agent implements. You MAY run read-only commands (`cmp`, `diff`,
+`pytest --collect-only`, `grep`).
+
+TARGET FILES for reading: `pyproject.toml`, the two root `test_*.py` duplicates,
+`tests/test_rate_limiter.py`, `tests/test_proxy_pool_enhanced.py`,
+`.agent-pipeline/04_defects/DEFECT-001-repo-root-pytest-cannot-collect.md`.
+
+OUTPUT: /tmp/dispatch-log/bh-explore-6.md — plus a second copy inside the repo at
+analysis/loop-artifacts/iteration6/bh-explore-6.md (the repo copy is the durable one; write it even
+though it is a tree write — the "do not edit" clause means product/test files, not your own report).
+ACCEPTANCE: all five items numbered and answered, each with a file:line or command output.

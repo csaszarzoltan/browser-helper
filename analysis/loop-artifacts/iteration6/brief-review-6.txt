@@ -1,0 +1,38 @@
+ROLE: reviewer. ONE narrow question: is the DEFECT-001 fix correct and complete, and did the
+v1.36.18 release leave anything wrong?
+
+CONTEXT (orchestrator-measured this run — reproduce or refute):
+- HEAD `3cb1bf2`, tag `v1.36.18`, tree clean. `git describe --tags --abbrev=0` → `v1.36.18`.
+  `/health` → `version 1.36.18, connected=true`.
+- `tests/test_rate_limiter.py:240-268` was replaced this iteration (commit `507fd61`) with pinned-draw
+  deterministic gates; the full suite is `2806 passed, 0 failed`.
+- DEFECT-001 (`.agent-pipeline/04_defects/DEFECT-001-*.md`, Status open): a bare repo-root `pytest`
+  aborts with `Interrupted: 2 errors during collection` — duplicate module names. Root
+  `test_proxy_pool_enhanced.py` is byte-identical to `tests/`; root `test_rate_limiter.py` DIFFERS
+  (the `tests/` copy is newer and carries a defaults-reset hunk near :404).
+- A verdict `v20261005134000-741226` (REQUEST-CHANGES on `73b5d52`) is still OPEN, naming the mocked
+  suite that pinned an invalid CDP sequence. This iteration did NOT resolve it.
+- The v1.36.18 CHANGELOG entry and the version strings across `pyproject.toml`, `src/main.py`,
+  `Dockerfile`, `README.md`, `CHANGELOG.md` were all bumped this iteration. Verify they AGREE.
+
+ANSWER ALL FIVE ITEMS. Report each even if your answer is NO, and say what you checked to establish NO.
+
+1. Does DEFECT-001's own text still describe reality? The previous iteration found one stale detail
+   in it ("byte-identical duplicates" — now only ONE of the two pairs is). Read it and report every
+   claim in it that is no longer true, with the command that refutes it.
+2. Is the proposed fix (delete the stale root duplicates + `testpaths` + `tests/__init__.py`) safe?
+   Say what breaks for each part. Is deleting root `test_rate_limiter.py` safe given the DIVERGENCE —
+   and which copy is the one under test?
+3. Did the v1.36.18 release leave a version claim wrong anywhere? Check the tag, the version string in
+   the tree, the CHANGELOG's newest count, and the README badge against your own measurement.
+4. Is the open verdict `v20261005134000-741226` still fully open, or does `507fd61`/`4b29204` resolve
+   any part of it? Name the commit that resolves it, or say it is still fully open.
+5. Anything the reader would get wrong from your report alone? Say what signals it.
+
+BUDGET: 400 seconds. If you run out, report which numbered items you completed and which you did not.
+DO NOT decide the fix, do not edit/commit/delete anything. Read-only. You MAY run `pytest
+--collect-only`, `cmp`, `diff`, `grep`, and read files.
+
+OUTPUT: /tmp/dispatch-log/bh-review-6.out (the queue captures this) — plus a second copy inside the
+repo at analysis/loop-artifacts/iteration6/bh-review-6.md.
+ACCEPTANCE: all five items numbered and answered, each with a file:line or command output.
