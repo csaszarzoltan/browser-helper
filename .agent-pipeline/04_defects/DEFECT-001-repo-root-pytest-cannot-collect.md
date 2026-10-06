@@ -3,7 +3,7 @@
 **Found by:** orchestrator, while independently re-measuring the v1.36.12→17 review's "2805 passed"
 claim. **Not** introduced by that loop — see provenance below.
 
-**Status:** open, repo-side, pre-existing (three months old).
+**Status:** fixed (SPEC-6, v1.36.19) — root duplicates deleted, `testpaths = ["tests"]` pinned.
 
 ## Impact
 
@@ -22,17 +22,9 @@ Two consequences, both real:
 
 1. **The import errors abort collection**, so a root-level run does not even reach the tests it could
    have run. `2 errors during collection` is reported as the headline, not the state of the suite.
-2. **The two failing tests need a live Chrome.** They fail with empty tab titles (`''`), which is what
-   an absent browser looks like. Their module-level guard skips only when the *service* is unreachable:
-
-   ```python
-   # tests/test_parallel_session_isolation.py:112-123
-   """Verify the live service is up; skip the module if not."""
-   except Exception as exc:
-       pytest.skip(f"browser-helper service not reachable: {exc}")
-   ```
-
-   The service can be up while no Chrome is attached, and then the module does not skip — it fails.
+2. **The two live-Chrome tests skip, not fail.** Fixed in `38e9def`: the guard in
+   `tests/test_parallel_session_isolation.py:112-123` asserts `st.get("browser_available")`
+   inside the `try`, so "service up but no Chrome attached" now `pytest.skip`s instead of failing.
 
 ## Root cause
 
@@ -42,14 +34,19 @@ Two independent problems share one symptom.
 `tests/test_proxy_pool_enhanced.py` and `test_proxy_pool_enhanced.py` as the *same* module name:
 
 ```
-34135 B  test_proxy_pool_enhanced.py
-34135 B  tests/test_proxy_pool_enhanced.py     # byte-identical duplicates
+34135 B  test_proxy_pool_enhanced.py            # (deleted by SPEC-6)
+34135 B  tests/test_proxy_pool_enhanced.py      # byte-identical to the deleted root copy
+18961 B  test_rate_limiter.py                   # (deleted by SPEC-6 — older copy, 431 lines)
+23028 B  tests/test_rate_limiter.py             # newer copy, 512 lines; differs since 507fd61
 ```
 
-Both are tracked. `test_rate_limiter.py` has the same pair. Tracked since **2026-08-14** (`29da9ee`).
+Only the `test_proxy_pool_enhanced` pair was byte-identical (`md5 a2dc186a...`); the
+`test_rate_limiter` pair differed (`cmp`: byte 10871, line 241) since `507fd61` replaced the
+flaky `kstest(p > 0.05)` oracle in the `tests/` copy. Tracked since **2026-08-14** (`29da9ee`).
 
-**b) A module-scoped skip guard that checks the wrong thing.** It asks "is the HTTP service up?" when
-the test needs "is a Chrome attached?". A green service with no browser is the failing configuration.
+**b) A module-scoped skip guard that checked the wrong thing — already fixed in `38e9def`.**
+It asked "is the HTTP service up?" when the test needed "is a Chrome attached?". The guard now
+asserts `browser_available`, so a green service with no browser skips instead of failing.
 
 `.worktrees/` is gitignored and is **not** the cause; `--ignore=.worktrees` does not fix collection.
 
@@ -67,15 +64,15 @@ $ timeout 590 .venv/bin/python -m pytest tests/ -o addopts='' --no-header -q -p 
 module. So `2805 passed` is **true of that command** and **false of the repository**. Neither party was
 wrong; the claim was narrower than it read.
 
-## Suggested fix (not applied — outside this review's scope)
+## Fix applied (SPEC-6)
 
-1. Delete the root-level duplicates `test_proxy_pool_enhanced.py` and `test_rate_limiter.py`, **or**
-   add `tests/__init__.py` so the two roots cannot collide on module names.
-2. Replace the service-only guard with a Chrome-reachability guard, or mark the module
-   `@pytest.mark.integration` and exclude it from the default run.
-3. Add `testpaths = ["tests"]` to `[tool.pytest.ini_options]` so a bare `pytest` cannot wander into the
-   repo root at all. **This is the durable fix**: it makes the "green suite" claim true without the
-   caller having to remember a flag.
+1. Deleted the root-level duplicates `test_proxy_pool_enhanced.py` and `test_rate_limiter.py`
+   via `git rm`. (`tests/__init__.py` deliberately NOT added — it would leave both copies
+   collectable and resurrect the flaky root oracle.)
+2. Chrome-reachability guard already in place via `38e9def` — not re-fixed here.
+3. Added `testpaths = ["tests"]` to `[tool.pytest.ini_options]` so a bare `pytest` cannot wander
+   into the repo root at all. **This is the durable fix**: it makes the "green suite" claim true
+   without the caller having to remember a flag.
 
 ## Provenance
 

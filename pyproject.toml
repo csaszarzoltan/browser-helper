@@ -37,6 +37,7 @@ markers = [
 ]
 addopts = "-n auto -q"
 asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py311"
