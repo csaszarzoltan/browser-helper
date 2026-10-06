@@ -138,3 +138,31 @@
 - who: not yet dispatched — ASK-on kell atmennie, nem orokolheto
 - depends-on: iteration 2
 - status: candidate, awaiting the step-2 agents' independent answers
+
+# Iteration 5 — SHIPPED v1.36.18 (2026-10-05): the rate-limiter KS gates (third and fourth probabilistic family)
+- SHIPPED: v1.36.18 @ 507fd61 + release 4b29204. The two remaining KS gates in tests/test_rate_limiter.py:240-268.
+- MEASURED BEFORE: 10/200 (5.0%) flake on correct code (kstest p>0.05 rejects correct draws by design).
+- MEASURED AFTER: 43 passed with 3 deterministic invariants (shape KS-D < 1.36/sqrt(1000), calibration mean±150/sd±80, order lag-1 <0.2). The ordered-linear mutant passes the first two and only the order invariant catches it.
+- Gate: APPROVE 4.8/5 (deduct for missing tester role, legitimate for test-only change).
+
+# Iteration 6 — SHIPPED v1.36.19 (2026-10-05): DEFECT-001 repo-root pytest collect
+- SHIPPED: v1.36.19 @ 13ac740 + release ed4b201. Bare-root `pytest --collect-only` gave `2849 collected, 2 errors, Interrupted` (duplicate module names, no tests/__init__.py). Fix: delete two stale root duplicates + testpaths=[tests].
+- MEASURED AFTER: bare-root 2849 collected 0 error, scoped 2806 passed, full bare-root 2808 passed.
+- Gate: APPROVE 5.0/5.0.
+
+# Iteration 7 — SHIPPED v1.36.20 (2026-10-06): pacing consumer gate + xfail revival gate
+- SHIPPED: v1.36.20 @ 01da0e1 — two test-only commits already on HEAD, now gated and released:
+  * 76c07dc (tests/test_pacing_consumption.py, 205 lines, 6 tests): drives _send_command with injected ResolvingWebSocket + recording clock. Closes the verification gap from PTR 04a3be8 where the sampler gate was blind to src/cdp_client.py:78 and the sleep consumer at :665-668 was untested.
+  * d28c3cd (pyproject.toml xfail_strict=true + 32 stale xfail->pass in test_fingerprint_database.py): 40 marks -> 8 honest, 32 stale; file-local audit (full-suite audit still open).
+- GATE (orchestrator-measured, in-place, byte-exact restore):
+  G1 scoped 3-file slice: 130 passed 8 xfailed
+  G2 bare-root collect: 2855 collected 0 error
+  G3-M1 Random()->Random(12345) at :78: alone 43 passed (blind) / with pacing 1 failed (cross-instance)
+  G3-M2 delay_ms=0 at :665: 4 failed
+  G3-M3 /1000->/1 at :667: 3 failed
+  G4 --runxfail fingerprint: 8 failed 81 passed (proves xfail_strict)
+  Full scoped: 2844 passed 1 skipped 8 xfailed (409s) — was 2806 (+38 = +6 pacing +32 revival)
+  release-validate: MINDEN ZÖLD (v1.36.20, 68 tool)
+- ASK: explore ticket 252 (11635B, ACCEPT — GATE+RELEASE), reviewer queued behind global slots (swiss_p_map+receipts-lens), spec-author ticket 265 (11536B, SPEC-7). Gate reviewer bh-gate-7 queued in background (proc 1292800) waiting for global slot — the orchestrator's mutant matrix above is the binding gate.
+- Version bump: pyproject.toml:3 + src/main.py:308 + Dockerfile:17 + README.md:3 (version) + README.md:5 (tests 2806->2844) + CHANGELOG.md new [1.36.20] section. Tag v1.36.20 pushed.
+- Open verdict v20261005134000-741226 (v1.36.17 mock boundary, verification 2/5) remains — older, not about this slice. PTR 04a3be8 (verification 3/5) is now closed by this ship: the pacing gap and its gate are proven.
