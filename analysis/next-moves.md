@@ -1,3 +1,34 @@
+# Iteration 6 — SHIPPED v1.36.19 (2026-10-05): DEFECT-001 repo-root pytest collection
+
+- what: a repo-gyokerben futtatott `pytest` collectaljon. Elotte: `2849 collected, 2 errors,
+  Interrupted` — harom honapja (29da9ee, 2026-08-14). Ok: nincs `tests/__init__.py`, a ket
+  gyoker-duplikatum ugyanazon a modulneven importalodik (`import file mismatch`).
+- SHIPPED: v1.36.19 @ ed4b201, tartalom 13ac740.
+- FIX: (a) `git rm test_rate_limiter.py test_proxy_pool_enhanced.py` (gyoker), (b)
+  `testpaths = ["tests"]` a `pyproject.toml:40`-be. **(c) `tests/__init__.py` SZANDEKOSAN NEM:**
+  ~2800 teszt import-rezsimjet billentené, es egyedul hagyva MINDKET peldanyt collectalhatova
+  teszi -> visszahozna a flaky `kstest` orakulumot. A reviewer fuggetlenul ugyanerre jutott.
+- **A claim tulelte a kodot, FAJL-SZINTEN:** a torolt gyoker-`test_rate_limiter.py` (431 sor) meg
+  MINDIG a regi, flaky `kstest(p > 0.05)` orakulumot tartalmazta (`:240-252`), amit a v1.36.18
+  epp lecserelt a `tests/` peldanyban (512 sor). Semmi egyedi, meg kivant tartalom nem veszett el
+  (a proxy-par byte-identikus volt, `md5 a2dc186a...`; a rate_limiter 43/43 tesztneve megvan).
+- MERVE: A1 `git ls-files | grep '^test_.*py$'` -> ures; A2 `testpaths = ["tests"]`; A3 bare-root
+  collect `2849 collected, 0 error, exit 0`; A4 scoped kapu `2806 passed, 0 failed`; BONUS a teljes
+  bare-root futas `2808 passed, exit 0` (elotte el sem indult).
+- A `DEFECT-001` fajl HAROM elavult allitasa javitva (a reviewer merte): (1) a "byte-identical"
+  mar csak az egyik parra igaz; (2) a Chrome-guard **MAR javitva `38e9def`-ben** — nem javitottuk
+  ujra; (3) a "two failing tests" valojaban skip. Status: fixed.
+- GATE-6: **APPROVE 5.0/5.0** (5·5·5·5·5). A gate fuggetlenul igazolta a scope-ot (4 fajl, +23/-1373),
+  a tartalmat (43/43 tesztnev) es hogy a `tests/__init__.py` kihagyasa helyes.
+- A developer artifactja 58B reszleges riport volt ("All four edits are in. Now running the
+  acceptance checks.") — a diff dontott, az orchestrator futtatta ujra es vette at. Ez a skill
+  "a short artifact is not a stall — diff the target files" szabalyanak a gyakorlata.
+- OPEN VERDICT: `v20261005134000-741226` MARAD NYITVA (a v1.36.17 mockolt-suite hibat nevezi; a
+  live-check klauzula egy modszertani item, nem ez az iteracio).
+- status: CLOSED. Kovetkezo jelolt: nincs (lasd lent).
+- MEGJEGYZES a stop-feltetelrol: az ASK-ot a DEFECT-001 JAVITASA UTAN meg NEM futtattuk ujra,
+  tehat a loop nem mondhatja ki, hogy "nincs tovabb munka" — az csak egy uj ASK-korbol derulne ki.
+
 ## Iteration 5 — SHIPPED v1.36.18 (2026-10-05): a harmadik es negyedik probabilisztikus gate
 
 - what: `tests/test_rate_limiter.py:240-268` — a ket single-draw KS-orakulum cserelje pinnelt-huzas
