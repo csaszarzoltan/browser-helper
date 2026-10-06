@@ -1,6 +1,6 @@
 [project]
 name = "browser-helper"
-version = "1.36.19"
+version = "1.36.20"
 description = "Remote Chrome control proxy with REST API + GUI dashboard"
 requires-python = ">=3.10"
 dependencies = [

@@ -4,6 +4,27 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.20] — 2026-10-06
+
+- **A pacing `sleep` végre bizonyítva — a sampler gate vak volt és a fogyasztót semmi nem fedte.**
+  A `76c07dc` óta létező `tests/test_pacing_consumption.py` (205 sor, 6 teszt) meghajtja a
+  produkciós `_send_command`-ot injektált `ResolvingWebSocket`+óra mellett. Mért, in-place:
+  `src/cdp_client.py:78` (`Random()`→`Random(12345)`) a sampleren **43 passed** (vak),
+  a pacing-gate-tel **1 failed**; `:665` (`delay_ms=0.0`) **4 failed**; `:667`
+  (`/1000.0`→`/1.0`) **3 failed**. A hibaosztály azonos a `keyPress`-ével:
+  a suite a mintavételezőről volt zöld, a `sleep` ágáról nem.
+- **32 elavult `xfail` visszahozva.** A `d28c3cd` óta a suite `8 xfailed` mellett
+  fut; 32 `xfail(P0.1 not implemented: …)` jelölés már implementált kódon ült és
+  `XPASS` → `XFAIL` átmenettel nyelte a törést. Az audit fájl-lokális volt
+  (40 jelölés → 8 őszinte, 32 elavult); teljes-suite audit továbbra is nyitott.
+  `xfail_strict = true` a `pyproject.toml:44`-ben — a jövőbeni elavult jel hangosan bukik.
+- **Mérve (scoped): `2844 passed, 1 skipped, 8 xfailed` (409s)** — előtte
+  `2806 passed`. A `+38 = +6` (pacing) `+32` (xfail-revival). Bare-root
+  `2855 collected, 0 error`. `130 passed, 8 xfailed` a háromfájlos metszeten;
+  `--runxfail 8 failed, 81 passed`.
+- **Gate: a három pacing-mutáns mind pirosra vált** (lásd fent), `release-validate`
+  **MINDEN ZÖLD** (v1.36.20, 68 tool).
+
 ## [1.36.19] — 2026-10-05
 
 - **A repo-gyökérben futtatott `pytest` mostantól collectál — három hónapja el sem indult.** A hiba:

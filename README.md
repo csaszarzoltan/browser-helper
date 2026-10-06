@@ -1,8 +1,8 @@
 # Browser Helper 🦎
 
-![Version](https://img.shields.io/badge/version-1.36.19-blue)
+![Version](https://img.shields.io/badge/version-1.36.20-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Tests](https://img.shields.io/badge/tests-2806%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2844%20passed-brightgreen)
 
 > ### 🔑 **You log in as a human. Your agent works as a machine.**
 >
