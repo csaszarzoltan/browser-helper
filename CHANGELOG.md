@@ -4,6 +4,25 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+## [1.36.21] — 2026-10-07
+
+- **Élő gépelési integrációs kapu — ugyanaz az osztály, mint `pacing` és `keyPress` vak esete.**
+  A `tests/test_behavioral_typing.py` mock-szenvedett (`AsyncMock` mindent zölden enged), ahogy `v1.36.14`
+  is (`keyPress` invalid, `text=null` — 2805 zöld, 1/11 char 400). A `rate_limiter`/pacing már élő,
+  de a gépelési út (`POST /type → behavioral_engine.py:212 → src/behavioral_typing.py → CDP`) sosem
+  volt vezetékezve. Új: `tests/test_typing_live_integration.py` — 244 sor, 3 eset (`"a b"`/`"Hello"`/
+  `"Mix 123!"`), `pytestmark integration`, `POST /eval` readback `input.value`, `BH_STRICT_SESSIONS=1`
+  alatt `X-Session-ID` tánc + module-fixture teardown. A `text=null` olyan bug, mint a `keyPress` volt:
+  whitespace miatt eltüntetett karakter a gépelési úton. Visszaolvasással kontroláljuk, nem mockkal.
+- **Mérve (scoped): `2856 collected` (`--ignore parallel`, was `2853`); bare `2858` (was `2855`); `+3` a gépelési gate**
+  — élő: `3 passed` (`7-9s` valódi Chrome-on, `tabs 0` teardown után), `src/ diff 0`, `AsyncMock(` 0,
+  `pyproject:35` marker már megvolt. Gate: `4.85/5` (`APPROVE`), dimenziók `5/5/5/5/4` —
+  `Correctness 5` (readback), `Coverage 5` (pacing mellé typing is), `Spec 5`, `Quality 5`, `Evidence 4`.
+  Broken-tree RED: `src/behavioral_typing.py:352`/`340` (`keyPress -32602`/`text=null` pop) → `400`.
+  GREEN: `3 passed` élőn, bare `2855→2858`, scoped `2853→2856`.
+- **Gate: a három pacing-mutáns már piros, a typing-mock vak kapu is zárva.** Scoped
+  `2853 collected` → `2856` (`+3` typing), bare `2855` → `2858`; `--runxfail 8f 81p` továbbra is.
+
 ## [1.36.20] — 2026-10-06
 
 - **A pacing `sleep` végre bizonyítva — a sampler gate vak volt és a fogyasztót semmi nem fedte.**
