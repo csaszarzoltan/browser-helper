@@ -167,3 +167,21 @@
 - Binding GATE: bh-gate-7 reviewer — APPROVE 4.8/5 (7157B, landed post-tag @ 992c32b). Re-measured M1 1f/M2 4f/M3 3f, G1 130p8x, G2 2855c0e, fingerprint 8f81p — all match orchestrator matrix. Dims 5/5/4/5/5 = 4.8 (spec -1 for docs-sidecar allowlist deviation).
 - Version bump: pyproject.toml:3 + src/main.py:308 + Dockerfile:17 + README.md:3 (version) + README.md:5 (tests 2806->2844) + CHANGELOG.md new [1.36.20] section. Tag v1.36.20 pushed, gate doc 992c32b.
 - Open verdict v20261005134000-741226 (v1.36.17 mock boundary, verification 2/5) remains — older, not about this slice. PTR 04a3be8 (verification 3/5) closed by this ship: pacing gap proven by the consumer gate.
+
+# Iteration 8 — SHIPPED v1.36.21 (2026-10-07): élő typing integrációs kapu (text=null whitespace gate)
+- SHIPPED: v1.36.21 @ e59e289 — test-only + gate, élő CDP readback. A v1.36.14 keyPress/text=null break (HTTP 400, 1/11 char 400, 2805 zöld mock mellett) osztályának második tagja: a pacing már élő, a typing nem volt.
+  * Új file: `tests/test_typing_live_integration.py` (244 sor, 3 eset `"a b"`/`"Hello"`/`"Mix 123!"`, `pytestmark integration`, `POST /eval` → `input.value` readback, `BH_STRICT_SESSIONS=1` alatt `X-Session-ID` tánc + `scope="module"` teardown `tabs 0`).
+  * Spec: `analysis/loop-artifacts/iteration8/bh-spec-8.md` (48 sor, kézi, mert planner 314 KILLED 882s global-slot wait). Allowlist: csak az új tesztfile, `src/ diff 0`.
+  * Gate: binding reviewer `bh-gate-8.md` (8488B durable, 1844B tmp truncated wrapper) — **APPROVE 4.85/5** (`5/5/5/5/4` → Correctness 5 readback / Coverage 5 pacing mellé typing / Spec 5 / Quality 5 / Evidence 4). Broken-tree RED: `src/behavioral_typing.py:352` (`keyPress -32602`) + `:340` (`text=null` pop) → `400`; GREEN: `3 passed` élőn (7-9s, `tabs 0` teardown után, `AsyncMock(` 0, `pyproject:35` marker pre-present).
+- MÉRVE (orchestrator, in-place):
+  G1 bare collect: `2855 → 2858` (`+3` typing gate) — `--ignore` live `2855`, vele `2858`
+  G2 scoped `--ignore parallel_session_isolation`: `2853 → 2856` (`+3`)
+  G3 live `tests/test_typing_live_integration.py -o addopts='' -p no:randomly`: `3 passed` (8.40s, majd 7.29s), `tabs 0` after `session/close`, `src/ diff 0`
+  G4 `AsyncMock(` count `0` (guard), `pytestmark integration` `1`, `pyproject:35` pre-present
+  Full scoped before: `2844p 1s 8x` → most `2856` scoped / `2858` bare; `release-validate` **MINDEN ZÖLD** (v1.36.21, 68 tool)
+- ASK: explore `11K` + reviewer `15K` függetlenül ugyanezt nevezte (pacing CLOSED, WARN `0` hit — csak docstring próza + `src/cdp_client.py:513` komment), egyezés magas → választott.
+- BUILD: planner `314` KILLED (196s queue + signal, global 3 slot telítve — `255/258/260` 31ks stale), `bh-spec-8.md` kézi pót; developer `318` skeleton `432B` de file EXISTS és élő `3 passed` kétszer verifikált (module-fixture teardown javítva `BH_STRICT_SESSIONS=1` + `tab_budget=3` 429 leak után); tester `325` STALL `exit 124 0B` + test-author `326` KILLED — gate legitimnek ítélte (test-only, élő file maga a kapu).
+- GATE (binding, `1893511` 28821s wait 874s run): APPROVE 4.85/5, 6/6 item YES, ledger `ticket 327`? valójában `bh-gate-8` @ `03:09`, `68` sor durable, `1844` tmp truncated copy restored to `8488`.
+- Version bump 5 hely: `pyproject.toml:3` + `src/main.py:308` + `Dockerfile:17` + `README.md:3` (version) + `README.md:5` (tests `2844→2856`) + `CHANGELOG.md` new `[1.36.21]` (2026-10-07). Tag `v1.36.21` pushed `e59e289`.
+- OPEN VERDICT: `v20261005134000-741226` (v1.36.17 mock boundary, verification 2/5) — e ship a live-check klauzulát zárja (typing integráció élő readback). A verdict-store lezárása külön lépés; next-moves szerint substance CLOSED.
+- KÖVETKEZŐ JELÖLT: nincs mért — a loop 8 iteráció alatt a probabilisztikus gate-családot (`KS` ×4, pacing ×3) + `DEFECT-001` + `text=null` typing gate-et zárta. Új ASK nélkül nem állítható, hogy nincs munka, de a mért backlog üres.
