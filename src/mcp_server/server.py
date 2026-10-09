@@ -6,10 +6,29 @@ Owns: lazy FastMCP creation, ``register_tools()`` loop over the ToolDefRegistry,
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from mcp.server.fastmcp import FastMCP
 
 from .config import MCPSettings, MCPTransport, load_mcp_settings
 from .registry import build_tool_defs
+
+
+def project_version() -> str:
+    """Project version from the repo's pyproject.toml (single source of truth).
+
+    ``serverInfo.version`` used to report the MCP SDK's own version (1.29.0);
+    the installed ``browser-helper`` metadata is stale in editable installs, so
+    the pyproject file is read directly. Returns ``"unknown"`` if it is absent.
+    """
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+    match = re.search(r'^version = "([^"]+)"', text, re.M)
+    return match.group(1) if match else "unknown"
 
 
 class MCPServer:
@@ -30,6 +49,9 @@ class MCPServer:
                 port=self.settings.port,
                 log_level="INFO",
             )
+            # FastMCP has no version kwarg; serverInfo.version comes from the
+            # low-level Server, which reads ``version`` at initialize time.
+            self._mcp._mcp_server.version = project_version()
             self.register_tools(self._mcp)
         return self._mcp
 
