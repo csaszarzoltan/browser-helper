@@ -772,6 +772,11 @@ class CDPClient:
         self._tabs_cache = []
         self._tabs_cache_ts = 0
         result = await self._send_command("Page.navigate", {"url": url})
+        # Page.navigate returns errorText when the load failed (offline, DNS, TLS,
+        # refused connection). Chrome still shows an error page in that case, so
+        # without this check the caller would see "ok" for a page that never loaded.
+        if result.get("errorText"):
+            raise CDPError(f"navigation to {url} failed: {result['errorText']}")
 
         # After navigation, discover tabs to see if a new target was created
         # for this frame. If so, roam the session's WS to the new target.

@@ -21,13 +21,15 @@ import sys
 src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
 sys.path.insert(0, src_dir)
 
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
 
 def main():
     parser = argparse.ArgumentParser(description="Browser Helper API server")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")),
                         help="Server port (default: 8000, or $PORT)")
-    parser.add_argument("--host", type=str, default=os.environ.get("HOST", "0.0.0.0"),
-                        help="Bind address (default: 0.0.0.0, or $HOST)")
+    parser.add_argument("--host", type=str, default=os.environ.get("HOST", "127.0.0.1"),
+                        help="Bind address (default: 127.0.0.1, or $HOST; use 0.0.0.0 to expose on the network)")
     parser.add_argument("--launch-chrome", action="store_true",
                         help="Launch Chrome with CDP debugging on startup")
     parser.add_argument("--profile-dir", type=str, default=None,
@@ -59,6 +61,10 @@ def main():
     import uvicorn
 
     print(f"🚀 Browser Helper starting on http://{args.host}:{args.port}")
+    if args.host not in LOOPBACK_HOSTS and not os.environ.get("API_TOKEN"):
+        print("⚠️  WARNING: bound to a non-loopback address with no API_TOKEN set. "
+              "Every endpoint is open to the network. Set API_TOKEN to protect it.",
+              file=sys.stderr)
     if args.launch_chrome:
         print("   → Auto-launching Chrome with CDP debugging")
         if args.profile_dir:

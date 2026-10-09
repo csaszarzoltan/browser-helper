@@ -27,7 +27,7 @@ def project_version() -> str:
         text = pyproject.read_text(encoding="utf-8")
     except OSError:
         return "unknown"
-    match = re.search(r'^version = "([^"]+)"', text, re.M)
+    match = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
     return match.group(1) if match else "unknown"
 
 

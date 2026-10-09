@@ -363,8 +363,12 @@ class TestBackendStatusEndpoint:
             assert isinstance(data["versions"], dict), "'versions' must be a dict"
 
     @pytest.mark.asyncio
-    async def test_status_default_backend_is_cdp(self):
+    async def test_status_default_backend_is_cdp(self, monkeypatch):
         """AC9: Default backend must be 'cdp' when not configured otherwise."""
+        # backend_manager is process-wide, and other tests switch it. Start from
+        # the configured default so this test does not depend on test order.
+        from main import backend_manager
+        monkeypatch.setattr(backend_manager, "_current_backend", "cdp")
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/backend/status")

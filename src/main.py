@@ -8,6 +8,7 @@ real-time status updates over WebSocket.
 
 import asyncio
 import base64
+import hmac
 import json
 import logging
 import os
@@ -237,7 +238,6 @@ async def lifespan(application: FastAPI):
     if os.environ.get("BH_KEEP_WARM", "1") != "0":
         async def _keep_warm() -> None:
             await asyncio.sleep(3)
-            import httpx as _hx
             while True:
                 try:
                     # v1.36.2: probe TWICE before minting.  A fresh session tab
@@ -259,8 +259,8 @@ async def lifespan(application: FastAPI):
                                 if str(getattr(_s, "target_url", "") or "").startswith(warm_url):
                                     warm_found = True
                                     break
-                        except Exception:  # noqa: BLE001 — registry shape may vary
-                            pass
+                        except Exception as skip_exc:  # noqa: BLE001 — registry shape may vary
+                            logger.debug("best-effort warm-up registry scan failed: %s", skip_exc)
                         if warm_found or _attempt == 2:
                             break
                         await asyncio.sleep(5)
@@ -1285,7 +1285,7 @@ async def auth_middleware(request: Request, call_next):
         ):
             auth_header = request.headers.get("Authorization", "")
             token = auth_header[len("Bearer ") :] if auth_header.startswith("Bearer ") else ""
-            if token != API_TOKEN:
+            if not hmac.compare_digest(token.encode(), API_TOKEN.encode()):
                 return JSONResponse(
                     status_code=401, content={"detail": "Invalid or missing API token"}
                 )
@@ -1829,7 +1829,7 @@ async def _chrome_health_watchdog() -> None:
                             _probe_ok = True
                             break
                         raise ConnectionError(f"Chrome HTTP {resp.status_code}")
-                except Exception as exc:  # noqa: BLE001 — probe: any failure counts
+                except Exception as exc:  # probe: any failure counts
                     _last_exc = exc
                     logger.debug("watchdog probe %d/%d failed: %s", _pi + 1, _FAIL_PROBES, exc, exc_info=True)
                     if _pi + 1 < _FAIL_PROBES:
@@ -2535,11 +2535,11 @@ async def session_new(request: Request,
             "tab_id": existing.tab_id,
             "url": url,
             "reused": True,
-            "warnings": _reuse_warn + [
+            "warnings": _reuse_warn + [(
                 "Session reused — you already had a valid session. Call /session/new "
                 "ONCE and echo X-Session-ID (or the bh_session cookie) on every later "
                 "call; calling /session/new per request opens a new tab each time."
-            ],
+            )],
         })
         return JSONResponse(
             content=body,
@@ -3886,8 +3886,8 @@ async def page_text(wait_ready: bool = Query(False, description="Wait for networ
         if wait_ready:
             try:
                 await _tc.wait_for_ready(timeout)
-            except Exception:  # noqa: BLE001 — wait is best-effort; text still readable
-                pass
+            except Exception as skip_exc:  # noqa: BLE001 — wait is best-effort; text still readable
+                logger.debug("best-effort wait_for_ready before text read failed: %s", skip_exc)
         return await run_op("get_page_text", _tc.get_page_text,
                             sess_override=_SENTINEL_SESSION)
     if wait_ready:
@@ -6182,7 +6182,7 @@ async def agent_expect(body: AgentExpectRequest):
                 else:  # hidden|gone
                     ok = _node is None or not getattr(_node, "visible", False)
                 if ok:
-                    return api_success("agent_expect", {"condition": cond, "selector": body.selector, "ref": body.ref, "matched": True, "elapsed_ms": round((body.timeout - max(0, (deadline - time.monotonic()) * 1000)))})
+                    return api_success("agent_expect", {"condition": cond, "selector": body.selector, "ref": body.ref, "matched": True, "elapsed_ms": round(body.timeout - max(0, (deadline - time.monotonic()) * 1000))})
                 last_err = f"AX ref {body.ref!r} not yet {cond}"
             else:
                 # CSS selector path — evaluate in the page
@@ -6194,10 +6194,10 @@ async def agent_expect(body: AgentExpectRequest):
                     # r.result is JSON string "true"/"false"
                     try:
                         ok = json.loads(val) is True if isinstance(val, str) else bool(val)
-                    except Exception:
+                    except ValueError:
                         ok = val == "true"
                     if ok:
-                        return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True, "elapsed_ms": round((body.timeout - max(0, (deadline - time.monotonic()) * 1000)))})
+                        return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True, "elapsed_ms": round(body.timeout - max(0, (deadline - time.monotonic()) * 1000))})
                     last_err = f"text:{text_needle!r} not in {sel!r}"
                 elif cond in ("visible", "exists"):
                     js = f"JSON.stringify((()=>{{const e=document.querySelector({json.dumps(sel)});return e&&e.offsetParent!==null&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';}})())"
@@ -6205,10 +6205,10 @@ async def agent_expect(body: AgentExpectRequest):
                     val = r.get("result", "false") if isinstance(r, dict) else "false"
                     try:
                         ok = json.loads(val) is True if isinstance(val, str) else bool(val)
-                    except Exception:
+                    except ValueError:
                         ok = False
                     if ok or (cond == "exists" and await _selector_exists(target, sel)):
-                        return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True, "elapsed_ms": round((body.timeout - max(0, (deadline - time.monotonic()) * 1000)))})
+                        return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True, "elapsed_ms": round(body.timeout - max(0, (deadline - time.monotonic()) * 1000))})
                     last_err = f"{sel!r} not yet {cond}"
                 else:  # hidden|gone
                     js = f"JSON.stringify((()=>{{const e=document.querySelector({json.dumps(sel)});return !e||e.offsetParent===null||getComputedStyle(e).visibility==='hidden'||getComputedStyle(e).display==='none';}})())"
@@ -6216,12 +6216,12 @@ async def agent_expect(body: AgentExpectRequest):
                     val = r.get("result", "false") if isinstance(r, dict) else "false"
                     try:
                         ok = json.loads(val) is True if isinstance(val, str) else bool(val)
-                    except Exception:
+                    except ValueError:
                         ok = False
                     if ok:
                         return api_success("agent_expect", {"condition": cond, "selector": sel, "matched": True})
                     last_err = f"{sel!r} not yet {cond}"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — error is captured into last_err and returned to the caller
             last_err = str(exc)[:200]
         if time.monotonic() >= deadline:
             return api_error("agent_expect", "expect_timeout",
@@ -6233,7 +6233,7 @@ async def _selector_exists(target, sel: str) -> bool:
     try:
         r = await target.evaluate(f"JSON.stringify(!!document.querySelector({json.dumps(sel)}))")
         return r.get("result") == "true" if isinstance(r, dict) else False
-    except Exception:
+    except Exception:  # noqa: BLE001 — a failed probe means the element is not present
         return False
 
 
@@ -6254,7 +6254,7 @@ async def agent_bundle(body: ArtifactBundleRequest):
         try:
             shot = await target.screenshot()
             out["screenshot"] = shot
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — reported in screenshot_error; the evidence bundle still returns
             out["screenshot_error"] = str(exc)[:200]
     # console
     if "console" in want:
@@ -6262,7 +6262,7 @@ async def agent_bundle(body: ArtifactBundleRequest):
             await target.start_console_monitoring()
             entries = target.get_console_entries(level="error") if hasattr(target, "get_console_entries") else []
             out["console"] = {"count": len(entries), "entries": entries[-50:]}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — reported in console_error; the evidence bundle still returns
             out["console_error"] = str(exc)[:200]
     # network
     if "network" in want:
@@ -6271,7 +6271,7 @@ async def agent_bundle(body: ArtifactBundleRequest):
             log = await target.get_network_log()
             entries = log.get("entries", []) if isinstance(log, dict) else []
             out["network"] = {"count": len(entries), "entries": entries[-100:]}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — reported in network_error; the evidence bundle still returns
             out["network_error"] = str(exc)[:200]
     # trace: collect recent /logs for the current trace_id + inline JSON zip-like bundle
     if "trace" in want:
@@ -6281,7 +6281,7 @@ async def agent_bundle(body: ArtifactBundleRequest):
             trace_payload = json.dumps({"trace_id": trace_id, "logs": logs, "captured_at": datetime.now(_UTC).isoformat()}, indent=2).encode()
             rec = artifact_store.put(trace_payload, "application/zip", ".zip", metadata={"kind": "trace", "trace_id": trace_id})
             out["trace"] = rec
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — reported in trace_error; the evidence bundle still returns
             out["trace_error"] = str(exc)[:200]
     out["retain"] = body.retain
     return api_success("agent_bundle", out)

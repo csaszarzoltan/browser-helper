@@ -12,11 +12,17 @@ end-to-end.  Skips when the service is not reachable.
 """
 import http.cookiejar
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
 
 import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("BH_LIVE") != "1",
+    reason="live service test: set BH_LIVE=1 with browser-helper running on :8020",
+)
 
 BH = "http://127.0.0.1:8020"
 PROXY_Q = "https://www.google.com/search?q={q}"

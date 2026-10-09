@@ -115,6 +115,13 @@ EXPECTED_TOOLS = [
     "browser_export_batch_spec",
     "browser_visual_diff_locale",
     "browser_rate_hybrid_idle",
+    "set_viewport",
+    "print_pdf",
+    "set_geolocation",
+    "set_offline",
+    "get_performance_metrics",
+    "drag",
+    "accessibility_audit",
 ]
 
 # tool -> required parameter names (spec §8.1: exact required params)
@@ -191,6 +198,13 @@ EXPECTED_REQUIRED_PARAMS = {
     "browser_export_batch_spec": [],
     "browser_visual_diff_locale": ["url"],
     "browser_rate_hybrid_idle": [],
+    "set_viewport": ['width', 'height'],
+    "set_geolocation": ['latitude', 'longitude'],
+    "set_offline": ['offline'],
+    "drag": ['from_selector', 'to_selector'],
+    "print_pdf": [],
+    "get_performance_metrics": [],
+    "accessibility_audit": [],
 }
 
 # tool -> (capability_id, expected status)
@@ -267,6 +281,13 @@ EXPECTED_CAPABILITY = {
     "browser_export_batch_spec": ("agent.flow", "ready"),
     "browser_visual_diff_locale": ("agent.testing", "ready"),
     "browser_rate_hybrid_idle": ("browser.core", "ready"),
+    "set_viewport": ("browser.core", "ready"),
+    "print_pdf": ("browser.core", "ready"),
+    "set_geolocation": ("browser.core", "ready"),
+    "set_offline": ("browser.core", "ready"),
+    "get_performance_metrics": ("browser.core", "ready"),
+    "drag": ("browser.core", "ready"),
+    "accessibility_audit": ("browser.core", "ready"),
 }
 
 TOOL_MODULES = {
@@ -274,6 +295,13 @@ TOOL_MODULES = {
     "click": "tools",
     "type": "tools",
     "screenshot": "tools",
+    "set_viewport": "tools",
+    "print_pdf": "tools",
+    "set_geolocation": "tools",
+    "set_offline": "tools",
+    "get_performance_metrics": "tools",
+    "drag": "tools",
+    "accessibility_audit": "tools",
     "snapshot": "tools",
     "observe": "tools",
     "act": "tools",

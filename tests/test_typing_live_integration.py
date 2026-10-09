@@ -28,7 +28,13 @@ import urllib.request
 
 import pytest
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        os.environ.get("BH_LIVE") != "1",
+        reason="live service test: set BH_LIVE=1 with browser-helper running on BH_PORT (default 8020)",
+    ),
+]
 
 _SERVICE_PORT = os.environ.get("BH_PORT", "8020")
 _SERVICE_BASE = f"http://127.0.0.1:{_SERVICE_PORT}"

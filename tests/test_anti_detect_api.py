@@ -304,7 +304,13 @@ class TestApiSessionV1RED:
     @pytest.mark.asyncio
     async def test_session_get_by_id(self, api_client):
         """GET /api/v1/session/{session_id} returns {status, session}."""
-        resp = await api_client.get("/api/v1/session/test-session")
+        # Create the session here: relying on test_session_capture having run
+        # first made this test depend on order, which xdist does not keep.
+        await api_client.post(
+            "/api/v1/session/capture",
+            json={"session_id": "test-session-get", "cdp_url": "ws://localhost:9222"},
+        )
+        resp = await api_client.get("/api/v1/session/test-session-get")
         assert resp.status_code == 200, (
             f"Expected 200, got {resp.status_code}. Route not wired yet (RED phase)."
         )
@@ -315,7 +321,11 @@ class TestApiSessionV1RED:
     @pytest.mark.asyncio
     async def test_session_delete(self, api_client):
         """DELETE /api/v1/session/{session_id} returns {status}."""
-        resp = await api_client.delete("/api/v1/session/test-session")
+        await api_client.post(
+            "/api/v1/session/capture",
+            json={"session_id": "test-session-delete", "cdp_url": "ws://localhost:9222"},
+        )
+        resp = await api_client.delete("/api/v1/session/test-session-delete")
         assert resp.status_code == 200, (
             f"Expected 200, got {resp.status_code}. Route not wired yet (RED phase)."
         )

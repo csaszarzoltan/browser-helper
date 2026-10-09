@@ -4,12 +4,15 @@ P1-2/P1-3/P2-1/P2-2: thin MCP wrappers over the existing REST primitives.
 """
 from __future__ import annotations
 
-import os
 import glob as _glob
+import logging
+import os
 
 from mcp.server.fastmcp import Context
 
 from .serialization import tool_error, tool_result
+
+logger = logging.getLogger(__name__)
 
 
 async def browser_discover_tests(
@@ -61,7 +64,8 @@ async def browser_export_batch_spec(
     try:
         import main as _m
         from main import artifact_store
-        from .tools import _render_playwright_spec, _RECORD_AC
+
+        from .tools import _RECORD_AC, _render_playwright_spec
 
         bundle: list[dict] = []
         for item in (recordings or []):
@@ -111,9 +115,17 @@ async def browser_visual_diff_locale(
     if ctx is not None:
         await ctx.info(f"browser_visual_diff_locale url={url} locales={locales}")
     try:
-        from main import _get_current_session, _local_cdp_http, chrome_mgr, session_registry
-        import base64, tempfile, os as _os
+        import base64
+        import os as _os
+        import tempfile
+
+        from main import _local_cdp_http, chrome_mgr, session_registry
         from screenshot_diff import ScreenshotDiffEngine
+
+        from .tools import _test_isolation_refusal
+        refusal = _test_isolation_refusal("browser_visual_diff_locale")
+        if refusal:
+            return refusal
 
         locales = locales or ["en", "fr"]
         storage_key = storage_key or "receiptlens.locale"
@@ -128,14 +140,14 @@ async def browser_visual_diff_locale(
                 # Inject locale via addScript+storageState idiom (navigate does it, but we are explicit)
                 try:
                     await sess.client.add_script_to_evaluate_on_new_document(
-                        f"try{{localStorage.setItem({repr(storage_key)},{repr(loc)});}}catch(e){{}}"
+                        f"try{{localStorage.setItem({storage_key!r},{loc!r});}}catch(e){{}}"
                     )
-                except Exception:
-                    pass
+                except Exception as skip_exc:  # noqa: BLE001 — best-effort localStorage seed; the run continues without it
+                    logger.debug("best-effort localStorage seed failed: %s", skip_exc)
                 await sess.client.navigate(url)
                 await sess.client.wait_for_ready(timeout=8)
                 # h1 text
-                h1_r = await sess.client.evaluate(f"document.querySelector({repr(h1_selector)})?.innerText || ''")
+                h1_r = await sess.client.evaluate(f"document.querySelector({h1_selector!r})?.innerText || ''")
                 h1 = (h1_r.get("result") if isinstance(h1_r, dict) else "") or ""
                 h1 = h1.strip() if isinstance(h1, str) else ""
                 shot = await sess.client.screenshot()
@@ -144,15 +156,15 @@ async def browser_visual_diff_locale(
                 if data:
                     raw = base64.b64decode(data) if isinstance(data, str) and len(data) > 100 else b""
                     if raw:
-                        with open(img_path, "wb") as f:
+                        with open(img_path, "wb") as f:  # noqa: ASYNC230 — one small local screenshot write
                             f.write(raw)
                 locale_snaps.append({"locale": loc, "h1": h1, "img_path": img_path})
                 img_paths.append(img_path)
             finally:
                 try:
                     await session_registry.destroy(sess.session_id)
-                except Exception:
-                    pass
+                except Exception as skip_exc:  # noqa: BLE001 — session cleanup must not mask the test result
+                    logger.debug("best-effort session destroy failed: %s", skip_exc)
         diffs: list[dict] = []
         for i in range(1, len(locale_snaps)):
             a, b = locale_snaps[i - 1], locale_snaps[i]
@@ -160,14 +172,14 @@ async def browser_visual_diff_locale(
             try:
                 res = ScreenshotDiffEngine.diff(a["img_path"], b["img_path"], out_path, threshold=threshold)
                 diffs.append({"pair": f"{a['locale']}→{b['locale']}", "h1_a": a["h1"], "h1_b": b["h1"], "pixel_delta": round(res.pixel_delta, 6), "passed": res.passed, "dimensions_match": res.dimensions_match})
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — a failed diff is recorded for its pair as error
                 diffs.append({"pair": f"{a['locale']}→{b['locale']}", "h1_a": a["h1"], "h1_b": b["h1"], "error": str(exc)[:300]})
         # Cleanup temp images
         try:
             import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+        except Exception as skip_exc:  # noqa: BLE001 — temp directory cleanup is best-effort
+            logger.debug("best-effort temp image cleanup failed: %s", skip_exc)
         return tool_result("browser_visual_diff_locale", {"url": url, "locales": locale_snaps, "diffs": diffs, "storage_key": storage_key})
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_visual_diff_locale", "locale_diff_failed", str(exc))
@@ -188,8 +200,8 @@ async def browser_rate_hybrid_idle(
     if ctx is not None:
         await ctx.info(f"browser_rate_hybrid_idle url={url}")
     try:
-        from main import _get_current_session, client, run_op
         from domain_throttle import domain_throttle
+        from main import _get_current_session, client, run_op
         sess = _get_current_session()
         target = sess.client if sess is not None else client
         # Optional navigate with hybrid wait
@@ -199,7 +211,7 @@ async def browser_rate_hybrid_idle(
             target = (sess.client if sess is not None else client)
         try:
             idle = await target.wait_for_network_idle(timeout=int(timeout), quiet_ms=int(quiet_ms))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a wait failure is reported with status timeout
             idle = {"status": "timeout", "error": str(exc)[:200]}
         # rate limiter snapshot
         rate = domain_throttle.snapshot() if hasattr(domain_throttle, "snapshot") else {}

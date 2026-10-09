@@ -39,9 +39,27 @@ def _unwrap(payload: Any) -> Any:
             "meta": {}}
 
 
+def _drop_deprecated_result_alias(payload: Any) -> Any:
+    """Remove the engine's deprecated ``result`` alias from an MCP envelope.
+
+    ``api_success`` (main.py) adds ``result`` as a copy of ``data`` for REST
+    clients. MCP callers read ``data``, so the copy only doubles the tokens of
+    every successful reply. REST responses are unchanged.
+    """
+    if (
+        isinstance(payload, dict)
+        and "operation" in payload
+        and "data" in payload
+        and "result" in payload
+        and payload["result"] == payload["data"]
+    ):
+        return {k: v for k, v in payload.items() if k != "result"}
+    return payload
+
+
 def json_dumps(payload: Any) -> str:
     """Serialize a payload to a JSON string (``ensure_ascii=False``)."""
-    return json.dumps(_unwrap(payload), ensure_ascii=False)
+    return json.dumps(_drop_deprecated_result_alias(_unwrap(payload)), ensure_ascii=False)
 
 
 def tool_result(operation: str, data: Any, meta: dict[str, Any] | None = None) -> str:

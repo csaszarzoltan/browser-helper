@@ -35,11 +35,20 @@ from main import app, profile_mgr
 
 
 @pytest.fixture(autouse=True)
-def reset_profile_mgr():
-    """Reset profile manager state between tests."""
-    # Clear all profiles
-    for p in list(profile_mgr.list_profiles()):
-        profile_mgr.delete_profile(p.name)
+def reset_profile_mgr(tmp_path, monkeypatch):
+    """Give every test its own profile store.
+
+    The shared ~/.browser-helper/profiles.json is written by every xdist worker,
+    so one worker's create/delete could race another's read. Pointing the one
+    shared manager at a per-test directory removes that race and leaves the
+    real store untouched.
+    """
+    store = tmp_path / "store"
+    (store / "profiles").mkdir(parents=True)
+    monkeypatch.setattr(profile_mgr, "_storage_dir", str(store))
+    monkeypatch.setattr(profile_mgr, "_profiles_file", str(store / "profiles.json"))
+    monkeypatch.setattr(profile_mgr, "_profiles_dir", str(store / "profiles"))
+    monkeypatch.setattr(profile_mgr, "_data", {})
     yield
 
 

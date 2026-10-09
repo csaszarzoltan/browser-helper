@@ -472,8 +472,8 @@ async def run_batch(body: RunBatchRequest) -> Any:
             shard_total = int(parts[1])
             if shard_total >= 1 and 0 <= shard_idx < shard_total:
                 tasks_with_idx = [(i, t) for i, t in tasks_with_idx if (i % shard_total) == shard_idx]
-        except Exception:
-            pass
+        except (ValueError, IndexError) as skip_exc:
+            logger.debug("best-effort shard filter failed: %s", skip_exc)
     sem = asyncio.Semaphore(concurrency)
 
     async def _run_one(idx: int, task: BatchTask) -> dict:
@@ -492,7 +492,7 @@ async def run_batch(body: RunBatchRequest) -> Any:
                     await asyncio.sleep(0.4)  # domContentLoaded-style settle (DCL poll)
                     result: dict[str, Any] = {"status": "ok", "url": task.url, "id": task.id}
                     # timeout guard uses asyncio.wait_for around the action+asserts
-                    async def _do_work():
+                    async def _do_work(client_=client_, result=result, task=task):
                         if task.action == "title":
                             t = await client_.get_title() if hasattr(client_, "get_title") else {"title": ""}
                             if not (t or {}).get("title"):
@@ -525,7 +525,7 @@ async def run_batch(body: RunBatchRequest) -> Any:
                             result["flaky"] = True  # recovered on retry
                         return {"index": idx, "task": task.url, **result}
                     last_error = {"index": idx, "task": task.url, **result}
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     last_error = {"index": idx, "task": task.url, "status": "timeout", "error": f"timeout after {per_test_timeout or task.timeout}s"}
                 except Exception as exc:  # noqa: BLE001 — per-task isolation
                     last_error = {"index": idx, "task": task.url, "status": "error", "error": str(exc)[:300]}
@@ -565,8 +565,9 @@ async def run_batch(body: RunBatchRequest) -> Any:
         want_reporters = {r.lower().strip() for r in raw if r and isinstance(r, str)}
     if want_reporters:
         try:
-            from main import artifact_store
             import xml.etree.ElementTree as _ET
+
+            from main import artifact_store
             reporters_out: dict[str, Any] = {}
             if "json" in want_reporters:
                 rec = artifact_store.put(json.dumps({"results": results, "summary": {"total": len(results), "passed": ok_count + flaky_count, "flaky": flaky_count, "failed": failed_count}}, indent=2).encode(), "application/json", ".json", metadata={"kind": "batch-report", "format": "json"})

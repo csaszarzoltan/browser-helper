@@ -18,7 +18,11 @@ spamming a new tab per call.
 
 from __future__ import annotations
 
+import functools
+import json as _json_mod
+import logging
 import os
+from typing import Any
 
 from mcp.server.fastmcp import Context  # typing only — never called here
 
@@ -26,6 +30,9 @@ from .serialization import json_dumps, tool_error, tool_result
 
 # Process-scoped session holder for MCP calls (no cookies over stdio).
 _MCP_SESSION = {"session": None}
+
+
+logger = logging.getLogger(__name__)
 
 
 async def _mcp_session():
@@ -53,8 +60,8 @@ async def _mcp_session():
     try:
         from main import _session_auto as _mcp_auto
         _mcp_auto.set(True)
-    except Exception:
-        pass
+    except Exception as skip_exc:  # noqa: BLE001 — the engine import is optional here; the session still mints without the flag
+        logger.debug("best-effort auto-session flag failed: %s", skip_exc)
     # No session cached yet — let run_op mint it lazily on the first browser
     # op (it launches Chrome and waits for the warm-up itself, avoiding the
     # double-launch race). session_hook caches the minted session so every
@@ -79,7 +86,6 @@ async def _tab_pinned_client(tab_id: str):
         _SENTINEL_SESSION,  # noqa: F401 — re-exported contract marker
         _assert_tab_exists,
         _tab_client_for,
-        client as _default_client,
     )
 
     ok = await _assert_tab_exists(tab_id)
@@ -117,13 +123,16 @@ async def navigate(url: str, ctx: Context | None = None) -> str:
     return json_dumps(await run_op("navigate", target.navigate, url))
 
 
-async def click(selector: str, ctx: Context | None = None) -> str:
+async def click(selector: str, expect: dict | None = None, ctx: Context | None = None) -> str:
     """Click a CSS selector in the active tab (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /click``.
+    Backed by the same engine as ``POST /click``. With ``expect`` the click goes
+    through ``act`` so the result carries ``data.verification`` (see ``act``).
     """
     if ctx is not None:
         await ctx.info(f"click -> {selector}")
+    if expect is not None:
+        return await act("click", selector=selector, expect=expect, ctx=ctx)
     target, run_op = await _target()
     result = await run_op("click", target.click, selector)
     # Unwrap the run_op envelope: the inner data.status can be "error" even
@@ -218,8 +227,8 @@ async def observe(
     if _sess is not None:
         try:
             await _run_op("observe_heal_ping", _sess.client.get_tabs)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as skip_exc:  # noqa: BLE001
+            logger.debug("best-effort observe heal ping failed: %s", skip_exc)
     _set_current_session(_sess)
 
     try:
@@ -243,8 +252,8 @@ async def observe(
         if include_network and target is not None:
             try:
                 await target.start_network_monitoring()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as skip_exc:  # noqa: BLE001
+                logger.debug("best-effort start network monitoring (observe) failed: %s", skip_exc)
             try:
                 nlog = await target.get_network_log()
                 entries = nlog.get("entries", []) if isinstance(nlog, dict) else []
@@ -291,6 +300,7 @@ async def act(
     option: str | None = None,
     timeout: int = 10,
     expression: str | None = None,
+    expect: dict | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Act on the page: click, fill, select, wait, navigate (capability ``agent.semantic``, READY).
@@ -300,55 +310,59 @@ async def act(
     if ctx is not None:
         await ctx.info(f"act -> {action}")
     import json as _json
-    import urllib.request as _ur
 
-    from mcp_server.tools import _MCP_SESSION
+    from pydantic import ValidationError
+    from starlette.requests import Request as _Request
 
-    _sess, _run_op = await _mcp_session()
-    target_dict = {
-        "snapshot_id": snapshot_id,
-        "ref": ref,
-        "element_id": element_id,
-        "selector": selector,
-        "text": text,
-        "label": label,
-        "url": url,
-        "value": value,
-        "backend_node_id": None,
+    from main import AgentActionRequest, _set_current_session, agent_act
+
+    # Same engine, same process: call the REST handler in-process instead of
+    # a loopback HTTP request to a hard-coded port (which pointed at another
+    # running instance and could not see this process's snapshot ids).
+    _sess, _ = await _mcp_session()
+    _set_current_session(_sess)
+    target: dict = {
+        k: v for k, v in {
+            "snapshot_id": snapshot_id, "ref": ref, "element_id": element_id,
+            "selector": selector, "text": text, "label": label, "url": url, "value": value,
+        }.items() if v is not None
     }
-    body = {
-        "action": action,
-        "target": {k: v for k, v in target_dict.items() if v is not None},
-    }
-    # Only include set fields — the REST schema rejects explicit nulls with
-    # 422 Unprocessable (observed 2026-09-02: MCP act navigate 422 because
-    # "url": null / "fields": null were sent alongside).
-    for _k in ("url", "value", "fields", "option", "timeout", "expression"):
-        _v = locals().get(_k)
-        if _v is not None:
-            body[_k] = _v
-    # Route through the running service to get identical behaviour
+    payload: dict = {"action": action}
+    if target:
+        payload["target"] = target
+    # Only set fields are sent: explicit nulls are rejected by the REST schema.
+    for k, v in (("url", url), ("value", value), ("fields", fields), ("option", option),
+                 ("timeout", timeout), ("expression", expression), ("expect", expect)):
+        if v is not None:
+            payload[k] = v
     try:
-        import asyncio
+        model = AgentActionRequest(**payload)
+    except ValidationError as exc:
+        return tool_error("act", "invalid_request", str(exc))
 
-        cookie = ""
-        if _MCP_SESSION.get("session") is not None:
-            cookie = _MCP_SESSION["session"].session_id
+    raw = _json.dumps(payload).encode()
 
-        def _blocking_act_request() -> dict:
-            req = _ur.Request(
-                "http://127.0.0.1:8020/agent/act",
-                data=_json.dumps(body).encode(),
-                headers={"Content-Type": "application/json", "X-Session-ID": cookie},
-                method="POST",
-            )
-            with _ur.urlopen(req, timeout=60) as resp:
-                return _json.loads(resp.read().decode())
+    async def _receive():
+        return {"type": "http.request", "body": raw, "more_body": False}
 
-        result = await asyncio.to_thread(_blocking_act_request)
-        return tool_result("act", result.get("data", {}))
-    except Exception as exc:  # noqa: BLE001
+    request = _Request(
+        {"type": "http", "method": "POST", "path": "/agent/act",
+         "headers": [(b"content-type", b"application/json")]},
+        _receive,
+    )
+    try:
+        resp = await agent_act(request, model)
+    except Exception as exc:  # noqa: BLE001 — e.g. 400 Missing session: report it in the envelope
         return tool_error("act", "operation_failed", str(exc))
+    if isinstance(resp, dict):
+        return tool_result("act", resp.get("data", {}))
+    # Error responses come back as JSONResponse: surface the engine's code and message.
+    body = _json.loads(bytes(resp.body) or b"{}")
+    err = body.get("error") or {}
+    if isinstance(err, str):
+        err = {"code": "operation_failed", "message": err}
+    return tool_error("act", err.get("code") or "operation_failed",
+                      err.get("message") or str(body.get("detail") or body))
 
 
 async def get_tabs(ctx: Context | None = None) -> str:
@@ -531,7 +545,7 @@ async def export_cookies(session_id: str, ctx: Context | None = None) -> str:
     if ctx is not None:
         await ctx.info(f"export_cookies session={session_id}")
     try:
-        target, _ = _resolve_cookie_target(session_id)
+        target, _ = await _resolve_cookie_target(session_id)
         res = await target.get_cookies()
         return tool_result("export_cookies", res)
     except KeyError as exc:
@@ -552,7 +566,7 @@ async def import_cookies(cookies: list[dict], session_id: str | None = None,
         await ctx.info(f"import_cookies session={session_id} n={len(cookies or [])}")
     cookies = cookies or []
     try:
-        target, _ = _resolve_cookie_target(session_id)
+        target, _ = await _resolve_cookie_target(session_id)
         res = await target.set_cookies(cookies)
         return tool_result("import_cookies", res)
     except KeyError as exc:
@@ -573,7 +587,10 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
     if ctx is not None:
         await ctx.info(f"clone_session source={session_id}")
     try:
-        _source, _src_sess = _resolve_cookie_target(session_id)
+        refusal = _test_isolation_refusal("clone_session")
+        if refusal:
+            return refusal
+        _source, _src_sess = await _resolve_cookie_target(session_id)
         res = await _source.get_cookies()
         cookies = (res or {}).get("cookies", [])
         from main import _local_cdp_http, chrome_mgr
@@ -1273,8 +1290,8 @@ async def browser_get_accessibility_tree(
         #  "Not connected to Chrome CDP").
         try:
             await run_op_fn("a11y_heal_ping", target.get_tabs)
-        except Exception:  # noqa: BLE001 — heal is best-effort; capture will retry
-            pass
+        except Exception as skip_exc:  # noqa: BLE001 — heal is best-effort; capture will retry
+            logger.debug("best-effort a11y heal ping failed: %s", skip_exc)
         from main import _capture_accessibility_snapshot
         snap = await _capture_accessibility_snapshot(
             scope=scope, interactive_only=interactive_only, include_hidden=include_hidden, target=target
@@ -1434,8 +1451,8 @@ async def browser_navigate(
             if parts:
                 try:
                     await target.add_script_to_evaluate_on_new_document("".join(parts))
-                except Exception:
-                    pass
+                except Exception as skip_exc:  # noqa: BLE001 — best-effort localStorage seed; navigation continues without it
+                    logger.debug("best-effort localStorage seed (session) failed: %s", skip_exc)
         res = await run_op("navigate", target.navigate, url)
         # P0 navigate-active: surface the resolved tab and honor make_active=false
         if isinstance(res, dict):
@@ -1451,8 +1468,8 @@ async def browser_navigate(
                 if isinstance(res, dict):
                     d = res.get("data") or {}
                     d["settle"] = extra if isinstance(extra, dict) else {}
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as skip_exc:  # noqa: BLE001
+                logger.debug("best-effort navigate settle failed: %s", skip_exc)
         return tool_result("browser_navigate", res.get("data", res) if isinstance(res, dict) else res)
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_navigate", "navigation_failed", str(exc))
@@ -1489,8 +1506,8 @@ async def browser_interact(
         if scroll_into_view:
             try:
                 await target.evaluate(f"document.querySelector({__import__('json').dumps(selector)})?.scrollIntoView({{block:'center', behavior:'instant'}})")
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as skip_exc:  # noqa: BLE001
+                logger.debug("best-effort scroll into view failed: %s", skip_exc)
         if al == "click" and text and action == "press":
             al = "press"
         if al == "click":
@@ -1544,7 +1561,7 @@ async def browser_upload_file(
                 renamed = _P(tmp.name).parent / filename
                 try:
                     _P(tmp.name).rename(renamed)
-                except Exception:
+                except OSError:
                     renamed = _P(tmp.name)
                 files_arg = [str(renamed)]
         out = await run_op("upload_files", target.upload_files, selector, files_arg)
@@ -1599,8 +1616,8 @@ async def browser_get_console_logs(
         target, _ = await _target()
         try:
             await target.start_console_monitoring()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as skip_exc:  # noqa: BLE001
+            logger.debug("best-effort start console monitoring failed: %s", skip_exc)
         if (level or "error").lower() == "all":
             entries = target.console_entries if hasattr(target, "console_entries") else []
         elif (level or "error").lower() == "error":
@@ -1634,8 +1651,8 @@ async def browser_get_network_activity(
         target, _ = await _target()
         try:
             await target.start_network_monitoring()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as skip_exc:  # noqa: BLE001
+            logger.debug("best-effort start network monitoring failed: %s", skip_exc)
         raw = await target.get_network_log()
         entries = raw.get("entries", []) if isinstance(raw, dict) else []
         if path:
@@ -1809,7 +1826,7 @@ async def browser_start_recorder(
             if body is not None:
                 try:
                     data = _j.loads(body if isinstance(body, str) else body.decode())
-                except Exception:
+                except ValueError:
                     data = None
         if data is None:
             import main as _m
@@ -1820,9 +1837,8 @@ async def browser_start_recorder(
                     break
         inner = (data or {}).get("data", data) if isinstance(data, dict) else {}
         redisc = inner.get("recording_id") if isinstance(inner, dict) else None
-        if isinstance(inner, dict) and redisc:
-            if ac:
-                _RECORD_AC[redisc] = str(ac)
+        if isinstance(inner, dict) and redisc and ac:
+            _RECORD_AC[redisc] = str(ac)
         return tool_result("browser_start_recorder", inner if isinstance(inner, dict) else {"raw": inner})
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_start_recorder", "record_start_failed", str(exc))
@@ -1972,8 +1988,8 @@ async def browser_inject_storage_state(
                     "httpOnly": c.get("httpOnly"), "secure": c.get("secure"),
                 }])
                 counts["cookies"] += 1
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as skip_exc:  # noqa: BLE001
+                logger.debug("best-effort cookie import failed: %s", skip_exc)
         for origin_entry in (origins or []):
             items = origin_entry.get("localStorage") or origin_entry.get("local_storage") or []
             for kv in items:
@@ -1984,15 +2000,15 @@ async def browser_inject_storage_state(
                     import json as _j
                     await target.evaluate(f"localStorage.setItem({_j.dumps(str(nm))}, {_j.dumps(str(val))})")
                     counts["origins"] += 1
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as skip_exc:  # noqa: BLE001
+                    logger.debug("best-effort origin localStorage import failed: %s", skip_exc)
         if tenant and str(tenant).strip():
             try:
                 import json as _j
                 await target.evaluate(f"localStorage.setItem('tenant', {_j.dumps(str(tenant).strip())})")
                 counts["origins"] += 1
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as skip_exc:  # noqa: BLE001
+                logger.debug("best-effort tenant localStorage import failed: %s", skip_exc)
         return tool_result("browser_inject_storage_state", {"injected": counts, "tenant": tenant})
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_inject_storage_state", "injection_failed", str(exc))
@@ -2035,3 +2051,336 @@ async def browser_reset_session(
         return tool_result("browser_reset_session", {"scope": sc, "cleared": done})
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_reset_session", "failed", str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Testing helpers: viewport, PDF, geolocation, offline, performance, drag,
+# and a small accessibility audit. All run on the caller's session tab.
+# ---------------------------------------------------------------------------
+
+
+def _test_isolation_refusal(op: str) -> str | None:
+    """Refuse an operation that would launch a real Chrome during test isolation.
+
+    Mirrors the BH_TEST_NO_CHROME guard in main.py: tests must never attach to
+    or start a browser, so the call fails in the envelope instead.
+    """
+    if os.environ.get("BH_TEST_NO_CHROME") == "1":
+        return tool_error(op, "chrome_unavailable",
+                          "Chrome CDP unavailable: BH_TEST_NO_CHROME test isolation")
+    return None
+
+
+def _envelope_errors(op: str):
+    """Turn an exception from a browser call into a tool error envelope.
+
+    Without a connected browser the call must fail inside the envelope
+    (status: error), the same way the older browser tools do, not crash the tool.
+    """
+    def wrap(fn):
+        @functools.wraps(fn)
+        async def inner(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 — every failure becomes an envelope
+                return tool_error(op, "operation_failed", str(exc))
+        return inner
+    return wrap
+
+
+def _cdp_data(env) -> tuple[Any, str | None]:
+    """Unwrap a run_op result into ``(data, error_message)``.
+
+    ``run_op`` returns an ``api_success`` dict on success and a ``JSONResponse``
+    on failure. Either can carry the method's own error status.
+    """
+    if hasattr(env, "body"):
+        env = _json_mod.loads(bytes(env.body) or b"{}")
+    if not isinstance(env, dict):
+        return env, None
+    if env.get("status") == "error":
+        err = env.get("error") or {}
+        return None, (err.get("message") if isinstance(err, dict) else str(err))
+    data = env.get("data")
+    if isinstance(data, dict) and data.get("status") == "error":
+        return None, str(data.get("error", "error"))
+    return data, None
+
+
+async def _eval_json(run_op, op: str, js: str) -> tuple[Any, str | None]:
+    """Run JS in the page and parse a JSON string it returns."""
+    target, _ = await _target()
+    env = await run_op(op, target._send_command, "Runtime.evaluate",
+                       {"expression": js, "returnByValue": True})
+    data, err = _cdp_data(env)
+    if err:
+        return None, err
+    raw = ((data or {}).get("result") or {}).get("value")
+    if (data or {}).get("exceptionDetails"):
+        return None, str(data["exceptionDetails"].get("text", "script error"))
+    try:
+        return _json_mod.loads(raw) if isinstance(raw, str) else raw, None
+    except ValueError:
+        return None, "page script returned non-JSON output"
+
+
+@_envelope_errors("set_viewport")
+async def set_viewport(width: int, height: int, device_scale_factor: float = 1.0,
+                       mobile: bool = False, ctx: Context | None = None) -> str:
+    """Set the viewport size for the active tab (capability ``browser.core``, READY).
+
+    Uses Emulation.setDeviceMetricsOverride. Pass width=0 and height=0 to clear
+    the override. Set ``mobile=True`` for a phone layout (touch, mobile meta viewport).
+    """
+    if ctx is not None:
+        await ctx.info(f"set_viewport -> {width}x{height}")
+    target, run_op = await _target()
+    if width <= 0 or height <= 0:
+        env = await run_op("set_viewport", target._send_command,
+                           "Emulation.clearDeviceMetricsOverride", {})
+        _, err = _cdp_data(env)
+        if err:
+            return tool_error("set_viewport", "viewport_failed", err)
+        return tool_result("set_viewport", {"cleared": True})
+    params = {"width": width, "height": height,
+              "deviceScaleFactor": device_scale_factor, "mobile": mobile}
+    env = await run_op("set_viewport", target._send_command,
+                       "Emulation.setDeviceMetricsOverride", params)
+    _, err = _cdp_data(env)
+    if err:
+        return tool_error("set_viewport", "viewport_failed", err)
+    return tool_result("set_viewport", {"width": width, "height": height,
+                                        "device_scale_factor": device_scale_factor,
+                                        "mobile": mobile})
+
+
+@_envelope_errors("print_pdf")
+async def print_pdf(landscape: bool = False, print_background: bool = True,
+                    scale: float = 1.0, ctx: Context | None = None) -> str:
+    """Render the active page to PDF and store it as an artifact (capability ``browser.core``, READY).
+
+    Returns the artifact record; fetch the file at ``GET /artifacts/{artifact_id}``.
+    """
+    import base64 as _b64
+
+    from main import artifact_store
+
+    if ctx is not None:
+        await ctx.info("print_pdf")
+    target, run_op = await _target()
+    env = await run_op("print_pdf", target._send_command, "Page.printToPDF", {
+        "landscape": landscape, "printBackground": print_background, "scale": scale,
+    })
+    data, err = _cdp_data(env)
+    if err:
+        return tool_error("print_pdf", "print_failed", err)
+    encoded = (data or {}).get("data")
+    if not encoded:
+        return tool_error("print_pdf", "print_failed", "Chrome returned no PDF data")
+    art = artifact_store.put(_b64.b64decode(encoded), "application/pdf", ".pdf",
+                             {"source": "mcp_print_pdf"})
+    return tool_result("print_pdf", {"artifact_id": art.get("artifact_id"),
+                                     "artifact_url": f"/artifacts/{art.get('artifact_id')}"})
+
+
+@_envelope_errors("set_geolocation")
+async def set_geolocation(latitude: float, longitude: float, accuracy: float = 100.0,
+                          grant: bool = True, ctx: Context | None = None) -> str:
+    """Override the browser geolocation for the active tab (capability ``browser.core``, READY).
+
+    Uses Emulation.setGeolocationOverride. With ``grant=True`` (default) the
+    geolocation permission is granted for the current page's origin, so a page
+    calling navigator.geolocation receives the position without a prompt. The
+    page must be on an http(s) origin; ``file://`` and ``about:`` pages have none.
+    """
+    if ctx is not None:
+        await ctx.info(f"set_geolocation -> {latitude},{longitude}")
+    target, run_op = await _target()
+    granted_origin = None
+    if grant:
+        origin, err = await _eval_json(run_op, "set_geolocation", "JSON.stringify(location.origin)")
+        if err or not origin or origin == "null":
+            return tool_error("set_geolocation", "no_origin",
+                              "the page has no http(s) origin; navigate to a web page first, or pass grant=false")
+        env = await run_op("set_geolocation", target._send_command, "Browser.grantPermissions",
+                           {"permissions": ["geolocation"], "origin": origin})
+        _, err = _cdp_data(env)
+        if err:
+            return tool_error("set_geolocation", "geolocation_failed", err)
+        granted_origin = origin
+    env = await run_op("set_geolocation", target._send_command,
+                       "Emulation.setGeolocationOverride",
+                       {"latitude": latitude, "longitude": longitude, "accuracy": accuracy})
+    _, err = _cdp_data(env)
+    if err:
+        return tool_error("set_geolocation", "geolocation_failed", err)
+    return tool_result("set_geolocation", {"latitude": latitude, "longitude": longitude,
+                                           "accuracy": accuracy, "permission_granted_for": granted_origin})
+
+
+@_envelope_errors("set_offline")
+async def set_offline(offline: bool, ctx: Context | None = None) -> str:
+    """Simulate the network going offline (or back online) for the active tab (capability ``browser.core``, READY).
+
+    Uses Network.emulateNetworkConditions with no latency or throttling. Use it
+    to test offline behaviour; set ``offline=False`` to restore the network.
+    """
+    if ctx is not None:
+        await ctx.info(f"set_offline -> {offline}")
+    target, run_op = await _target()
+    env = await run_op("set_offline", target._send_command,
+                       "Network.emulateNetworkConditions",
+                       {"offline": offline, "latency": 0,
+                        "downloadThroughput": -1, "uploadThroughput": -1})
+    _, err = _cdp_data(env)
+    if err:
+        return tool_error("set_offline", "network_emulation_failed", err)
+    return tool_result("set_offline", {"offline": offline})
+
+
+_PERF_JS = """(() => {
+  const nav = performance.getEntriesByType('navigation')[0] || {};
+  const paint = {};
+  for (const p of performance.getEntriesByType('paint')) paint[p.name] = Math.round(p.startTime);
+  return JSON.stringify({
+    navigation_ms: {
+      ttfb: Math.round(nav.responseStart || 0),
+      dom_content_loaded: Math.round(nav.domContentLoadedEventEnd || 0),
+      load: Math.round(nav.loadEventEnd || 0)
+    },
+    paint_ms: paint,
+    resources: performance.getEntriesByType('resource').length,
+    js_heap_used_bytes: performance.memory ? performance.memory.usedJSHeapSize : null
+  });
+})()"""
+
+
+@_envelope_errors("get_performance_metrics")
+async def get_performance_metrics(ctx: Context | None = None) -> str:
+    """Load timing for the current page (capability ``browser.core``, READY).
+
+    Returns navigation timings (TTFB, DOMContentLoaded, load), paint timings
+    (first paint, first contentful paint), resource count and JS heap size, all
+    from the browser's Performance API. Values are in milliseconds.
+    """
+    if ctx is not None:
+        await ctx.info("get_performance_metrics")
+    import asyncio
+
+    _, run_op = await _target()
+    # Read timings only after the load event: before it, loadEventEnd and
+    # domContentLoadedEventEnd are still 0 and would look like a fast page.
+    for _ in range(20):
+        state, err = await _eval_json(run_op, "get_performance_metrics", "JSON.stringify(document.readyState)")
+        if err or state == "complete":
+            break
+        await asyncio.sleep(0.5)
+    data, err = await _eval_json(run_op, "get_performance_metrics", _PERF_JS)
+    if err:
+        return tool_error("get_performance_metrics", "metrics_failed", err)
+    return tool_result("get_performance_metrics", data)
+
+
+@_envelope_errors("drag")
+async def drag(from_selector: str, to_selector: str, steps: int = 12,
+               ctx: Context | None = None) -> str:
+    """Drag one element onto another with the mouse (capability ``browser.core``, READY).
+
+    Presses on the centre of ``from_selector``, moves in ``steps`` steps to the
+    centre of ``to_selector``, then releases. Works for HTML5 pointer-based
+    drag-and-drop widgets (sliders, sortable lists, board games).
+    """
+    if ctx is not None:
+        await ctx.info(f"drag {from_selector} -> {to_selector}")
+    target, run_op = await _target()
+    centre_js = (
+        "(s => { const e = document.querySelector(s); if (!e) return null;"
+        " const r = e.getBoundingClientRect();"
+        " return JSON.stringify({x: r.left + r.width / 2, y: r.top + r.height / 2}); })"
+    )
+    start, err = await _eval_json(run_op, "drag_locate",
+                                  f"{centre_js}({_json_mod.dumps(from_selector)})")
+    if err or start is None:
+        return tool_error("drag", "element_not_found", err or f"no element for {from_selector!r}")
+    end, err = await _eval_json(run_op, "drag_locate",
+                                f"{centre_js}({_json_mod.dumps(to_selector)})")
+    if err or end is None:
+        return tool_error("drag", "element_not_found", err or f"no element for {to_selector!r}")
+
+    async def _mouse(kind: str, x: float, y: float, buttons: int) -> str | None:
+        # Press, drag-move and release all carry the left button; a release sent
+        # with button "none" is ignored by Chrome, so the drop never lands.
+        pressed = kind != "mouseMoved" or buttons
+        env = await run_op("drag", target._send_command, "Input.dispatchMouseEvent", {
+            "type": kind, "x": x, "y": y, "button": "left" if pressed else "none",
+            "buttons": buttons, "clickCount": 1 if kind != "mouseMoved" else 0})
+        _, e = _cdp_data(env)
+        return e
+
+    sx, sy, ex, ey = start["x"], start["y"], end["x"], end["y"]
+    for failed in [await _mouse("mouseMoved", sx, sy, 0),
+                   await _mouse("mousePressed", sx, sy, 1)]:
+        if failed:
+            return tool_error("drag", "drag_failed", failed)
+    n = max(1, int(steps))
+    for i in range(1, n + 1):
+        x = sx + (ex - sx) * i / n
+        y = sy + (ey - sy) * i / n
+        if await _mouse("mouseMoved", x, y, 1):
+            return tool_error("drag", "drag_failed", "mouse move failed mid-drag")
+    failed = await _mouse("mouseReleased", ex, ey, 0)
+    if failed:
+        return tool_error("drag", "drag_failed", failed)
+    return tool_result("drag", {"from": {"x": sx, "y": sy}, "to": {"x": ex, "y": ey}, "steps": n})
+
+
+_A11Y_JS = """(() => {
+  const issues = [];
+  const add = (rule, el) => issues.push({rule, tag: el.tagName.toLowerCase(),
+    id: el.id || null, text: (el.innerText || el.getAttribute('alt') || '').trim().slice(0, 80)});
+  if (!document.documentElement.getAttribute('lang')) issues.push({rule: 'html-has-lang', tag: 'html'});
+  if (!document.title || !document.title.trim()) issues.push({rule: 'document-title', tag: 'head'});
+  for (const img of document.querySelectorAll('img')) if (!img.hasAttribute('alt')) add('image-alt', img);
+  for (const b of document.querySelectorAll('button, [role=button]')) {
+    const name = (b.innerText || b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
+    if (!name) add('button-name', b);
+  }
+  for (const a of document.querySelectorAll('a[href]')) {
+    const name = (a.innerText || a.getAttribute('aria-label') || a.getAttribute('title') || '').trim();
+    if (!name && !a.querySelector('img[alt]')) add('link-name', a);
+  }
+  for (const i of document.querySelectorAll('input, select, textarea')) {
+    if (i.type === 'hidden' || i.type === 'submit' || i.type === 'button') continue;
+    const labelled = i.labels && i.labels.length || i.getAttribute('aria-label') || i.getAttribute('aria-labelledby') || i.getAttribute('title');
+    if (!labelled) add('input-label', i);
+  }
+  const ids = {};
+  for (const e of document.querySelectorAll('[id]')) ids[e.id] = (ids[e.id] || 0) + 1;
+  for (const [id, n] of Object.entries(ids)) if (n > 1) issues.push({rule: 'duplicate-id', tag: 'id', id});
+  let last = 0;
+  for (const h of document.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
+    const lvl = Number(h.tagName[1]);
+    if (last && lvl > last + 1) add('heading-order', h);
+    last = lvl;
+  }
+  const counts = {};
+  for (const i of issues) counts[i.rule] = (counts[i.rule] || 0) + 1;
+  return JSON.stringify({total: issues.length, by_rule: counts, issues: issues.slice(0, 50)});
+})()"""
+
+
+@_envelope_errors("accessibility_audit")
+async def accessibility_audit(ctx: Context | None = None) -> str:
+    """Check the active page for common accessibility problems (capability ``browser.core``, READY).
+
+    A built-in heuristic subset, not a full WCAG engine: missing lang and title,
+    images without alt, buttons and links without a name, inputs without a label,
+    duplicate ids, and skipped heading levels. Returns counts per rule and up to 50 issues.
+    """
+    if ctx is not None:
+        await ctx.info("accessibility_audit")
+    _, run_op = await _target()
+    data, err = await _eval_json(run_op, "accessibility_audit", _A11Y_JS)
+    if err:
+        return tool_error("accessibility_audit", "audit_failed", err)
+    return tool_result("accessibility_audit", data)

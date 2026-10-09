@@ -4,6 +4,35 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **MCP `act` folyamaton belül fut, nem HTTP-önhívással.** Az `act` eddig a fix `127.0.0.1:8020` címre küldött kérést,
+  így egy másik példány kapta meg, amely nem ismerte a `snapshot_id`-t. Most a REST-handler fut közvetlenül, a hibák
+  pedig a motor kódjával és üzenetével érkeznek (`element_not_found` stb.), nem csupán `HTTP Error 400`.
+- **`expect` ellenőrzés az MCP `act` és `click` eszközökön.** `url_changed`, `dialog_opened`, `text_visible`,
+  `element_visible` és `any_of` feltételek; az eredmény a `data.verification.satisfied` mezőben.
+- **Minden MCP-eszköz kapott valódi leírást.** Eddig 65 eszköz sablonszöveget kapott. Most minden leírás megmondja,
+  mikor használd, és a hasonló eszközök között melyik a helyes választás.
+- **Duplikált `result` kulcs eltávolítva az MCP-kimenetből.** A REST-válaszok változatlanok, a külső kliensek nem sérülnek.
+- **Hét új tesztelési eszköz** (`browser.core`): `set_viewport`, `print_pdf` (artifact), `set_geolocation`,
+  `set_offline`, `get_performance_metrics` (navigációs és festési idők), `drag`, `accessibility_audit` (heurisztikus
+  részhalmaz, nem teljes WCAG). Az eszközök száma 68-ról 75-re nőtt.
+- **`run.py` alapértelmezett bind-címe `127.0.0.1`.** Nem loopback címen és `API_TOKEN` nélkül figyelmeztetés indul.
+- **S110 javítás:** a csendes `except … pass` blokkok (18 hely) most `logger.debug` naplót írnak, a viselkedés nem változott.
+- **README és docs:** a tényleges végpont- és eszközszámok, eltávolított törött hivatkozások.
+- **`navigate` hamis sikert nem jelent többé.** A `Page.navigate` `errorText` mezője (offline, DNS, TLS) hibát
+  dob (`net::ERR_INTERNET_DISCONNECTED`), eddig a hívás `status: ok`-t adott egy `chrome-error` oldalra.
+- **`set_geolocation` engedéllyel.** Alapértelmezetten (`grant=true`) megadja a geolokáció engedélyét az aktuális
+  origin-re, így `navigator.geolocation` a beállított pozíciót kapja. Ellenőrizve: `[47.4979, 19.0402]`; `grant=false`
+  mellett `null`.
+- **Széles `except` blokkok:** a 19 BLE001 hely mind szűkítve vagy indoklással ellátva (`noqa: BLE001 — …`).
+  A `json`/index/OS-hibák szűkítve; a best-effort ágak a hibát a válaszban rögzítik.
+- **Hiányzó `await` a cookie-eszközökön.** `export_cookies`, `import_cookies` és `clone_session` a
+  `_resolve_cookie_target` korutint `await` nélkül hívta, így a cookie-műveletek nem a várt klienssel futottak.
+- **Teszt-izoláció.** A `clone_session` és a `browser_visual_diff_locale` a `BH_TEST_NO_CHROME` alatt nem indít
+  valódi Chrome-ot, hanem hibaválaszt ad. Az élő-szolgáltatás tesztek (`test_typing_live_integration`,
+  `test_parallel_session_isolation`) csak `BH_LIVE=1`-gyel futnak. A Chrome-ot indító E2E-tesztek egy xdist
+  csoportba kerültek (`--dist loadgroup`). A profil-tesztek saját tárolót kapnak a közös `profiles.json` helyett.
+  A session- és backend-tesztek nem függnek a korábbi tesztek sorrendjétől.
+
 ## [1.36.21] — 2026-10-07
 
 - **Élő gépelési integrációs kapu — ugyanaz az osztály, mint `pacing` és `keyPress` vak esete.**

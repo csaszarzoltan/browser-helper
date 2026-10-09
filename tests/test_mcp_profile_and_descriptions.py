@@ -20,9 +20,9 @@ def _project_version():
     return re.search(r'^version = "([^"]+)"', text, re.M).group(1)
 
 
-def test_default_profile_is_full_68(monkeypatch):
+def test_default_profile_is_full_75(monkeypatch):
     monkeypatch.delenv("MCP_PROFILE", raising=False)
-    assert len(build_tool_defs()) == 68
+    assert len(build_tool_defs()) == 75
 
 
 def test_core_profile_is_small_subset_of_full(monkeypatch):

@@ -35,7 +35,7 @@ markers = [
     "integration: integration tests (may need external services) or real API keys (skipped by default)",
     "slow: slow tests (> 5s each) - skipped in quick suite",
 ]
-addopts = "-n auto -q"
+addopts = "-n auto -q --dist loadgroup"
 asyncio_mode = "auto"
 # A passing xfail means the mark is stale - the feature is implemented and the marker is
 # absorbing the regression it was written to catch. Measured 2026-10-06: 32 of 40 marks were

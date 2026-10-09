@@ -23,7 +23,7 @@ accessibility snapshots — with every answer.
 |---|---|
 | **What it is** | A lightweight FastAPI proxy that drives your real Chrome via CDP |
 | **Who it is for** | AI agents (Hermes, Claude Code, Codex CLI, Cursor), QA automation, scrapers |
-| **Interfaces** | REST API · 68-tool MCP server · WebSocket stream · GUI dashboard |
+| **Interfaces** | REST API · 75-tool MCP server · WebSocket stream · GUI dashboard |
 | **Why fast** | Local CDP + compact payloads; measured **1.9–2.2× faster than Playwright** on the same E2E journey (~1641ms vs ~3163ms) |
 | **Killer feature** | The browser is **visible to you** — log in manually (Google, Perplexity, anything with CAPTCHA/bot-walls), and your agent reuses *your* logged-in session |
 | **License / status** | Personal-lab project, actively developed — releases every few days |
@@ -37,7 +37,7 @@ accessibility snapshots — with every answer.
 - [Install & run](#install--run)
 - [The four interfaces](#the-four-interfaces)
   - [REST API](#rest-api)
-  - [MCP server (68 tools)](#mcp-server-68-tools)
+  - [MCP server (75 tools)](#mcp-server-75-tools)
   - [WebSocket streaming](#websocket-streaming)
   - [GUI dashboard](#gui-dashboard)
 - [Built for AI agents](#built-for-ai-agents)
@@ -156,13 +156,18 @@ API_TOKEN=my-secret-token bh
 
 Unset = open API. Placeholder values (`changeme`, `your-token`, …) are rejected at startup.
 
+`run.py` binds to `127.0.0.1` by default, so the API is reachable only from this machine
+(an SSH tunnel works). To expose it on the network, run `python run.py --host 0.0.0.0` (or set
+`HOST=0.0.0.0`). Doing that without `API_TOKEN` prints a warning at startup. The Docker image
+always binds `0.0.0.0` and expects `API_TOKEN` to be set.
+
 ---
 
 ## The four interfaces
 
 ### REST API
 
-~90 endpoints, all speaking the same envelope. The everyday core:
+229 endpoints (`src/main.py` and `src/fleet/api.py`), all speaking the same envelope. The everyday core:
 
 **Navigate & interact**
 
@@ -193,12 +198,12 @@ Unset = open API. Placeholder values (`changeme`, `your-token`, …) are rejecte
 | `POST /agent/console` | Console errors, JS exceptions, failed requests |
 | `POST /agent/forms/discover` + `/fill` | Semantic form discovery & filling with validation feedback |
 
-Full reference: [docs/api-reference.md](docs/api-reference.md) · Agent contracts: [docs/agent-api.md](docs/agent-api.md).
+Agent contracts: [docs/agent-api.md](docs/agent-api.md). The full endpoint list is in the route decorators of `src/main.py` and `src/fleet/api.py`.
 
-### MCP server (68 tools)
+### MCP server (75 tools)
 
 Ships a [Model Context Protocol](https://modelcontextprotocol.io) server exposing the
-same engine as **68 MCP tools** — for Claude Code, Codex CLI, Cursor, Windsurf, any MCP client.
+same engine as **75 MCP tools** — for Claude Code, Codex CLI, Cursor, Windsurf, any MCP client.
 In-process, no HTTP self-calls, no LLM in the middle.
 
 ```bash
@@ -423,12 +428,12 @@ Your machine                        Remote server (AI agents)
 │  │ + MCP + dashboard │   │        │                          │
 │  └───────────────────┘   │        └──────────────────────────┘
 └──────────────────────────┘
-     src/main.py (REST)      src/mcp_server/ (68 tools)
+     src/main.py (REST)      src/mcp_server/ (75 tools)
      src/cdp_client.py       src/fleet/ (orchestration)
      src/session_registry.py src/anti_detection/
 ```
 
-Source map: `src/main.py` (FastAPI app, ~6900 lines, all REST endpoints),
+Source map: `src/main.py` (FastAPI app, ~8200 lines, all REST endpoints),
 `src/cdp_client.py` (CDP protocol client), `src/session_registry.py` (per-client
 sessions), `src/mcp_server/registry.py::build_tool_defs()` (tool source of truth),
 `src/fleet/` (multi-node orchestration).
@@ -448,20 +453,19 @@ sessions), `src/mcp_server/registry.py::build_tool_defs()` (tool source of truth
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](docs/getting-started.md) | Prerequisites, install, first run |
-| [API Reference](docs/api-reference.md) | Complete endpoint docs with examples |
-| [LLM Agent API](docs/agent-api.md) | Stable refs, observations, actions, artifacts |
+| Getting started | See *Install & run* above (a separate getting-started doc does not exist yet) |
+| Endpoint list | Route decorators in `src/main.py` and `src/fleet/api.py`; agent contracts in [LLM Agent API](docs/agent-api.md) | Stable refs, observations, actions, artifacts |
 | [Agent Navigation Engine](docs/agent-navigation-engine.md) | AX-tree observation, semantic forms, execute-task |
-| [MCP Server](docs/mcp-server.md) | Transports, client configs, full 68-tool reference |
+| [MCP Server](docs/mcp-server.md) | Transports, client configs, full 75-tool reference |
 | [Perf roadmap](docs/perf-prioritized.md) · [Phase 2](docs/perf-phase2.md) | Speed design + benchmarks |
 | [Tab Auto-Activation](docs/tab-auto-activation.md) | How transparent tab activation works |
 | [Visual workflow builder](docs/visual-workflow-builder.md) | Accessible Automation workspace for the repeated actions (navigate, click, type, wait, screenshot, analyze, page text); edits JSON, never executes |
 | [Condensed Snapshot](docs/condensed-snapshot.md) · [Checkbox Operations](docs/checkbox-operations.md) · [Screenshot Confirmation](docs/screenshot-confirmation.md) | Feature guides |
 | [Anti-Detection Profile Manager](docs/anti-detection-profile-manager.md) · [Fingerprint Randomization](docs/fingerprint-randomization.md) · [Behavioral Simulation](docs/behavioral-simulation.md) · [Cloud Provider Setup](docs/cloud-provider-setup.md) · [Proxy Rotation Manager](docs/proxy-rotation-manager.md) · [Fingerprint Database](docs/fingerprint-database.md) · [Session Persistence](docs/session-persistence.md) · [Anti-Detection Compositor](docs/anti-detection-compositor.md) | Stealth stack docs |
 | [Engineering Standards](docs/engineering-standards.md) | Kötelező olvasmány kódírás előtt |
-| [Decisions](docs/decisions/) · [Specs](docs/specs/) · [Methodology](docs/METHODOLOGY.md) | Döntések, követelmények, módszertan |
+| [Decisions](docs/decisions/) · [Specs](docs/specs/) | Döntések, követelmények |
 | [Changelog](CHANGELOG.md) | Version history |
-| Examples: [browse-workflow](examples/browse-workflow.py) · [dashboard-demo](examples/dashboard-demo.py) · [checkbox_ops](examples/checkbox_ops.py) · [proxy_rotation](examples/proxy_rotation.py) · [session_persistence](examples/session_persistence.py) · [cloud_browser](examples/cloud_browser.py) | Runnable demos |
+| Examples: [checkbox_ops](examples/checkbox_ops.py) · [proxy_rotation](examples/proxy_rotation.py) · [session_persistence](examples/session_persistence.py) · [cloud_browser](examples/cloud_browser.py) | Runnable demos |
 
 ## Development & testing
 
@@ -472,13 +476,14 @@ ruff check src/                                  # lint (must pass before commit
 pytest tests/test_mcp_server.py tests/test_agent_api.py tests/test_agent_highlevel.py -o addopts='' -q
                                                  # core suite (~69 tests, <20s)
 pytest -q                                        # full suite (slow; use timeout)
-bash scripts/release-validate.sh                 # release gate: version + 68 tools + docs consistency
+bash scripts/release-validate.sh                 # release gate: version + 75 tools + docs consistency
 ```
 
 Release process: feature branch → FF-merge to main → version bump
 (`pyproject.toml`, `src/main.py`, `Dockerfile`, README badge) → CHANGELOG entry →
 `release-validate.sh` green → tag → GitHub release → systemd restart → live `/health` check.
 
-Current state: **2806 passed** (sequential, `-o addopts='' -p no:randomly`,
-~307 s; 1 skipped, 8 xfailed, 32 xpassed); the fast gate used per release is
-the selective suite above. Version history in [CHANGELOG.md](CHANGELOG.md).
+Current state: **2865 tests collected** (`pytest --collect-only`, measured 2026-10-09). The
+last full sequential run (`-o addopts='' -p no:randomly`, ~307 s) predates the current
+changes, so its pass count is not repeated here. The fast gate used per release is the
+selective suite above. Version history in [CHANGELOG.md](CHANGELOG.md).

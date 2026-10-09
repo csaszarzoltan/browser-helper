@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **68 tools** derived from the capability registry (37 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery).
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **75 tools** derived from the capability registry (44 browser/fleet incl. 7 testing tools added in this release + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery).
 
 ---
 
@@ -26,7 +26,7 @@ bh mcp                                  # stdio (default)
 On startup you see:
 
 ```
-Browser Helper MCP server — transport=stdio tools=68 host=127.0.0.1 port=8765
+Browser Helper MCP server — transport=stdio tools=75 host=127.0.0.1 port=8765
 ```
 
 The server then speaks JSON-RPC over stdin/stdout. Stdio is the transport for local, single-process agents. **No port is bound** in stdio mode — the port/host settings are ignored.
@@ -131,9 +131,9 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ---
 
-## 3. Tool reference (68 tools)
+## 3. Tool reference (75 tools)
 
-All 68 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
+All 75 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 
 ### Browser tools — `src/mcp_server/tools.py`
 
@@ -342,7 +342,7 @@ All three tools are pure reads: they never register, unregister, allocate, relea
 
 Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`) require a live CDP connection. Without one, `run_op` raises `HTTPException` 400 *before* the engine call — the agent sees a tool-call error with that message rather than an envelope. Start Browser Helper (or launch Chrome with `--remote-debugging-port=9555` and connect) before calling them. `session_status` and the fleet tools work without a browser connection.
 
-### The agent sees only 68 tools
+### The agent sees 75 tools (v1.36.21)
 
 68 is the correct count for v1.35.0 (37 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery = 68). The 4 new P0–P2 tools cover bulk scheduling, test discovery & export, and locale-aware visual proof. The 17 E2E tools cover 6 functional groups; the 4 new tools add `agent.testing` + `agent.flow` + `browser.core`. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`, `agent.flow`); EXPERIMENTAL (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones never surface.
 
@@ -400,8 +400,8 @@ export PATH="$PWD/.venv/bin:$PATH"
 
 python -m browser_helper.mcp --help            # exits 0, prints transports
 bh mcp --help                                  # Click help (entry point)
-python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 68
-python -m pytest tests/test_mcp_server.py -q   # 68 tests: interface, engine binding, fleet reads, FastMCP
+python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 75
+python -m pytest tests/test_mcp_server.py -q   # interface tests, engine binding, fleet reads, FastMCP
 ```
 
 ---

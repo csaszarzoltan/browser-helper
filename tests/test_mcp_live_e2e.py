@@ -188,6 +188,7 @@ def _init_and_list(transport: StdioTransport) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("chrome")
 class TestLiveMCPE2E:
     def test_initialize_and_list_tools(self, live_stdio_server):
         """The server initializes and advertises the browser tool surface."""

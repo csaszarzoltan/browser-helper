@@ -21,6 +21,13 @@ _TOOL_CAPABILITY = {
     "click": "browser.core",
     "type": "browser.core",
     "screenshot": "browser.core",
+    "set_viewport": "browser.core",
+    "print_pdf": "browser.core",
+    "set_geolocation": "browser.core",
+    "set_offline": "browser.core",
+    "get_performance_metrics": "browser.core",
+    "drag": "browser.core",
+    "accessibility_audit": "browser.core",
     "snapshot": "agent.semantic",
     "get_tabs": "browser.core",
     "switch_tab": "browser.core",
@@ -105,6 +112,50 @@ _TOOL_CAPABILITY = {
 # with the exact required params. These are the pre-tester contract and the
 # FastMCP inputSchema gate (non-empty per tool).
 _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
+    "set_viewport": {
+        "type": "object",
+        "properties": {
+            "width": {"type": "integer", "description": "Viewport width in CSS px; 0 clears the override"},
+            "height": {"type": "integer", "description": "Viewport height in CSS px; 0 clears the override"},
+            "device_scale_factor": {"type": "number", "description": "Device pixel ratio (default 1)"},
+            "mobile": {"type": "boolean", "description": "Phone layout with touch and mobile viewport (default false)"},
+        },
+        "required": ["width", "height"],
+    },
+    "print_pdf": {
+        "type": "object",
+        "properties": {
+            "landscape": {"type": "boolean", "description": "Landscape orientation (default false)"},
+            "print_background": {"type": "boolean", "description": "Print CSS backgrounds (default true)"},
+            "scale": {"type": "number", "description": "Scale factor, 0.1 to 2 (default 1)"},
+        },
+    },
+    "set_geolocation": {
+        "type": "object",
+        "properties": {
+            "latitude": {"type": "number", "description": "Latitude in degrees"},
+            "longitude": {"type": "number", "description": "Longitude in degrees"},
+            "accuracy": {"type": "number", "description": "Accuracy in metres (default 100)"},
+            "grant": {"type": "boolean", "description": "Grant the geolocation permission for the page origin so navigator.geolocation works without a prompt (default true)"},
+        },
+        "required": ["latitude", "longitude"],
+    },
+    "set_offline": {
+        "type": "object",
+        "properties": {"offline": {"type": "boolean", "description": "true to go offline, false to restore"}},
+        "required": ["offline"],
+    },
+    "get_performance_metrics": {"type": "object", "properties": {}},
+    "drag": {
+        "type": "object",
+        "properties": {
+            "from_selector": {"type": "string", "description": "CSS selector of the element to drag"},
+            "to_selector": {"type": "string", "description": "CSS selector of the drop target"},
+            "steps": {"type": "integer", "description": "Mouse-move steps between the two points (default 12)"},
+        },
+        "required": ["from_selector", "to_selector"],
+    },
+    "accessibility_audit": {"type": "object", "properties": {}},
     "navigate": {
         "type": "object",
         "properties": {"url": {"type": "string", "description": "URL to navigate to"}},
@@ -112,7 +163,10 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "click": {
         "type": "object",
-        "properties": {"selector": {"type": "string", "description": "CSS selector"}},
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector"},
+            "expect": {"type": "object", "description": "Expected outcome after the click, e.g. {url_changed: true} or {text_visible: \"...\"}. The result is in data.verification.satisfied."},
+        },
         "required": ["selector"],
     },
     "type": {
@@ -158,6 +212,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "option": {"type": "string", "description": "Option for select"},
             "timeout": {"type": "integer", "description": "Timeout in seconds (default 10)"},
             "expression": {"type": "string", "description": "JS expression for eval action"},
+            "expect": {"type": "object", "description": "Expected outcome, checked after the action. Clauses: {url_changed: true}, {dialog_opened: true}, {text_visible: \"...\"}, {element_visible: {role, name}}, or {any_of: [clause, ...]}. The result is in data.verification.satisfied."},
         },
         "required": ["action"],
     },
@@ -694,20 +749,84 @@ _PROFILES: dict[str, frozenset[str] | None] = {"full": None, "core": _CORE_TOOLS
 
 # Usage hints shown to the model. Measured on local pages (scratch/mcp-tuning):
 # snapshot (page_analyze) was ~2.9x the observe(semantic) output on a 300-row page.
-_TOOL_HINTS: dict[str, str] = {
-    "observe": (
-        "Preferred page observation: compact accessibility-tree nodes with "
-        "element_id refs for act(). Paginated; use it to find targets before acting."
-    ),
-    "snapshot": (
-        "Page analysis summary (title, buttons, forms, modals, alerts, text preview). "
-        "NOT an accessibility tree and it returns no element refs: use observe to find "
-        "targets. Larger than observe on big pages."
-    ),
-    "act": (
-        "Perform one action (click, fill, ...) on a target: element_id from observe, "
-        "or a selector or text."
-    ),
+# One usage description per tool, shown to the model. Each says when to use the tool
+# and which overlapping tool to use instead. Keep these in step with the handlers.
+_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "set_viewport": "Set the viewport size of the active tab (width, height). Use mobile=true for a phone layout. width=0 and height=0 clear the override.",
+    "print_pdf": "Render the active page to PDF and store it as an artifact. Returns artifact_id and artifact_url.",
+    "set_geolocation": "Override the browser geolocation (latitude, longitude) and grant the permission for the current page, so navigator.geolocation returns that position. grant=false skips the permission.",
+    "set_offline": "Simulate the network going offline (offline=true) or back online (offline=false). For offline-behaviour tests.",
+    "get_performance_metrics": "Load timings of the current page from the Performance API: TTFB, DOMContentLoaded, load, first paint, first contentful paint, resource count, JS heap. Milliseconds.",
+    "drag": "Drag one element onto another with the mouse (from_selector to to_selector). For drag-and-drop widgets such as sliders, sortable lists and boards.",
+    "accessibility_audit": "Heuristic accessibility check of the active page: missing lang and title, images without alt, unnamed buttons and links, unlabelled inputs, duplicate ids, skipped heading levels. Counts per rule and up to 50 issues. Not a full WCAG audit.",
+    'observe': 'Preferred way to see the page. Returns compact accessibility-tree nodes, each with an element_id for act(). Paginated (next_cursor). Use it to find targets before acting. Measured: about 2.9x smaller than snapshot on a 300-row page.',
+    'snapshot': 'Page analysis summary: title, buttons, forms, modals, alerts, text preview. NOT an accessibility tree and it returns no element_ids. Use observe to find targets. Larger than observe on big pages.',
+    'act': "Perform one action on a target. Preferred: element_id plus snapshot_id from observe. Alternatives: selector or text. Actions: click, fill, select, wait, navigate. On failure returns the engine's error code and message (e.g. element_not_found).",
+    'click': 'Click the first element matching a CSS selector in the active tab. For targets from observe, use act with element_id instead.',
+    'type': 'Type text into the element matched by a CSS selector. For observe targets use act(action=fill). For several labelled fields use form_fill.',
+    'hover': 'Hover over an element by CSS selector. Use it to reveal menus and tooltips.',
+    'press_key': 'Press a keyboard key (e.g. Enter, Escape, Tab), optionally on a selector.',
+    'scroll': 'Scroll the page, or one element, by x and y pixels.',
+    'form_fill': 'Fill several form fields at once, matched by label or selector. Use form_extract first to see the field labels.',
+    'form_extract': "List the page's form fields with labels and types. Read-only. Use it before form_fill.",
+    'browser_interact': 'One call for click, fill, press or select, with actionability checks (waits until the element is visible and enabled). Prefer it over click/type when the target may still be loading.',
+    'browser_find_semantic_elements': 'Map interactive elements to stable Playwright-style locators (getByRole and similar). Use when a test must survive DOM changes.',
+    'browser_get_accessibility_tree': 'Token-optimised ARIA tree (roles, names, states; no raw HTML). Same idea as observe with other filters: scope, interactive_only, include_hidden.',
+    'browser_get_page_structure': 'Concise structure of forms, buttons and dialogs (optionally iframes). Smaller than snapshot for a quick overview.',
+    'get_page_text': 'Visible text of the page. Use it to read content. Use observe to find targets to click.',
+    'get_content': 'Load a URL (or use the current page) and return its main content. For reading and research, not for interacting.',
+    'search': 'One-call web search. Returns the extracted answer text.',
+    'navigate': 'Navigate the active tab to a URL. For load strategy, cookies or storage state use browser_navigate.',
+    'browser_navigate': 'Navigate with a chosen load strategy (wait_until), an optional settle wait, and optional origins or storage_state applied before the page renders.',
+    'reload': 'Reload the current page. ignore_cache bypasses the cache.',
+    'get_tabs': 'List open tabs with id, title, url and active flag. Call it before switch_tab or close_tab.',
+    'switch_tab': 'Make tab id the active tab.',
+    'close_tab': 'Close the tab with the given id. Get ids from get_tabs.',
+    'browser_reset_session': 'Clear cache, cookies and storage between tests. scope selects what is cleared.',
+    'clone_session': "Create a new session holding a copy of this session's cookies.",
+    'session_status': 'Persistence status of all sessions (age, url, expired). Use it to see which sessions are alive.',
+    'export_cookies': 'Export all cookies of a session as JSON.',
+    'import_cookies': 'Import cookies into a session.',
+    'browser_inject_storage_state': 'Inject cookies and localStorage (e.g. a saved login) so the page starts logged in. Use it to skip logins in tests.',
+    'screenshot': 'JPEG screenshot of the active tab (viewport). For full page or one element use browser_take_screenshot.',
+    'browser_take_screenshot': 'Screenshot of the viewport, the full page (scope), or one element (selector). Prefer it over screenshot when you need more than the viewport.',
+    'browser_highlight_elements': 'Draw temporary highlight boxes around selectors, so a person can see what is targeted. For debugging.',
+    'eval': 'Run JavaScript in the page and return its value. For state no other tool exposes. For checks prefer assert, wait_js or element_state.',
+    'assert': 'Assert a DOM condition on the page (value, kind, condition, expected) and return pass or fail. For tests.',
+    'wait_for': 'Wait until a DOM condition holds (value, kind, condition, timeout). Use it instead of fixed sleeps.',
+    'wait_js': 'Wait until a JavaScript expression becomes truthy (js, timeout).',
+    'wait_network_idle': 'Wait until no network requests are pending for quiet_ms.',
+    'browser_wait_for_condition': 'Wait for a JavaScript predicate (js) or for a selector to be visible.',
+    'browser_rate_hybrid_idle': 'Navigate and wait for hybrid network-idle, for pages that never go fully idle. quiet_ms sets the quiet window.',
+    'element_state': 'State of one element by CSS selector: visible, enabled, checked, value. For assertions.',
+    'get_console_errors': 'Persistent console errors since a time (since, limit). Use it to check for JavaScript errors in a test.',
+    'browser_get_console_logs': 'Console logs with stack traces, filtered by level and since. Use it when get_console_errors is not enough, for example for info or log output.',
+    'get_network_requests': 'Filtered network request log (path, method, status). For inspecting requests.',
+    'browser_get_network_activity': 'Failed requests and API timings with payloads, from the filtered network log. Use it to debug API calls.',
+    'network_block': 'Block requests whose URL matches any of the regex patterns. For testing failure paths.',
+    'network_mock': 'Install URL-pattern mocks that return fake responses. For tests without a backend.',
+    'notifications_start': 'Start capturing toast, alert and notification DOM changes. Call it before get_notifications.',
+    'get_notifications': 'Toast, alert and notification messages captured since a time. Requires notifications_start first.',
+    'dialog_handle': 'Accept or dismiss the next JavaScript dialog (alert, confirm, prompt), optionally with prompt text.',
+    'rate_limiter_status': 'Domain throttle and rate-limiter state. Use it when requests are being delayed.',
+    'download': 'Download a file through the browser into the artifact store and return where it was stored.',
+    'browser_download_file': 'Download a URL into the artifact store through the sandboxed browser.',
+    'browser_upload_file': 'Set files on an input type=file from the sandboxed artifact store.',
+    'browser_visual_diff_locale': 'Visual diff of the page across locales (locales, h1_selector, threshold) against a baseline. For localisation tests.',
+    'browser_discover_tests': 'Find test spec files by glob pattern under root.',
+    'browser_start_recorder': 'Start recording user steps into a named recording (name). Then add annotated steps with browser_record_step.',
+    'browser_record_step': 'Add one annotated step (step, selector, action, value) to the active recording.',
+    'browser_export_playwright_spec': 'Export a recording as a Playwright TypeScript .spec.ts file (recording_id, or stop_recording).',
+    'browser_export_batch_spec': 'Merge several recordings into one combined .spec.ts file (recordings, suite_name).',
+    'run_flow': 'Run an ordered list of steps as an E2E test with a per-step report. stop_on_error controls whether a failure stops the run.',
+    'fleet_nodes': 'List fleet worker nodes and their health.',
+    'fleet_status': 'Report the fleet session status across worker nodes. Use fleet_nodes for node health and fleet_queue for pending work.',
+    'fleet_queue': 'Peek at the allocation queue without consuming it.',
+    'fleet_run_batch': 'Run many independent browsing tasks in parallel (tasks, workers, retries, shard). Returns per-task results.',
+    'memory_remember': 'Store a fact under a key (content, optional metadata). Persists across sessions.',
+    'memory_recall': 'Search stored memories by keyword, ranked by relevance.',
+    'memory_list': 'List stored memories, optionally filtered.',
+    'memory_forget': 'Delete a memory by key or id.',
 }
 
 
@@ -764,15 +883,10 @@ def build_tool_defs(registry: CapabilityRegistry | None = None, profile: str | N
             continue  # UNAVAILABLE capability → never surfaces (defense in depth)
         if allowed is not None and name not in allowed:
             continue  # outside the selected profile
-        hint = _TOOL_HINTS.get(name, "")
         defs.append(
             ToolDef(
                 name=name,
-                description=" ".join(filter(None, [
-                    hint,
-                    f"MCP tool `{name}` — backed by capability `{capability_id}` "
-                    f"(READY). See mcp-server-design.md §4.3.",
-                ])),
+                description=_TOOL_DESCRIPTIONS[name],
                 parameters=_TOOL_PARAM_SCHEMAS[name],
                 capability_id=capability_id,
                 status=next(c.status for c in capability.capabilities if c.id == capability_id),

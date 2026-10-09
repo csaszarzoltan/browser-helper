@@ -194,6 +194,7 @@ def _assert_tool_error(resp: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("chrome")
 class TestStdioE2E:
     """End-to-end over the stdio transport (task body item 1)."""
 
@@ -263,9 +264,12 @@ class TestStdioE2E:
             if name in HIGH_LEVEL_TOOLS:
                 continue  # long-running agent tools — covered by own tests
             args = _args_for(name)
-            resp = stdio_server.request(
-                "tools/call", {"name": name, "arguments": args}, req_id=req_id
-            )
+            try:
+                resp = stdio_server.request(
+                    "tools/call", {"name": name, "arguments": args}, req_id=req_id
+                )
+            except AssertionError as exc:
+                raise AssertionError(f"{name} ({args}): {exc}") from exc
             req_id += 1
             if name in CDP_GATED_TOOLS:
                 msg = _assert_tool_error(resp)
@@ -315,6 +319,7 @@ class TestStdioE2E:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xdist_group("chrome")
 class TestHTTPE2E:
     """End-to-end over the streamable-HTTP transport (task body item 2)."""
 
@@ -630,6 +635,14 @@ def _args_for(name: str) -> dict:
         return {"query": "noop", "engine": "perplexity", "timeout": 5}
     if name == "get_content" or short == "get_content":
         return {"url": "about:blank", "wait_ready": False}
+    if name == "set_viewport":
+        return {"width": 800, "height": 600}
+    if name == "set_geolocation":
+        return {"latitude": 0.0, "longitude": 0.0}
+    if name == "set_offline":
+        return {"offline": False}  # restores the network: harmless if a browser is attached
+    if name == "drag":
+        return {"from_selector": "#noop", "to_selector": "#noop2"}
     if name == "run_flow" or short == "run_flow":
         return {"steps": [], "name": "noop"}
     if name == "memory_remember" or short == "memory_remember":
