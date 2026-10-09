@@ -32,6 +32,11 @@ All notable changes to browser-helper will be documented in this file.
   `test_parallel_session_isolation`) csak `BH_LIVE=1`-gyel futnak. A Chrome-ot indító E2E-tesztek egy xdist
   csoportba kerültek (`--dist loadgroup`). A profil-tesztek saját tárolót kapnak a közös `profiles.json` helyett.
   A session- és backend-tesztek nem függnek a korábbi tesztek sorrendjétől.
+- **Stdio-harness holtpont javítva.** A teszt-harness `select()`-et és a `TextIO.readline()`-t keverte. Ha a szerver
+  egy értesítést és a választ egy csomagban írta, a második sor elveszett, és a teszt az időkorlátig várt. Most nyers
+  `os.read` és saját sor-puffer. Terhelés alatt a teszt eddig 65 s után bukott, most 5 s alatt átmegy.
+- **Memória-DB izoláció a stdio-szervernek.** A gyermek-szerver nem nyitja meg a valódi `~/.browser-helper/memory.db`-t
+  (ami zárolódhat), minden indítás saját eldobható fájlt kap. A `test_memory.py` monkeypatch-et használ a `del os.environ` helyett.
 
 ## [1.36.21] — 2026-10-07
 

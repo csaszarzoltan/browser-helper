@@ -12,9 +12,11 @@ bodies, per the MCP streamable-HTTP spec.
 from __future__ import annotations
 
 import json
+import os
 import re
 import select
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -54,13 +56,20 @@ class StdioTransport:
         startup_timeout: float = 15.0,
     ) -> None:
         self.cmd = [repo_python(), "-m", "browser_helper.mcp", *args]
-        run_env = dict(__import__("os").environ)
+        run_env = dict(os.environ)
         run_env.setdefault("PYTHONPATH", str(REPO_ROOT / "src"))
         run_env.setdefault("PYTHONUNBUFFERED", "1")
         # Test isolation: never launch real Chrome from the MCP server
         # subprocess (it would attach to the live browser-helper service
         # and make CDP-gated tools succeed instead of failing cleanly).
         run_env.setdefault("BH_TEST_NO_CHROME", "1")
+        # Test isolation: the server must never open the developer's memory store
+        # (~/.browser-helper/memory.db). That file can be locked by the running
+        # service, and a memory call then stalls for tens of seconds. Each
+        # transport gets its own file, overriding any value leaked into this process.
+        run_env["BROWSER_HELPER_MEMORY_DB"] = os.path.join(
+            tempfile.mkdtemp(prefix="bh-mcp-memory-"), "memory.db"
+        )
         if env:
             run_env.update(env)
         self.proc = subprocess.Popen(
@@ -74,6 +83,7 @@ class StdioTransport:
             bufsize=1,
         )
         self.timeout = timeout
+        self._stdout_buf: bytes = b""
         self._stderr_lines: list[str] = []
         self._stderr_lock = threading.Lock()
         self._stderr_reader = threading.Thread(target=self._drain_stderr, daemon=True)
@@ -112,13 +122,27 @@ class StdioTransport:
         return None
 
     def _readline(self, timeout: float | None = None) -> str | None:
+        """Return the next complete stdout line, or None on timeout / EOF.
+
+        Reads the raw fd and keeps its own buffer. Mixing select() on the fd with
+        the TextIO readline() loses lines: when the server writes a notification
+        and a response in one chunk, readline() buffers the second line, select()
+        then sees an empty fd, and the caller waits until its timeout.
+        """
         assert self.proc.stdout is not None
         fd = self.proc.stdout.fileno()
-        ready, _, _ = select.select([fd], [], [], timeout)
-        if not ready:
-            return None
-        line = self.proc.stdout.readline()
-        return line if line else None
+        deadline = None if timeout is None else time.time() + timeout
+        while b"\n" not in self._stdout_buf:
+            remain = None if deadline is None else max(0.0, deadline - time.time())
+            ready, _, _ = select.select([fd], [], [], remain)
+            if not ready:
+                return None
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return None
+            self._stdout_buf += chunk
+        line, _, self._stdout_buf = self._stdout_buf.partition(b"\n")
+        return line.decode("utf-8", errors="replace") + "\n"
 
     def stderr_tail(self, n: int = 8) -> str:
         return "\n".join(self.stderr_lines()[-n:])

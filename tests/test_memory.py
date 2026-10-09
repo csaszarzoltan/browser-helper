@@ -862,7 +862,7 @@ class TestCorruptStore:
     """
 
     @pytest.mark.asyncio
-    async def test_memory_recall_on_corrupt_store_returns_error_envelope(self, tmp_path):
+    async def test_memory_recall_on_corrupt_store_returns_error_envelope(self, tmp_path, monkeypatch):
         """Write garbage bytes to the store path; recall must return a clean
         error envelope (status=error, operation_failed) with no traceback.
         """
@@ -873,7 +873,7 @@ class TestCorruptStore:
         # Override the env so _get_store() binds to our corrupt file
         import os
 
-        os.environ["BROWSER_HELPER_MEMORY_DB"] = str(db)
+        monkeypatch.setenv("BROWSER_HELPER_MEMORY_DB", str(db))
         try:
             result = await memory_recall(query="anything", ctx=None)
             data = json.loads(result)
@@ -886,9 +886,7 @@ class TestCorruptStore:
             assert "exception" not in msg.lower()
             assert len(msg) > 10, f"error message too short: {msg!r}"
         finally:
-            # Reset so other tests aren't affected
-            if "BROWSER_HELPER_MEMORY_DB" in os.environ:
-                del os.environ["BROWSER_HELPER_MEMORY_DB"]
+            pass  # monkeypatch restores the environment
             # Reset the module singleton
             import mcp_server.memory.tools as _t
 
