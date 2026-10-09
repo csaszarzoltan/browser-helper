@@ -6,6 +6,7 @@ or ``main`` so registry-only unit tests run in SDK-less environments.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -681,19 +682,59 @@ class ToolDefRegistry:
         return len(self._defs)
 
 
-def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegistry:
+# Tool profiles (env ``MCP_PROFILE``). ``full`` is the default and exposes every
+# READY/EXPERIMENTAL tool; ``core`` is an opt-in subset that keeps the tool list
+# (and therefore the per-turn context cost of ``tools/list``) small.
+_CORE_TOOLS = frozenset({
+    "navigate", "observe", "act", "screenshot", "get_page_text", "get_tabs",
+    "switch_tab", "close_tab", "wait_for", "assert", "session_status",
+    "get_console_errors",
+})
+_PROFILES: dict[str, frozenset[str] | None] = {"full": None, "core": _CORE_TOOLS}
+
+# Usage hints shown to the model. Measured on local pages (scratch/mcp-tuning):
+# snapshot (page_analyze) was ~2.9x the observe(semantic) output on a 300-row page.
+_TOOL_HINTS: dict[str, str] = {
+    "observe": (
+        "Preferred page observation: compact accessibility-tree nodes with "
+        "element_id refs for act(). Paginated; use it to find targets before acting."
+    ),
+    "snapshot": (
+        "Page analysis summary (title, buttons, forms, modals, alerts, text preview). "
+        "NOT an accessibility tree and it returns no element refs: use observe to find "
+        "targets. Larger than observe on big pages."
+    ),
+    "act": (
+        "Perform one action (click, fill, ...) on a target: element_id from observe, "
+        "or a selector or text."
+    ),
+}
+
+
+def resolve_profile(profile: str | None = None) -> frozenset[str] | None:
+    """Return the allowed tool names for a profile, or None for ``full``.
+
+    ``profile`` wins over ``MCP_PROFILE``; unknown names raise ``ValueError``.
+    """
+    name = (profile if profile is not None else os.environ.get("MCP_PROFILE", "")).strip().lower() or "full"
+    if name not in _PROFILES:
+        raise ValueError(f"unknown MCP profile {name!r}; expected one of {sorted(_PROFILES)}")
+    return _PROFILES[name]
+
+
+def build_tool_defs(registry: CapabilityRegistry | None = None, profile: str | None = None) -> ToolDefRegistry:
     """Derive the MCP tool surface from the capability registry (spec §4.2).
 
     Keeps READY + EXPERIMENTAL capabilities only; UNAVAILABLE capabilities
-    never surface as tools.
-
-    Pure registry bookkeeping: resolves each tool's handler *reference* from
-    ``tools.py`` / ``fleet_tools.py`` without calling it, and builds ``ToolDef``
-    records from the authored ``_TOOL_CAPABILITY`` / ``_TOOL_PARAM_SCHEMAS``
-    tables. No engine, no SDK — runs in the RED phase so the 12-tool contract
-    is locked before implementation. The handlers themselves stay stubbed.
+    never surface as tools. ``profile`` (or env ``MCP_PROFILE``) optionally
+    narrows the surface to a named subset (see ``resolve_profile``).
     """
-    capability = registry if registry is not None else CapabilityRegistry.default()
+    allowed = resolve_profile(profile)
+    # Pure registry bookkeeping: resolves each tool's handler *reference* from
+    # ``tools.py`` / ``fleet_tools.py`` without calling it, and builds ``ToolDef``
+    # records from the authored ``_TOOL_CAPABILITY`` / ``_TOOL_PARAM_SCHEMAS``
+    # tables. No engine, no SDK.
+    capability =registry if registry is not None else CapabilityRegistry.default()
     ok_ids = {
         c.id
         for c in capability.capabilities
@@ -721,13 +762,17 @@ def build_tool_defs(registry: CapabilityRegistry | None = None) -> ToolDefRegist
     for name, capability_id in _TOOL_CAPABILITY.items():
         if capability_id not in ok_ids:
             continue  # UNAVAILABLE capability → never surfaces (defense in depth)
+        if allowed is not None and name not in allowed:
+            continue  # outside the selected profile
+        hint = _TOOL_HINTS.get(name, "")
         defs.append(
             ToolDef(
                 name=name,
-                description=(
+                description=" ".join(filter(None, [
+                    hint,
                     f"MCP tool `{name}` — backed by capability `{capability_id}` "
-                    f"(READY). See mcp-server-design.md §4.3."
-                ),
+                    f"(READY). See mcp-server-design.md §4.3.",
+                ])),
                 parameters=_TOOL_PARAM_SCHEMAS[name],
                 capability_id=capability_id,
                 status=next(c.status for c in capability.capabilities if c.id == capability_id),
