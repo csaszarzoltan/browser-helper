@@ -23,7 +23,7 @@ async def browser_discover_tests(
     derived from the path (us_007 → US-007).
     """
     if ctx is not None:
-        ctx.info(f"browser_discover_tests pattern={pattern}")
+        await ctx.info(f"browser_discover_tests pattern={pattern}")
     try:
         base = root or os.getcwd()
         glob_expr = os.path.join(base, pattern)
@@ -57,7 +57,7 @@ async def browser_export_batch_spec(
     and merges via artifact_store.
     """
     if ctx is not None:
-        ctx.info(f"browser_export_batch_spec recordings={len(recordings or [])}")
+        await ctx.info(f"browser_export_batch_spec recordings={len(recordings or [])}")
     try:
         import main as _m
         from main import artifact_store
@@ -109,7 +109,7 @@ async def browser_visual_diff_locale(
     and pixel-diffs locale pairs. Returns {locales:[{locale,h1}], diffs:[{pair,pixel_delta,passed}]}.
     """
     if ctx is not None:
-        ctx.info(f"browser_visual_diff_locale url={url} locales={locales}")
+        await ctx.info(f"browser_visual_diff_locale url={url} locales={locales}")
     try:
         from main import _get_current_session, _local_cdp_http, chrome_mgr, session_registry
         import base64, tempfile, os as _os
@@ -186,7 +186,7 @@ async def browser_rate_hybrid_idle(
     result + rate_limiter state.
     """
     if ctx is not None:
-        ctx.info(f"browser_rate_hybrid_idle url={url}")
+        await ctx.info(f"browser_rate_hybrid_idle url={url}")
     try:
         from main import _get_current_session, client, run_op
         from domain_throttle import domain_throttle

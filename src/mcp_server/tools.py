@@ -112,7 +112,7 @@ async def navigate(url: str, ctx: Context | None = None) -> str:
     Backed by the same engine as ``POST /navigate``.
     """
     if ctx is not None:
-        ctx.info(f"navigate -> {url}")
+        await ctx.info(f"navigate -> {url}")
     target, run_op = await _target()
     return json_dumps(await run_op("navigate", target.navigate, url))
 
@@ -123,7 +123,7 @@ async def click(selector: str, ctx: Context | None = None) -> str:
     Backed by the same engine as ``POST /click``.
     """
     if ctx is not None:
-        ctx.info(f"click -> {selector}")
+        await ctx.info(f"click -> {selector}")
     target, run_op = await _target()
     result = await run_op("click", target.click, selector)
     # Unwrap the run_op envelope: the inner data.status can be "error" even
@@ -143,7 +143,7 @@ async def type(selector: str, text: str, ctx: Context | None = None) -> str:
     Backed by the same engine as ``POST /type``.
     """
     if ctx is not None:
-        ctx.info(f"type {len(text)} chars into {selector}")
+        await ctx.info(f"type {len(text)} chars into {selector}")
     target, run_op = await _target()
     result = await run_op("type", target.type_text, selector, text)
     inner = result.get("data") if isinstance(result, dict) else None
@@ -160,7 +160,7 @@ async def screenshot(ctx: Context | None = None) -> str:
     Backed by the same engine as ``POST /screenshot``.
     """
     if ctx is not None:
-        ctx.info("capturing screenshot")
+        await ctx.info("capturing screenshot")
     target, run_op = await _target()
     return json_dumps(await run_op("screenshot", target.screenshot))
 
@@ -171,7 +171,7 @@ async def snapshot(ctx: Context | None = None) -> str:
     Backed by the same engine as ``POST /page/analyze``.
     """
     if ctx is not None:
-        ctx.info("analyzing page")
+        await ctx.info("analyzing page")
     target, run_op = await _target()
     return json_dumps(await run_op("page_analyze", target.analyze_page))
 
@@ -203,7 +203,7 @@ async def observe(
     and ``store_screenshot`` persists the shot as an artifact (P2, v1.36).
     """
     if ctx is not None:
-        ctx.info(f"observe mode={mode} scope={scope} tab_id={tab_id or 'session'}")
+        await ctx.info(f"observe mode={mode} scope={scope} tab_id={tab_id or 'session'}")
     # Use internal snapshot functions directly (same as REST endpoint)
     from main import (
         _capture_accessibility_snapshot,
@@ -298,7 +298,7 @@ async def act(
     Backed by the same engine as ``POST /agent/act``. Use with observe's snapshot_id/ref.
     """
     if ctx is not None:
-        ctx.info(f"act -> {action}")
+        await ctx.info(f"act -> {action}")
     import json as _json
     import urllib.request as _ur
 
@@ -357,7 +357,7 @@ async def get_tabs(ctx: Context | None = None) -> str:
     Backed by the same engine as ``GET /tabs``.
     """
     if ctx is not None:
-        ctx.info("listing tabs")
+        await ctx.info("listing tabs")
     target, run_op = await _target()
     return json_dumps(await run_op("get_tabs", target.get_tabs))
 
@@ -368,7 +368,7 @@ async def switch_tab(id: str, ctx: Context | None = None) -> str:
     Backed by the same engine as ``POST /switch_tab/{tab_id}``.
     """
     if ctx is not None:
-        ctx.info(f"switch_tab -> {id}")
+        await ctx.info(f"switch_tab -> {id}")
     target, run_op = await _target()
     return json_dumps(await run_op("switch_tab", target.switch_tab, id))
 
@@ -379,7 +379,7 @@ async def close_tab(id: str, ctx: Context | None = None) -> str:
     Backed by the same engine as ``POST /tab/close/{tab_id}``.
     """
     if ctx is not None:
-        ctx.info(f"close_tab -> {id}")
+        await ctx.info(f"close_tab -> {id}")
     target, run_op = await _target()
     return json_dumps(await run_op("close_tab", target.close_tab, id))
 
@@ -394,7 +394,7 @@ async def session_status(ctx: Context | None = None) -> str:
     from main import _session_mgr  # lazy import — engine singleton
 
     if ctx is not None:
-        ctx.info("reading session persistence status")
+        await ctx.info("reading session persistence status")
     try:
         sessions = _session_mgr.list_sessions()
         return tool_result(
@@ -414,7 +414,7 @@ async def mcp_export_cookies(session_id: str, ctx: Context | None = None) -> str
     ``expires``, ``httpOnly``, ``secure``, ``sameSite``.
     """
     if ctx is not None:
-        ctx.info(f"export_cookies -> session {session_id}")
+        await ctx.info(f"export_cookies -> session {session_id}")
     try:
         from services.cookie_service import export_cookies
 
@@ -440,7 +440,7 @@ async def search(query: str, engine: str = "google", timeout: int = 45,
     from main import AgentSearchRequest, agent_search  # lazy import
 
     if ctx is not None:
-        ctx.info(f"search {engine}: {query[:60]}")
+        await ctx.info(f"search {engine}: {query[:60]}")
     resp = await agent_search(AgentSearchRequest(query=query, engine=engine, timeout=timeout))
     return json_dumps(resp)
 
@@ -455,7 +455,7 @@ async def get_content(url: str | None = None, wait_ready: bool = True,
     from main import client  # lazy import
 
     if ctx is not None:
-        ctx.info(f"get_content url={url}")
+        await ctx.info(f"get_content url={url}")
     sess, run_op_fn = await _mcp_session()
     target = sess.client if sess is not None else client
     if url:
@@ -477,7 +477,7 @@ async def run_flow(steps: list[dict], name: str = "flow", stop_on_error: bool = 
     from main import AgentFlowRequest, AgentFlowStep, agent_run_flow  # lazy import
 
     if ctx is not None:
-        ctx.info(f"run_flow {name} ({len(steps or [])} steps)")
+        await ctx.info(f"run_flow {name} ({len(steps or [])} steps)")
     steps = steps or []
     if not steps:
         return tool_error("run_flow", "invalid_params", "steps is required")
@@ -529,7 +529,7 @@ async def export_cookies(session_id: str, ctx: Context | None = None) -> str:
     written to the operation log or chat.
     """
     if ctx is not None:
-        ctx.info(f"export_cookies session={session_id}")
+        await ctx.info(f"export_cookies session={session_id}")
     try:
         target, _ = _resolve_cookie_target(session_id)
         res = await target.get_cookies()
@@ -549,7 +549,7 @@ async def import_cookies(cookies: list[dict], session_id: str | None = None,
     into the operation log or chat — only a count is returned.
     """
     if ctx is not None:
-        ctx.info(f"import_cookies session={session_id} n={len(cookies or [])}")
+        await ctx.info(f"import_cookies session={session_id} n={len(cookies or [])}")
     cookies = cookies or []
     try:
         target, _ = _resolve_cookie_target(session_id)
@@ -571,7 +571,7 @@ async def clone_session(session_id: str | None = None, ctx: Context | None = Non
     copy count is returned.
     """
     if ctx is not None:
-        ctx.info(f"clone_session source={session_id}")
+        await ctx.info(f"clone_session source={session_id}")
     try:
         _source, _src_sess = _resolve_cookie_target(session_id)
         res = await _source.get_cookies()
@@ -605,7 +605,7 @@ async def wait_for(value: str, kind: str = "selector", condition: str = "present
     from main import client
 
     if ctx is not None:
-        ctx.info(f"wait_for kind={kind} value={value} condition={condition} timeout={timeout}")
+        await ctx.info(f"wait_for kind={kind} value={value} condition={condition} timeout={timeout}")
     sess, run_op_fn = await _mcp_session()
     target = sess.client if sess is not None else client
     try:
@@ -627,7 +627,7 @@ async def assert_(value: str, kind: str = "selector", condition: str = "exists",
     from main import client
 
     if ctx is not None:
-        ctx.info(f"assert kind={kind} value={value} condition={condition} expected={expected}")
+        await ctx.info(f"assert kind={kind} value={value} condition={condition} expected={expected}")
     sess, run_op_fn = await _mcp_session()
     target = sess.client if sess is not None else client
     try:
@@ -656,7 +656,7 @@ async def form_fill(fields: list[dict], timeout: int = 5, ctx: Context | None = 
     from main import client
 
     if ctx is not None:
-        ctx.info(f"form_fill fields={len(fields or [])}")
+        await ctx.info(f"form_fill fields={len(fields or [])}")
     sess, run_op_fn = await _mcp_session()
     target = sess.client if sess is not None else client
     try:
@@ -676,7 +676,7 @@ async def form_extract(ctx: Context | None = None) -> str:
     from main import client
 
     if ctx is not None:
-        ctx.info("form_extract")
+        await ctx.info("form_extract")
     sess, run_op_fn = await _mcp_session()
     target = sess.client if sess is not None else client
     try:
@@ -700,7 +700,7 @@ async def download(url: str, timeout: int = 30, ctx: Context | None = None) -> s
     from main import client
 
     if ctx is not None:
-        ctx.info(f"download url={url}")
+        await ctx.info(f"download url={url}")
     sess, run_op_fn = await _mcp_session()
     target = sess.client if sess is not None else client
     try:
@@ -749,7 +749,7 @@ async def network_block(patterns: list[str], ctx: Context | None = None) -> str:
     from main import client, run_op
 
     if ctx is not None:
-        ctx.info(f"network_block patterns={len(patterns)}")
+        await ctx.info(f"network_block patterns={len(patterns)}")
     try:
         result = await run_op("network_block", client.set_network_block, patterns)
         if not isinstance(result, dict) or result.get("status") != "ok":
@@ -771,7 +771,7 @@ async def network_mock(mocks: list[dict], ctx: Context | None = None) -> str:
     from main import client, run_op
 
     if ctx is not None:
-        ctx.info(f"network_mock mocks={len(mocks)}")
+        await ctx.info(f"network_mock mocks={len(mocks)}")
     try:
         result = await run_op("network_mock", client.set_request_mocks, mocks)
         if not isinstance(result, dict) or result.get("status") != "ok":
@@ -801,7 +801,7 @@ async def get_notifications(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info("reading notifications")
+        await ctx.info("reading notifications")
     try:
         await target.start_notification_monitoring()
         js = "JSON.stringify(window.__bh_notifications__ || [])"
@@ -827,7 +827,7 @@ async def notifications_start(ctx: Context | None = None) -> str:
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info("starting notification monitoring")
+        await ctx.info("starting notification monitoring")
     try:
         result = await target.start_notification_monitoring()
         return tool_result("notifications_start", result)
@@ -851,7 +851,7 @@ async def get_network_requests(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info("reading network requests")
+        await ctx.info("reading network requests")
     try:
         await target.start_network_monitoring()
         data = await target.get_network_log()
@@ -885,7 +885,7 @@ async def get_console_errors(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info("reading console errors")
+        await ctx.info("reading console errors")
     try:
         await target.start_console_monitoring()
         entries = target.get_console_entries(level="error")
@@ -914,7 +914,7 @@ async def wait_js(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"waiting for JS (timeout={timeout}s)")
+        await ctx.info(f"waiting for JS (timeout={timeout}s)")
     poll_js = f"""(async function() {{
   const deadline = Date.now() + {int(timeout) * 1000};
   const poll = 200;
@@ -955,7 +955,7 @@ async def eval(js: str, timeout: int = 30, tab_id: str | None = None, ctx: Conte
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"eval js ({len(js)} chars, timeout={timeout}s, tab_id={tab_id or 'session'})")
+        await ctx.info(f"eval js ({len(js)} chars, timeout={timeout}s, tab_id={tab_id or 'session'})")
     try:
         if tab_id:
             pinned = await _tab_pinned_client(tab_id)
@@ -987,7 +987,7 @@ async def get_page_text(
     """
     target, run_op_fn = await _target()
     if ctx is not None:
-        ctx.info(f"get_page_text wait_ready={wait_ready} timeout={timeout} tab_id={tab_id or 'session'}")
+        await ctx.info(f"get_page_text wait_ready={wait_ready} timeout={timeout} tab_id={tab_id or 'session'}")
     try:
         if tab_id:
             pinned = await _tab_pinned_client(tab_id)
@@ -1037,7 +1037,7 @@ async def element_state(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"querying element: {selector}")
+        await ctx.info(f"querying element: {selector}")
     import json as _json
     js = f"""(() => {{
   const el = document.querySelector({_json.dumps(selector)});
@@ -1089,7 +1089,7 @@ async def press_key(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"press_key {key}" + (f" @ {selector}" if selector else ""))
+        await ctx.info(f"press_key {key}" + (f" @ {selector}" if selector else ""))
     try:
         result = await target.press_key(key, selector)
         if result.get("status") == "error":
@@ -1110,7 +1110,7 @@ async def hover(selector: str, ctx: Context | None = None) -> str:
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"hover {selector}")
+        await ctx.info(f"hover {selector}")
     try:
         result = await target.hover(selector)
         if result.get("status") == "error":
@@ -1137,7 +1137,7 @@ async def scroll(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"scroll x={x} y={y}" + (f" @ {selector}" if selector else ""))
+        await ctx.info(f"scroll x={x} y={y}" + (f" @ {selector}" if selector else ""))
     try:
         result = await target.scroll(x, y, selector)
         if result.get("status") == "error":
@@ -1157,7 +1157,7 @@ async def reload(
     """
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"reload ignore_cache={ignore_cache}")
+        await ctx.info(f"reload ignore_cache={ignore_cache}")
     try:
         result = await target.reload(ignore_cache)
         return tool_result("reload", result)
@@ -1178,7 +1178,7 @@ async def wait_network_idle(
     """
     target, run_op_fn = await _target()
     if ctx is not None:
-        ctx.info(f"wait_network_idle timeout={timeout}s quiet_ms={quiet_ms}")
+        await ctx.info(f"wait_network_idle timeout={timeout}s quiet_ms={quiet_ms}")
     try:
         result = await run_op_fn(
             "wait_for_network_idle", target.wait_for_network_idle, timeout, quiet_ms
@@ -1196,7 +1196,7 @@ async def rate_limiter_status(ctx: Context | None = None) -> str:
     throttle is holding the request.
     """
     if ctx is not None:
-        ctx.info("rate_limiter_status")
+        await ctx.info("rate_limiter_status")
     try:
         import time as _time
 
@@ -1241,7 +1241,7 @@ async def dialog_handle(
         return tool_error("dialog_handle", "invalid_action", "action must be 'accept' or 'dismiss'")
     target, _run_op = await _target()
     if ctx is not None:
-        ctx.info(f"dialog_handle {action}")
+        await ctx.info(f"dialog_handle {action}")
     try:
         if action == "accept":
             result = await target.dialog_accept(prompt_text)
@@ -1265,7 +1265,7 @@ async def browser_get_accessibility_tree(
 ) -> str:
     """Token-optimized ARIA a11y tree (roles/names/states, not raw HTML) (capability ``agent.semantic``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_get_accessibility_tree scope={scope} max_nodes={max_nodes}")
+        await ctx.info(f"browser_get_accessibility_tree scope={scope} max_nodes={max_nodes}")
     try:
         target, run_op_fn = await _target()
         # 2026-09-02 heal fix: health-check the session tab via run_op so a
@@ -1312,7 +1312,7 @@ async def browser_find_semantic_elements(
 ) -> str:
     """Map interactive elements to Playwright-stable locators (capability ``agent.semantic``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_find_semantic_elements query={query!r} role={role}")
+        await ctx.info(f"browser_find_semantic_elements query={query!r} role={role}")
     try:
         from main import _capture_accessibility_snapshot
         target, _ = await _target()
@@ -1351,7 +1351,7 @@ async def browser_get_page_structure(
 ) -> str:
     """Concise page structure: forms + buttons + dialogs (+ optional iframes) (capability ``agent.semantic``, READY)."""
     if ctx is not None:
-        ctx.info("browser_get_page_structure")
+        await ctx.info("browser_get_page_structure")
     try:
         target, _ = await _target()
         from main import _capture_accessibility_snapshot as _cap_ax
@@ -1404,7 +1404,7 @@ async def browser_navigate(
     The response always carries ``tab_id`` / ``active_tab_id``.
     """
     if ctx is not None:
-        ctx.info(f"browser_navigate {url} wait_until={wait_until} settle={settle} origins={bool(origins or storage_state)}")
+        await ctx.info(f"browser_navigate {url} wait_until={wait_until} settle={settle} origins={bool(origins or storage_state)}")
     try:
         target, run_op = await _target()
         if wait_until and wait_until not in _NEGOTIATE:
@@ -1470,7 +1470,7 @@ async def browser_interact(
 ) -> str:
     """One-call click/fill/press/select with actionability checks (capability ``browser.core``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_interact {action} {selector}")
+        await ctx.info(f"browser_interact {action} {selector}")
     try:
         al = (action or "click").lower().strip()
         if al in {"type", "fill"}:
@@ -1521,7 +1521,7 @@ async def browser_upload_file(
 ) -> str:
     """Upload a sandboxed file via <input type=file> (capability ``browser.core``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_upload_file {selector} <- {path}")
+        await ctx.info(f"browser_upload_file {selector} <- {path}")
     try:
         from pathlib import Path as _P
         sb = _P("/tmp/bh-upload-sandbox").resolve()
@@ -1560,7 +1560,7 @@ async def browser_download_file(
 ) -> str:
     """Download a URL into the artifact store via the browser (sandboxed) (capability ``browser.core``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_download_file {url}")
+        await ctx.info(f"browser_download_file {url}")
     try:
         import mimetypes as _mime
         import tempfile as _tmp
@@ -1594,7 +1594,7 @@ async def browser_get_console_logs(
 ) -> str:
     """Fetch browser console logs with stack traces by level (capability ``agent.testing``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_get_console_logs level={level}")
+        await ctx.info(f"browser_get_console_logs level={level}")
     try:
         target, _ = await _target()
         try:
@@ -1629,7 +1629,7 @@ async def browser_get_network_activity(
 ) -> str:
     """Failed requests, api timings, payloads — filtered CDP network log (capability ``browser.core``, READY)."""
     if ctx is not None:
-        ctx.info("browser_get_network_activity")
+        await ctx.info("browser_get_network_activity")
     try:
         target, _ = await _target()
         try:
@@ -1666,7 +1666,7 @@ async def browser_wait_for_condition(
     if js and selector:
         return tool_error("browser_wait_for_condition", "invalid_params", "js and selector are mutually exclusive")
     if ctx is not None:
-        ctx.info(f"browser_wait_for_condition {('js' if js else 'selector')}")
+        await ctx.info(f"browser_wait_for_condition {('js' if js else 'selector')}")
     try:
         target, _ = await _target()
         tout = min(max(int(timeout), 1), 60)
@@ -1706,7 +1706,7 @@ async def browser_take_screenshot(
 ) -> str:
     """Screenshots: viewport, full page, or a single component (capability ``browser.core``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_take_screenshot scope={scope}")
+        await ctx.info(f"browser_take_screenshot scope={scope}")
     try:
         target, run_op = await _target()
         sc = (scope or "viewport").lower().strip()
@@ -1739,7 +1739,7 @@ async def browser_highlight_elements(
     if len(selectors) > 10:
         return tool_error("browser_highlight_elements", "too_many", "at most 10 selectors")
     if ctx is not None:
-        ctx.info(f"browser_highlight_elements {len(selectors)} targets")
+        await ctx.info(f"browser_highlight_elements {len(selectors)} targets")
     try:
         target, _ = await _target()
         import json as _j
@@ -1797,7 +1797,7 @@ async def browser_start_recorder(
 ) -> str:
     """Start recording browser steps (capability ``agent.flow``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_start_recorder {name or '-'} ac={ac}")
+        await ctx.info(f"browser_start_recorder {name or '-'} ac={ac}")
     try:
         from main import AgentRecordRequest, agent_record
         resp = await agent_record(AgentRecordRequest(start=True, name=name))
@@ -1839,7 +1839,7 @@ async def browser_record_step(
     if not step or not isinstance(step, str):
         return tool_error("browser_record_step", "invalid_step", "step must be a non-empty description")
     if ctx is not None:
-        ctx.info(f"browser_record_step: {step}")
+        await ctx.info(f"browser_record_step: {step}")
     try:
         import main as _m
         rid = getattr(_m, "active_recording_id", None)
@@ -1928,7 +1928,7 @@ async def browser_export_playwright_spec(
 ) -> str:
     """Export a recording as a Playwright TypeScript .spec.ts (capability ``agent.flow``, READY)."""
     if ctx is not None:
-        ctx.info("browser_export_playwright_spec")
+        await ctx.info("browser_export_playwright_spec")
     try:
         import main as _m
         rid = str(recording_id).strip() if recording_id else getattr(_m, "active_recording_id", None)
@@ -1955,7 +1955,7 @@ async def browser_inject_storage_state(
 ) -> str:
     """Inject JWT/cookies + localStorage state — skip redundant logins (capability ``diagnostics.cookies``, READY)."""
     if ctx is not None:
-        ctx.info(f"browser_inject_storage_state tenant={tenant or '-'}")
+        await ctx.info(f"browser_inject_storage_state tenant={tenant or '-'}")
     try:
         target, _ = await _target()
         cookies = cookies or []
@@ -2007,7 +2007,7 @@ async def browser_reset_session(
     if sc not in {"cookies", "storage", "all"}:
         return tool_error("browser_reset_session", "invalid_scope", "scope must be cookies|storage|all")
     if ctx is not None:
-        ctx.info(f"browser_reset_session scope={sc}")
+        await ctx.info(f"browser_reset_session scope={sc}")
     try:
         target, _ = await _target()
         done: dict[str, bool] = {}

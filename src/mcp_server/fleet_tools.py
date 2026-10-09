@@ -23,7 +23,7 @@ async def fleet_nodes(ctx: Context | None = None) -> str:
     from fleet.api import get_fleet_coordinator  # lazy import
 
     if ctx is not None:
-        ctx.info("reading fleet nodes")
+        await ctx.info("reading fleet nodes")
     try:
         coordinator = get_fleet_coordinator()
         data = await coordinator.registry.snapshot()
@@ -104,7 +104,7 @@ async def fleet_run_batch(tasks: list[dict], concurrency: int = 4,
     eff_concurrency = int(workers) if workers is not None else int(concurrency)
 
     if ctx is not None:
-        ctx.info(f"fleet_run_batch tasks={len(tasks or [])} concurrency={eff_concurrency} retries={retries} shard={shard} reporter={reporter}")
+        await ctx.info(f"fleet_run_batch tasks={len(tasks or [])} concurrency={eff_concurrency} retries={retries} shard={shard} reporter={reporter}")
     if not tasks:
         return tool_error("fleet_run_batch", "invalid_params", "tasks is required")
     try:
