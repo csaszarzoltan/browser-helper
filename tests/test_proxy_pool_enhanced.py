@@ -1,3 +1,4 @@
+import threading
 """
 Pre-development tests for Enhanced Proxy Pool features (P1-6).
 
@@ -296,59 +297,51 @@ class TestConcurrentHealthCheck:
     """Verify health_check_all() runs concurrently (not sequentially)."""
 
     def test_concurrent_execution_faster_than_sequential(self, pool):
-        """health_check_all() should complete faster than sequential execution.
+        """health_check_all() runs the checks in parallel, not one after another.
 
-        If each health_check takes ~0.15s, 3 sequential checks take ~0.45s.
-        Concurrent checks should complete in ~0.15-0.20s (near the max of individual).
+        Each fake check waits on a barrier for all three to arrive. Sequential
+        execution would leave the first check waiting alone until the barrier
+        times out, so the test is decided by overlap, not by wall-clock time.
         """
         pool.add_proxy("socks5://host1:1080")
         pool.add_proxy("socks5://host2:1080")
         pool.add_proxy("socks5://host3:1080")
 
-        # Patch health_check to simulate a slow check (0.15s each)
         original_check = pool.health_check
+        barrier = threading.Barrier(3, timeout=5)
 
-        def _slow_check(proxy_id):
-            time.sleep(0.15)
+        def _overlapping_check(proxy_id):
+            barrier.wait()  # raises BrokenBarrierError if the checks do not overlap
             return original_check(proxy_id)
 
-        pool.health_check = _slow_check
-
-        start = time.time()
+        pool.health_check = _overlapping_check
         results = pool.health_check_all()
-        elapsed = time.time() - start
-
-        # Sequential: 3 * 0.15 = 0.45s; concurrent: ~0.15-0.18s
-        assert elapsed < 0.40, (
-            f"health_check_all took {elapsed:.3f}s (expected < 0.40s for concurrency, "
-            f">= 0.45s indicates sequential execution)"
-        )
         assert len(results) == 3
 
     def test_concurrent_with_many_proxies(self, pool):
-        """health_check_all() should scale with many proxies (not O(n) sequential)."""
-        # Add 10 proxies
+        """With many proxies every check is in flight at once (no O(n) sequential run)."""
         for i in range(10):
             pool.add_proxy(f"socks5://host{i}:1080")
 
         original_check = pool.health_check
+        lock = threading.Lock()
+        in_flight = {"now": 0, "max": 0}
 
-        def _slow_check(proxy_id):
-            time.sleep(0.1)
-            return original_check(proxy_id)
+        def _tracked_check(proxy_id):
+            with lock:
+                in_flight["now"] += 1
+                in_flight["max"] = max(in_flight["max"], in_flight["now"])
+            try:
+                time.sleep(0.05)  # keep checks overlapping long enough to observe
+                return original_check(proxy_id)
+            finally:
+                with lock:
+                    in_flight["now"] -= 1
 
-        pool.health_check = _slow_check
-
-        start = time.time()
+        pool.health_check = _tracked_check
         results = pool.health_check_all()
-        elapsed = time.time() - start
-
-        # Sequential 10 * 0.1 = 1.0s; concurrent ~0.1-0.15s
-        assert elapsed < 0.8, (
-            f"health_check_all with 10 proxies took {elapsed:.3f}s "
-            f"(expected < 0.8s for concurrent execution)"
-        )
         assert len(results) == 10
+        assert in_flight["max"] > 1, "checks never overlapped: health_check_all ran sequentially"
 
     def test_concurrent_empty_pool(self, pool):
         """health_check_all() on empty pool should return quickly."""

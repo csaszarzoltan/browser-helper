@@ -111,6 +111,34 @@ class RateLimiter:
         return self._log_normal_delay()
 
 
+# JS that finds an element by CSS selector inside open shadow roots and same-origin
+# iframes as well as the top document. Used by click/type so that elements listed by
+# observe with context "shadow" or "iframe" can be acted on.
+_DEEP_QUERY_JS = """function bhDeepQuery(sel) {
+  const walk = (root) => {
+    const hit = root.querySelector(sel);
+    if (hit) return hit;
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) { const f = walk(el.shadowRoot); if (f) return f; }
+      if (el.tagName === 'IFRAME') {
+        try { const d = el.contentDocument; if (d) { const f = walk(d); if (f) return f; } } catch (e) {}
+      }
+    }
+    return null;
+  };
+  return walk(document);
+}
+function bhTopRect(el) {
+  const r = el.getBoundingClientRect();
+  let x = r.x, y = r.y, w = el.ownerDocument.defaultView;
+  while (w && w !== w.top && w.frameElement) {
+    const fr = w.frameElement.getBoundingClientRect();
+    x += fr.x; y += fr.y; w = w.parent;
+  }
+  return {x: x, y: y, width: r.width, height: r.height};
+}"""
+
+
 class CDPClient:
     """Async CDP client for Chrome browser automation."""
 
@@ -642,7 +670,8 @@ class CDPClient:
         """Drop all collected notifications."""
         self._notifications = []
 
-    async def _send_command(self, method: str, params: dict | None = None, **extra) -> dict:
+    async def _send_command(self, method: str, params: dict | None = None,
+                            cdp_session: str | None = None, **extra) -> dict:
         """Send CDP command and wait for result.
 
         Accepts params either as a dict (``params=...``) or as keyword arguments
@@ -670,6 +699,9 @@ class CDPClient:
         self._message_id += 1
         msg_id = self._message_id
         payload = {"id": msg_id, "method": method, "params": params or {}}
+        if cdp_session:
+            # Flattened child session (an out-of-process iframe): route the command there.
+            payload["sessionId"] = cdp_session
         future = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = future
         await self._ws.send(json.dumps(payload))
@@ -952,6 +984,30 @@ class CDPClient:
     # ─── Smart form fill ──────────────────────────────────────────
 
     async def smart_form_fill(self, fields: list[dict], timeout: int = 5) -> dict:
+        """Fill fields; cross-origin iframe fields go through their own session."""
+        frame_fields = [f for f in fields if self._split_oopif(f.get("selector"))]
+        local_fields = [f for f in fields if not self._split_oopif(f.get("selector"))]
+        if not frame_fields:
+            return await self._smart_form_fill_top(fields, timeout)  # unchanged contract for page fields
+        results: list[dict] = []
+        for f in frame_fields:
+            key, inner = self._split_oopif(f["selector"])
+            results.append(await self._set_value_in_frame(key, inner, str(f.get("value", ""))))
+        if not local_fields:
+            return {"status": "ok", "fields": fields,
+                    "result": {"fields_filled": len(results), "results": results}}
+        out = await self._smart_form_fill_top(local_fields, timeout)
+        inner_result = (out or {}).get("result") or {}
+        if isinstance(inner_result, str):
+            try:
+                inner_result = json.loads(inner_result)
+            except ValueError:
+                inner_result = {}
+        results.extend(inner_result.get("results", []))
+        return {"status": "ok", "fields": fields,
+                "result": {"fields_filled": len(results), "results": results}}
+
+    async def _smart_form_fill_top(self, fields: list[dict], timeout: int = 5) -> dict:
         """Fill form fields - no CSS selectors needed.
 
         Each field descriptor may contain:
@@ -962,7 +1018,7 @@ class CDPClient:
           - value:         the value to type into the field
         """
         await self._activate_current()
-        js = r"""
+        js = _DEEP_QUERY_JS + r"""
 (function() {
   const fields = """ + json.dumps(fields) + r""";
   const maxWait = """ + str(int(timeout * 1000)) + r""";
@@ -1013,7 +1069,7 @@ class CDPClient:
       let el = null;
       // 1. Direct CSS selector
       if (f.selector) {
-        el = document.querySelector(f.selector);
+        el = bhDeepQuery(f.selector);
       }
       // 2. Exact placeholder match
       if (!el && f.placeholder) {
@@ -1045,7 +1101,10 @@ class CDPClient:
       el.dispatchEvent(new Event("blur", {bubbles: true}));
       const tag = el.tagName.toLowerCase();
       const type = el.type || "";
-      results.push({field: fieldId, status: "ok", tag: tag, type: type, filled: f.value.substring(0, 50)});
+      var after = (type === "checkbox" || type === "radio") ? String(!!el.checked) : String(el.value);
+        var wanted = (type === "checkbox" || type === "radio") ? String(!!f.value && f.value !== "false") : String(f.value);
+        results.push({field: fieldId, status: "ok", tag: tag, type: type, filled: f.value.substring(0, 50),
+          verified: after === wanted, value_after: after.substring(0, 80)});
     } catch(e) {
       const fieldId = f.selector || f.placeholder || f.label || "(unknown)";
       results.push({field: fieldId, status: "error", error: e.message});
@@ -1980,6 +2039,45 @@ class CDPClient:
             }
         }
 
+    async def _click_in_frame(self, key: str, inner: str) -> dict:
+        """Click an element inside a cross-origin iframe with real mouse events on the page."""
+        sid = await self._oopif_session_for(key)
+        expr = ("(function(){const el=document.querySelector(" + json.dumps(inner) + ");"
+                "if(!el)return null;el.scrollIntoView({behavior:'instant',block:'center'});"
+                "const b=el.getBoundingClientRect();"
+                "return JSON.stringify({x:b.left+b.width/2,y:b.top+b.height/2,tag:el.tagName});})()")
+        r = await self._send_command("Runtime.evaluate", {"expression": expr, "returnByValue": True}, cdp_session=sid)
+        raw = ((r or {}).get("result") or {}).get("value")
+        if not isinstance(raw, str):
+            return {"status": "error", "error": f"Element not found: {inner}"}
+        pos = json.loads(raw)
+        ox, oy = await self._frame_offset(key)
+        x, y = ox + pos["x"], oy + pos["y"]
+        for kind, buttons in (("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 0)):
+            await self._send_command("Input.dispatchMouseEvent", {
+                "type": kind, "x": x, "y": y, "button": "left" if kind != "mouseMoved" or buttons else "none",
+                "buttons": buttons, "clickCount": 1 if kind != "mouseMoved" else 0})
+        return {"status": "ok", "x": x, "y": y, "tag": pos["tag"], "frame": key}
+
+    async def _set_value_in_frame(self, key: str, inner: str, value: str) -> dict:
+        """Set a field's value inside a cross-origin iframe and fire the input/change events."""
+        sid = await self._oopif_session_for(key)
+        expr = ("(function(){const el=document.querySelector(" + json.dumps(inner) + ");"
+                "if(!el)return null;el.focus();"
+                "const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
+                "const setter=Object.getOwnPropertyDescriptor(proto,'value');"
+                "if(setter&&setter.set)setter.set.call(el," + json.dumps(value) + ");else el.value=" + json.dumps(value) + ";"
+                "el.dispatchEvent(new Event('input',{bubbles:true}));"
+                "el.dispatchEvent(new Event('change',{bubbles:true}));"
+                "return JSON.stringify({value:el.value});})()")
+        r = await self._send_command("Runtime.evaluate", {"expression": expr, "returnByValue": True}, cdp_session=sid)
+        raw = ((r or {}).get("result") or {}).get("value")
+        if not isinstance(raw, str):
+            return {"field": f"oopif|{key}|{inner}", "status": "error", "error": "field not found"}
+        after = json.loads(raw)["value"]
+        return {"field": f"oopif|{key}|{inner}", "status": "ok", "value_after": after[:80],
+                "verified": after == value}
+
     async def click(self, selector: str) -> dict:
         """Click element by CSS selector via real CDP mouse events.
 
@@ -1987,14 +2085,17 @@ class CDPClient:
         trajectory (WindMouse + Bezier) with natural timing instead of an
         instant jump-and-click.
         """
+        oopif = self._split_oopif(selector)
+        if oopif:
+            return await self._click_in_frame(*oopif)
         await self._activate_current()
         # Get element position
         js = (
-            f"(function() {{"
-            f"  const el = document.querySelector({json.dumps(selector)});"
+            f"(function() {{ {_DEEP_QUERY_JS}"
+            f"  const el = bhDeepQuery({json.dumps(selector)});"
             f"  if (!el) return {{'status': 'error', 'error': 'Element not found: {json.dumps(selector)}'}};"
             f"  el.scrollIntoView({{behavior: 'instant', block: 'center'}});"
-            f"  const rect = el.getBoundingClientRect();"
+            f"  const rect = bhTopRect(el);"
             f"  return {{'status': 'ok', 'x': rect.x + rect.width/2, 'y': rect.y + rect.height/2, 'tag': el.tagName}};"
             f"}})()"
         )
@@ -2031,12 +2132,15 @@ class CDPClient:
         If a behavioral engine is enabled, uses dwell/flight timing with
         natural keystroke rhythm instead of an instant insertText.
         """
+        oopif = self._split_oopif(selector)
+        if oopif:
+            return await self._set_value_in_frame(oopif[0], oopif[1], text)
         await self._activate_current()
         if self._behavioral and self._behavioral.profile.enabled:
             return await self._behavioral.type_text(selector, text)
         js = (
-            f"(function() {{"
-            f"  const el = document.querySelector({json.dumps(selector)});"
+            f"(function() {{ {_DEEP_QUERY_JS}"
+            f"  const el = bhDeepQuery({json.dumps(selector)});"
             f"  if (!el) return {{'status': 'error', 'error': 'Element not found'}};"
             f"  el.focus(); el.value = '';"
             f"  el.dispatchEvent(new Event('input', {{bubbles: true}}));"
@@ -4068,6 +4172,168 @@ class CDPClient:
 
     # ─── v0.7: Condensed page analysis ──────────────────────────────
 
+    # ─── Cross-origin iframes (out-of-process) ───────────────────────
+
+    _FRAME_SCAN_JS = r"""(function() {
+  var out = {fields: [], buttons: []}, n = 0;
+  var vis = function(e) { var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  document.querySelectorAll("input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select").forEach(function(e) {
+    if (!vis(e)) return;
+    var k = "c" + (++n); e.setAttribute("data-bh-ctx", k);
+    var forLbl = e.id ? document.querySelector('label[for="' + e.id.replace(/"/g, '') + '"]') : null;
+    var lab = e.getAttribute("aria-label") || (forLbl ? forLbl.textContent.trim() : "") || (e.closest("label") ? e.closest("label").textContent.trim() : "") || e.placeholder || e.name || "";
+    out.fields.push({tag: e.tagName, type: e.type || "", name: e.name || "", label: lab.substring(0, 80),
+      value: (e.value || "").substring(0, 80), placeholder: (e.placeholder || "").substring(0, 40),
+      required: e.required === true, checked: e.checked === true, selector: '[data-bh-ctx="' + k + '"]'});
+  });
+  document.querySelectorAll("button, a[href], input[type=submit], input[type=button], [role=button]").forEach(function(e) {
+    if (!vis(e)) return;
+    var label = ((e.textContent || e.value || "").trim() || e.getAttribute("aria-label") || "").substring(0, 100);
+    if (!label) return;
+    var k = "c" + (++n); e.setAttribute("data-bh-ctx", k);
+    var r = e.getBoundingClientRect();
+    out.buttons.push({tag: e.tagName, text: label, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2),
+      w: Math.round(r.width), h: Math.round(r.height), selector: '[data-bh-ctx="' + k + '"]'});
+  });
+  return JSON.stringify(out);
+})()"""
+
+    async def _frame_session(self, frame_url: str) -> str | None:
+        """Attach to the cross-origin iframe target whose URL is *frame_url*; return its session id."""
+        cache = self.__dict__.setdefault("_oopif_sessions", {})
+        if frame_url in cache:
+            return cache[frame_url]
+        if not self.__dict__.get("_discovering_targets"):
+            # Out-of-process iframes are listed only once target discovery is on.
+            await self._send_command("Target.setDiscoverTargets", {"discover": True})
+            self._discovering_targets = True
+        infos = (await self._send_command("Target.getTargets")).get("targetInfos", [])
+        base = frame_url.split("#")[0]
+        match = next((x for x in infos if x.get("type") == "iframe" and x.get("url", "").split("#")[0] == base), None)
+        if match is None:
+            return None
+        attached = await self._send_command("Target.attachToTarget",
+                                            {"targetId": match["targetId"], "flatten": True})
+        sid = attached.get("sessionId")
+        if sid:
+            cache[frame_url] = sid
+        return sid
+
+    async def _frame_offset(self, key: str) -> tuple[float, float]:
+        """Top-level page position of a cross-origin iframe's top-left corner."""
+        expr = ("(function(){const f=document.querySelector('[data-bh-frame=\"" + key + "\"]');"
+                "if(!f)return null;const r=f.getBoundingClientRect();"
+                "return JSON.stringify({x:r.left,y:r.top});})()")
+        r = await self._send_command("Runtime.evaluate", {"expression": expr, "returnByValue": True})
+        raw = ((r or {}).get("result") or {}).get("value")
+        if not isinstance(raw, str):
+            raise CDPError(f"iframe {key} is no longer on the page")
+        pos = json.loads(raw)
+        return (float(pos["x"]), float(pos["y"]))
+
+    async def _augment_with_cross_origin_frames(self, data: dict, frames: list) -> None:
+        """Add the controls of cross-origin iframes to the page analysis.
+
+        Their selectors read ``oopif|<frame key>|<inner selector>``; click, type and
+        fill route those through the frame's own session. Coordinates are shifted
+        to the top-level page.
+        """
+        self._oopif_src = {}
+        for frame in frames:
+            key, src = frame.get("key"), frame.get("src")
+            if not key or not src:
+                continue
+            self._oopif_src[key] = src
+            try:
+                sid = await self._frame_session(src)
+                if not sid:
+                    continue
+                r = await self._send_command("Runtime.evaluate", {
+                    "expression": self._FRAME_SCAN_JS, "returnByValue": True}, cdp_session=sid)
+                raw = ((r or {}).get("result") or {}).get("value")
+                scanned = json.loads(raw) if isinstance(raw, str) else {"fields": [], "buttons": []}
+                off_x, off_y = await self._frame_offset(key)
+            except (CDPError, OSError, ValueError, KeyError):
+                continue
+            for field in scanned.get("fields", []):
+                field.update(context="iframe", frame=key, selector=f"oopif|{key}|{field['selector']}")
+                data.setdefault("form_fields", []).append(field)
+            for button in scanned.get("buttons", []):
+                button.update(context="iframe", frame=key, selector=f"oopif|{key}|{button['selector']}",
+                              x=round(button["x"] + off_x), y=round(button["y"] + off_y))
+                data.setdefault("buttons", []).append(button)
+        data["field_count"] = len(data.get("form_fields", []))
+        data["button_count"] = len(data.get("buttons", []))
+
+    @staticmethod
+    def _split_oopif(selector: str | None) -> tuple[str, str] | None:
+        """Return ``(frame key, inner selector)`` for a cross-origin iframe selector, else None."""
+        if not selector or not selector.startswith("oopif|"):
+            return None
+        _, key, inner = selector.split("|", 2)
+        return key, inner
+
+    async def _oopif_session_for(self, key: str) -> str:
+        src = (getattr(self, "_oopif_src", {}) or {}).get(key)
+        if not src:
+            raise CDPError(f"iframe {key} is not known; observe the page again")
+        sid = await self._frame_session(src)
+        if not sid:
+            raise CDPError(f"iframe {key} is not reachable (its target is gone or not attachable)")
+        return sid
+
+    _AX_FIELD_TYPE: ClassVar[dict[str, str]] = {"textbox": "text", "searchbox": "search",
+                                                "spinbutton": "number", "combobox": "select-one"}
+    _AX_BUTTON_TAG: ClassVar[dict[str, str]] = {"button": "BUTTON", "link": "A"}
+
+    async def _augment_with_closed_shadow_controls(self, data: dict) -> None:
+        """Add controls from the accessibility tree that the page scan could not reach.
+
+        Closed shadow roots hide their content from script, but Chrome's accessibility
+        tree still lists it. Each added control carries its ``backend_node_id``, so
+        click and fill work without a CSS selector. Names already found by the scan
+        are not added twice.
+        """
+        try:
+            tree = await self.get_accessibility_tree()
+        except (CDPError, OSError):
+            return
+        known = {str(f.get("label") or f.get("name") or "").strip().lower()
+                 for f in data.get("form_fields", [])}
+        known |= {str(b.get("text") or "").strip().lower() for b in data.get("buttons", [])}
+        for node in (tree.get("tree") or {}).get("nodes", []):
+            if node.get("ignored"):
+                continue
+            role = ((node.get("role") or {}).get("value") or "").lower()
+            name = str((node.get("name") or {}).get("value") or "").strip()
+            backend = node.get("backendDOMNodeId")
+            if not name or backend is None or name.lower() in known:
+                continue
+            value = str((node.get("value") or {}).get("value") or "")
+            if role in self._AX_FIELD_TYPE:
+                data.setdefault("form_fields", []).append({
+                    "tag": "INPUT",
+                    "type": self._AX_FIELD_TYPE[role], "name": "", "label": name[:80],
+                    "value": value[:80], "placeholder": "", "required": False, "checked": False,
+                    "context": "closed-shadow", "backend_node_id": backend,
+                })
+            elif role in ("checkbox", "radio"):
+                data.setdefault("form_fields", []).append({
+                    "tag": "INPUT", "type": role, "name": "", "label": name[:80], "value": "",
+                    "placeholder": "", "required": False, "checked": False,
+                    "context": "closed-shadow", "backend_node_id": backend,
+                })
+            elif role in self._AX_BUTTON_TAG:
+                data.setdefault("buttons", []).append({
+                    "tag": self._AX_BUTTON_TAG[role], "text": name[:100], "x": 0, "y": 0,
+                    "w": 0, "h": 0, "context": "closed-shadow", "backend_node_id": backend,
+                })
+            else:
+                continue
+            known.add(name.lower())
+        data["field_count"] = len(data.get("form_fields", []))
+        data["button_count"] = len(data.get("buttons", []))
+
     async def analyze_page_condensed(self) -> dict:
         """Analyze the current page in condensed mode — strips nav/sidebar/footer.
 
@@ -4252,6 +4518,61 @@ class CDPClient:
   result.text_preview = (document.body ? document.body.innerText.substring(0, 2000) : "");
   result.text_length = document.body ? (document.body.innerText || "").length : 0;
 
+  // ── Open shadow roots and same-origin iframes ──
+  // The queries above stop at the top document. This walk adds the controls inside
+  // open shadow roots and same-origin iframes, marked with context "shadow" or "iframe".
+  // Coordinates of iframe content are shifted by the iframe's position on the page.
+  var bhScanSeq = 0;
+  var bhFrameSeq = 0;
+  result.oopif_frames = [];
+  (function bhDeepScan(root, ctx, offX, offY) {
+    root.querySelectorAll("*").forEach(function(el) {
+      if (el.shadowRoot && el.shadowRoot.mode !== "closed") {
+        bhDeepScan(el.shadowRoot, "shadow", offX, offY);
+      }
+      if (el.tagName === "IFRAME") {
+        var fdoc = null;
+        try { fdoc = el.contentDocument; } catch (e) { fdoc = null; }
+        if (fdoc && fdoc.body) {
+          var fr = el.getBoundingClientRect();
+          bhDeepScan(fdoc, "iframe", offX + fr.left, offY + fr.top);
+        } else if (ctx === "document" && el.src) {
+          // Cross-origin frame: its content is read through its own CDP session (Python side).
+          bhFrameSeq += 1;
+          el.setAttribute("data-bh-frame", "f" + bhFrameSeq);
+          result.oopif_frames.push({key: "f" + bhFrameSeq, src: el.src});
+        }
+      }
+      if (ctx === "document" || !__bhVisible(el)) return;
+      var tg = el.tagName;
+      bhScanSeq += 1;
+      el.setAttribute("data-bh-ctx", "c" + bhScanSeq);
+      var bhSel = '[data-bh-ctx="c' + bhScanSeq + '"]';
+      if ((tg === "INPUT" && el.type !== "hidden" && el.type !== "submit" && el.type !== "button") || tg === "TEXTAREA" || tg === "SELECT") {
+        result.form_fields.push({
+          tag: tg, type: el.type || "", name: el.name || "",
+          label: (el.getAttribute("aria-label") || (el.closest("label") ? el.closest("label").textContent.trim() : "") || el.placeholder || el.name || "").substring(0, 80),
+          value: (el.value || "").substring(0, 80), placeholder: (el.placeholder || "").substring(0, 40),
+          required: el.required === true, checked: el.checked === true, context: ctx, selector: bhSel
+        });
+      } else if (tg === "BUTTON" || tg === "A" && el.hasAttribute("href") || el.getAttribute("role") === "button" || (tg === "INPUT" && (el.type === "submit" || el.type === "button"))) {
+        var label = ((el.textContent || el.value || "").trim() || el.getAttribute("aria-label") || "").substring(0, 100);
+        if (!label) return;
+        var br = el.getBoundingClientRect();
+        result.buttons.push({
+          tag: tg, text: label, x: Math.round(offX + br.left + br.width / 2),
+          y: Math.round(offY + br.top + br.height / 2), w: Math.round(br.width), h: Math.round(br.height),
+          context: ctx, selector: bhSel
+        });
+      }
+    });
+  })(document, "document", 0, 0);
+
+  // Custom elements without an open shadow root may hide controls from this scan
+  // (closed shadow roots). The caller then reads them from the accessibility tree.
+  result.has_custom_elements = Array.prototype.some.call(document.querySelectorAll("*"),
+    function(e) { return e.tagName.indexOf("-") > 0 && !e.shadowRoot; });
+
   // ── Summary counts ──
   result.field_count = result.form_fields.length;
   result.button_count = result.buttons.length;
@@ -4268,6 +4589,11 @@ class CDPClient:
             data = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
             data = {"error": "parse failed", "raw": str(raw)[:200]}
+        if isinstance(data, dict):
+            frames = data.pop("oopif_frames", []) or []
+            await self._augment_with_cross_origin_frames(data, frames)
+            if data.pop("has_custom_elements", False):
+                await self._augment_with_closed_shadow_controls(data)
         # ── v0.7: Ensure selected_options / visual_state even if JS result is legacy format ──
         if isinstance(data, dict) and "form_fields" in data:
             if "selected_options" not in data:

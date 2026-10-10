@@ -4,7 +4,7 @@
 
 Browser Helper ships a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the browser and fleet engine as MCP **tools**. Any MCP-capable client — Claude Code, Codex CLI, Cursor, Windsurf, or a custom agent — can drive the same engine the REST API uses, in-process, with no HTTP round-trips and no LLM in the loop.
 
-The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **75 tools** derived from the capability registry (44 browser/fleet incl. 7 testing tools added in this release + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery).
+The server is implemented in `src/mcp_server/` (see `docs/architecture/mcp-server-design.md` for the full architecture spec) and exposes **78 tools** derived from the capability registry (47 browser/fleet incl. 10 testing and interaction tools added recently + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery).
 
 ---
 
@@ -26,7 +26,7 @@ bh mcp                                  # stdio (default)
 On startup you see:
 
 ```
-Browser Helper MCP server — transport=stdio tools=75 host=127.0.0.1 port=8765
+Browser Helper MCP server — transport=stdio tools=78 host=127.0.0.1 port=8765
 ```
 
 The server then speaks JSON-RPC over stdin/stdout. Stdio is the transport for local, single-process agents. **No port is bound** in stdio mode — the port/host settings are ignored.
@@ -133,7 +133,7 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ## 3. Tool reference (75 tools)
 
-All 75 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
+All 78 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 
 ### Browser tools — `src/mcp_server/tools.py`
 
@@ -342,7 +342,7 @@ All three tools are pure reads: they never register, unregister, allocate, relea
 
 Browser tools (`navigate`, `click`, `type`, `screenshot`, `snapshot`, `get_tabs`, `switch_tab`, `close_tab`) require a live CDP connection. Without one, `run_op` raises `HTTPException` 400 *before* the engine call — the agent sees a tool-call error with that message rather than an envelope. Start Browser Helper (or launch Chrome with `--remote-debugging-port=9555` and connect) before calling them. `session_status` and the fleet tools work without a browser connection.
 
-### The agent sees 75 tools (v1.36.21)
+### The agent sees 78 tools (v1.36.21)
 
 68 is the correct count for v1.35.0 (37 browser/fleet + 4 persistent memory + 6 agent testing + 17 E2E validation + 4 bulk/locale/discovery = 68). The 4 new P0–P2 tools cover bulk scheduling, test discovery & export, and locale-aware visual proof. The 17 E2E tools cover 6 functional groups; the 4 new tools add `agent.testing` + `agent.flow` + `browser.core`. The surface is derived from READY capabilities (`browser.core`, `agent.semantic`, `diagnostics.privacy`, `workflow.local`, `memory.persistent`, `agent.testing`, `agent.flow`); EXPERIMENTAL (`anti_detection.compositor`, `behavioral.scroll`) and UNAVAILABLE ones never surface.
 
@@ -400,7 +400,7 @@ export PATH="$PWD/.venv/bin:$PATH"
 
 python -m browser_helper.mcp --help            # exits 0, prints transports
 bh mcp --help                                  # Click help (entry point)
-python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 75
+python -c "from mcp_server.registry import build_tool_defs; print(len(list(build_tool_defs())))"   # → 78
 python -m pytest tests/test_mcp_server.py -q   # interface tests, engine binding, fleet reads, FastMCP
 ```
 
@@ -415,3 +415,39 @@ python -m pytest tests/test_mcp_server.py -q   # interface tests, engine binding
 - Engine singletons: `src/main.py` (`run_op`, `client`, `_session_mgr`); fleet: `src/fleet/api.py`
 - Capability registry: `src/capability_registry.py`
 - Tests: `tests/test_mcp_server.py` (55 tests)
+
+## Remote access (streamable-http with a token)
+
+A remote agent reaches the server over HTTP. Keep the server on loopback and put a tunnel in front of it,
+or bind to the network only with a token:
+
+```bash
+BH_MCP_TOKEN="$(openssl rand -hex 32)" bh mcp --http --host 0.0.0.0 --port 8765
+```
+
+- Every HTTP request must send `Authorization: Bearer <BH_MCP_TOKEN>`; otherwise the response is 401.
+- A non-loopback `--host` without `BH_MCP_TOKEN` refuses to start.
+- Recommended: `bh mcp --http --port 8765` (127.0.0.1) plus an SSH tunnel, `ssh -L 8765:127.0.0.1:8765 host`.
+- Client config for a remote agent: an HTTP MCP server at `http://127.0.0.1:8765/mcp` (through the tunnel)
+  with the header `Authorization: Bearer <token>`.
+
+## Agent profile isolation
+
+Agent sessions should not use the browser you are logged into. Start the MCP server with its own
+profile and debug port (environment variables, memory-only; the shared `settings.json` is not written):
+
+```bash
+BH_CHROME_PROFILE_DIR=$HOME/.browser-helper/agent-profile BH_CHROME_DEBUG_PORT=9560 DISPLAY=:1 \
+  bh mcp --stdio
+```
+
+Without these variables the server uses the profile in `settings.json`, which is usually your own
+logged-in Chrome profile.
+
+## Tips for reliable browsing
+
+- Single-page apps and dev servers render after load: use `navigate` with `wait_for` (`"#app .item"` or
+  `"text:Welcome"`) instead of reading text right after the load.
+- `click` and `type` wait up to 5 seconds for an element that is not rendered yet, then retry once.
+- If the session's own tab is closed, the next call opens a fresh tab; `session_status` reports the
+  current tab (`mcp_tab_id`) and how often it was replaced (`mcp_tab_replaced`).

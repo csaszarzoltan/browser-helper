@@ -1383,7 +1383,8 @@ async def _assert_tab_exists(tab_id: str):
     if not any(tid == tab_id for tid, _, _ in live):
         return api_error(
             "tab", "tab_not_found",
-            f"Tab not found: {tab_id}. Live tabs: " +
+            f"Tab {tab_id} is not open: it was closed, or it belongs to another client. "
+            "Call get_tabs for the open tabs. Live tabs: " +
             ", ".join(f"{tid} ({title or url})" for tid, title, url in live[:10]),
             404,
         )
@@ -5725,6 +5726,10 @@ async def agent_act(request: Request, body: AgentActionRequest):
             if fields is None and target.get("backend_node_id") and body.value is not None:
                 result = await tc.fill_backend_node(target["backend_node_id"], body.value)
                 fields = []
+            if fields is None and target.get("selector") and body.value is not None:
+                # A selector (also set for shadow-root and iframe controls) is exact;
+                # a label lookup would miss controls outside the top document.
+                fields = [{"selector": target["selector"], "value": body.value}]
             if fields is None:
                 label = target.get("label") or target.get("name") or target.get("text")
                 if not label or body.value is None:

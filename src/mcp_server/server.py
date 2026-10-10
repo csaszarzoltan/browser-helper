@@ -96,9 +96,58 @@ class MCPServer:
         elif t is MCPTransport.SSE:
             await self.mcp.run_sse_async()
         else:
-            await self.mcp.run_streamable_http_async()
+            await self._run_streamable_http()
+
+    async def _run_streamable_http(self) -> None:
+        """Serve the streamable-http transport behind a bearer-token check.
+
+        ``BH_MCP_TOKEN`` is required for any non-loopback bind, so a remote agent
+        can reach the server through a tunnel or the network only with the token.
+        """
+        import os
+
+        import uvicorn
+
+        token = os.environ.get("BH_MCP_TOKEN", "").strip()
+        host = self.settings.host
+        if host not in {"127.0.0.1", "localhost", "::1"} and not token:
+            raise ValueError(
+                f"refusing to serve MCP on {host!r} without BH_MCP_TOKEN; "
+                "set a token or bind to 127.0.0.1"
+            )
+        app = self.mcp.streamable_http_app()
+        if token:
+            app = bearer_token_app(app, token)
+
+        config = uvicorn.Config(app, host=host, port=self.settings.port, log_level="info")
+        await uvicorn.Server(config).serve()
 
 
 def create_mcp_server(settings: MCPSettings | None = None) -> MCPServer:
     """Expose a module-level factory (spec §6.3)."""
     return MCPServer(settings=settings)
+
+
+def bearer_token_app(app, token: str):
+    """Wrap an ASGI app so every HTTP request must carry ``Authorization: Bearer <token>``.
+
+    Lifespan and other non-HTTP scopes pass through, so the MCP session manager still starts.
+    """
+    import hmac
+
+    expected = token.encode()
+
+    async def guarded(scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            auth = headers.get(b"authorization", b"").decode("latin-1")
+            supplied = auth[len("Bearer "):].encode() if auth.startswith("Bearer ") else b""
+            if not hmac.compare_digest(supplied, expected):
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body",
+                            "body": b'{"detail":"Invalid or missing MCP token"}'})
+                return
+        await app(scope, receive, send)
+
+    return guarded

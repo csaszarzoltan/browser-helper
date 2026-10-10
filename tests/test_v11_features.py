@@ -201,6 +201,6 @@ class TestContenteditableSupport:
         import inspect
 
         from src.cdp_client import CDPClient
-        source = inspect.getsource(CDPClient.smart_form_fill)
+        source = inspect.getsource(CDPClient._smart_form_fill_top)
         assert "contenteditable" in source
         assert "textContent" in source

@@ -28,6 +28,9 @@ _TOOL_CAPABILITY = {
     "get_performance_metrics": "browser.core",
     "drag": "browser.core",
     "accessibility_audit": "browser.core",
+    "await_user": "browser.core",
+    "select_option": "browser.core",
+    "dismiss_overlays": "browser.core",
     "snapshot": "agent.semantic",
     "get_tabs": "browser.core",
     "switch_tab": "browser.core",
@@ -112,6 +115,33 @@ _TOOL_CAPABILITY = {
 # with the exact required params. These are the pre-tester contract and the
 # FastMCP inputSchema gate (non-empty per tool).
 _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
+    "await_user": {
+        "type": "object",
+        "properties": {
+            "url_contains": {"type": "string", "description": "Wait until the URL contains this text"},
+            "selector": {"type": "string", "description": "Wait until an element matching this CSS selector exists"},
+            "text": {"type": "string", "description": "Wait until the page shows this text"},
+            "timeout": {"type": "number", "description": "Seconds to wait (default 300)"},
+            "poll_ms": {"type": "integer", "description": "Polling interval in ms (default 1000)"},
+        },
+    },
+    "select_option": {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector of the <select> element"},
+            "value": {"type": "string", "description": "Option value attribute to choose"},
+            "label": {"type": "string", "description": "Visible text of the option to choose"},
+            "index": {"type": "integer", "description": "Zero-based option position"},
+        },
+        "required": ["selector"],
+    },
+    "dismiss_overlays": {
+        "type": "object",
+        "properties": {
+            "max_clicks": {"type": "integer", "description": "Most buttons to click in total (default 3, max 10)"},
+            "wait_ms": {"type": "integer", "description": "How long to keep looking for late banners, in ms (default 2000, max 10000)"},
+        },
+    },
     "set_viewport": {
         "type": "object",
         "properties": {
@@ -162,7 +192,8 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "url": {"type": "string", "description": "URL to navigate to"},
             "wait_until": {"type": "string", "enum": ["commit", "domcontentloaded", "load"],
                            "description": "Ready state to wait for before returning (default domcontentloaded)"},
-            "timeout": {"type": "number", "description": "Seconds to wait for wait_until (default 15)"},
+            "timeout": {"type": "number", "description": "Seconds to wait for wait_until and wait_for (default 15)"},
+            "wait_for": {"type": "string", "description": "Wait for rendered content after load: a CSS selector, or text:<visible text>. Error if it does not appear within timeout"},
         },
         "required": ["url"],
     },
@@ -189,6 +220,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "mode": {"type": "string", "description": "semantic|accessibility (default semantic)"},
+            "since_snapshot_id": {"type": "string", "description": "Earlier observe snapshot_id; the result adds a diff of what changed since then"},
             "scope": {"type": "string", "description": "page|dialog|viewport (default page)"},
             "max_nodes": {"type": "integer", "description": "Max nodes (default 250)"},
             "interactive_only": {"type": "boolean", "description": "Only interactive elements (default false)"},
@@ -757,6 +789,9 @@ _PROFILES: dict[str, frozenset[str] | None] = {"full": None, "core": _CORE_TOOLS
 # One usage description per tool, shown to the model. Each says when to use the tool
 # and which overlapping tool to use instead. Keep these in step with the handlers.
 _TOOL_DESCRIPTIONS: dict[str, str] = {
+    "await_user": "Wait while a person completes a step in the visible browser (login, CAPTCHA, two-factor). Give url_contains, selector or text; returns when they hold, or an error after timeout. Use it instead of trying to handle those steps yourself.",
+    "select_option": "Choose one option of a select element by value, label or index, firing the input and change events. Use it instead of click for native dropdowns.",
+    "dismiss_overlays": "Accept or close cookie banners, consent prompts and modal notices that block the page. Looks in the page and open shadow roots for accept, reject or close labels (several languages and close icons) inside a dialog, modal or fixed box; one click per overlay; waits up to wait_ms for late banners. Returns the labels clicked.",
     "set_viewport": "Set the viewport size of the active tab (width, height). Use mobile=true for a phone layout. width=0 and height=0 clear the override.",
     "print_pdf": "Render the active page to PDF and store it as an artifact. Returns artifact_id and artifact_url.",
     "set_geolocation": "Override the browser geolocation (latitude, longitude) and grant the permission for the current page, so navigator.geolocation returns that position. grant=false skips the permission.",
@@ -781,7 +816,7 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     'get_page_text': 'Visible text of the page. Use it to read content. Use observe to find targets to click.',
     'get_content': 'Load a URL (or use the current page) and return its main content. For reading and research, not for interacting.',
     'search': 'One-call web search. Returns the extracted answer text.',
-    'navigate': 'Navigate the active tab to a URL and wait until the page is ready (wait_until: commit, domcontentloaded or load; default domcontentloaded). A page that does not get there in timeout seconds is an error. For cookies or storage state use browser_navigate.',
+    'navigate': 'Navigate the active tab to a URL and wait until the page is ready (wait_until: commit, domcontentloaded or load; default domcontentloaded). Pass wait_for (a CSS selector or text:<visible text>) when the page renders content after load, such as a single-page app or dev server. A page that does not get there in timeout seconds is an error. For cookies or storage state use browser_navigate.',
     'browser_navigate': 'Navigate with a chosen load strategy (wait_until), an optional settle wait, and optional origins or storage_state applied before the page renders.',
     'reload': 'Reload the current page. ignore_cache bypasses the cache.',
     'get_tabs': 'List open tabs with id, title, url and active flag. Call it before switch_tab or close_tab.',

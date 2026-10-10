@@ -368,7 +368,7 @@ def test_smart_form_fill_uses_literal_placeholder_scan():
 
     from cdp_client import CDPClient
 
-    source = inspect.getsource(CDPClient.smart_form_fill)
+    source = inspect.getsource(CDPClient._smart_form_fill_top)
     assert 'Array.from(document.querySelectorAll("input, textarea"))' in source
     assert "candidate.placeholder" in source
     assert "CSS.escape(f.placeholder)" not in source

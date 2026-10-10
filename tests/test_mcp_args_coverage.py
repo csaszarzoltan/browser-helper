@@ -36,7 +36,7 @@ def _tool_schemas() -> dict[str, list[str]]:
 def test_registry_declares_required_params():
     """Sanity: the schema table is actually reachable and populated."""
     schemas = _tool_schemas()
-    assert len(schemas) == 75, f"expected 75 core tools, got {len(schemas)}"
+    assert len(schemas) == 78, f"expected 78 core tools, got {len(schemas)}"
     assert {k: v for k, v in schemas.items() if v}, (
         "no tool declares a required parameter — extraction is broken"
     )

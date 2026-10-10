@@ -635,6 +635,10 @@ def _args_for(name: str) -> dict:
         return {"query": "noop", "engine": "perplexity", "timeout": 5}
     if name == "get_content" or short == "get_content":
         return {"url": "about:blank", "wait_ready": False}
+    if name == "await_user":
+        return {"text": "noop", "timeout": 1, "poll_ms": 500}
+    if name == "select_option":
+        return {"selector": "#noop", "value": "x"}
     if name == "set_viewport":
         return {"width": 800, "height": 600}
     if name == "set_geolocation":

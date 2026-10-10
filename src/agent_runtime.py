@@ -143,17 +143,22 @@ class SnapshotStore:
                 if key_sig in seen:
                     continue
                 seen.add(key_sig)
-                result.append(
-                    {
-                        "role": role,
-                        "name": name,
-                        "selector": selector,
-                        "visible": item.get("visible", True),
-                        "enabled": item.get("enabled", True),
-                        "checked": item.get("checked"),
-                        "value": item.get("value"),
-                    }
-                )
+                element = {
+                    "role": role,
+                    "name": name,
+                    "selector": selector,
+                    "visible": item.get("visible", True),
+                    "enabled": item.get("enabled", True),
+                    "checked": item.get("checked"),
+                    "value": item.get("value"),
+                }
+                # Controls found inside a shadow root or iframe are marked, so a caller
+                # knows its selector is relative to that context.
+                if item.get("context"):
+                    element["context"] = item["context"]
+                if item.get("backend_node_id") is not None:
+                    element["backend_node_id"] = item["backend_node_id"]
+                result.append(element)
         return result
 
     def get(self, snapshot_id: str) -> Snapshot:
@@ -242,4 +247,18 @@ def diff_snapshots(old: Snapshot, new: Snapshot) -> dict:
         "elements_removed": [
             dict(zip(("role", "name", "selector"), x)) for x in sorted(old_keys - new_keys)
         ],
+        # Same control in both snapshots, different value or checked state: name the change.
+        "value_changes": _field_changes(old, new, "value"),
+        "checked_changes": _field_changes(old, new, "checked"),
     }
+
+
+def _field_changes(old: Snapshot, new: Snapshot, attr: str) -> list[dict]:
+    """Controls present in both snapshots whose *attr* (value or checked) differs."""
+    before = {(e["role"], e["name"], e.get("selector")): e.get(attr) for e in old.elements}
+    changes = []
+    for e in new.elements:
+        key = (e["role"], e["name"], e.get("selector"))
+        if key in before and before[key] != e.get(attr):
+            changes.append({"role": e["role"], "name": e["name"], "from": before[key], "to": e.get(attr)})
+    return changes

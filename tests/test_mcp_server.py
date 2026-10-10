@@ -122,6 +122,9 @@ EXPECTED_TOOLS = [
     "get_performance_metrics",
     "drag",
     "accessibility_audit",
+    "await_user",
+    "select_option",
+    "dismiss_overlays",
 ]
 
 # tool -> required parameter names (spec §8.1: exact required params)
@@ -205,6 +208,9 @@ EXPECTED_REQUIRED_PARAMS = {
     "print_pdf": [],
     "get_performance_metrics": [],
     "accessibility_audit": [],
+    "await_user": [],
+    "select_option": ['selector'],
+    "dismiss_overlays": [],
 }
 
 # tool -> (capability_id, expected status)
@@ -288,6 +294,9 @@ EXPECTED_CAPABILITY = {
     "get_performance_metrics": ("browser.core", "ready"),
     "drag": ("browser.core", "ready"),
     "accessibility_audit": ("browser.core", "ready"),
+    "await_user": ("browser.core", "ready"),
+    "select_option": ("browser.core", "ready"),
+    "dismiss_overlays": ("browser.core", "ready"),
 }
 
 TOOL_MODULES = {
@@ -295,6 +304,9 @@ TOOL_MODULES = {
     "click": "tools",
     "type": "tools",
     "screenshot": "tools",
+    "await_user": "tools",
+    "select_option": "tools",
+    "dismiss_overlays": "tools",
     "set_viewport": "tools",
     "print_pdf": "tools",
     "set_geolocation": "tools",

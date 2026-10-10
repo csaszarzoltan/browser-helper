@@ -35,6 +35,34 @@ _MCP_SESSION = {"session": None}
 logger = logging.getLogger(__name__)
 
 
+def _not_found(inner: dict) -> bool:
+    """True when an engine result says the target element is not on the page yet."""
+    if inner.get("status") != "error":
+        return False
+    err = str(inner.get("error", "")).lower()
+    return "not found" in err or "no element" in err
+
+
+async def _await_element(target, selector: str, timeout: float = 5.0) -> None:
+    """Wait up to *timeout* seconds for a visible element matching *selector* (best effort)."""
+    try:
+        await target.wait_for_element(selector, int(timeout), True)
+    except Exception as exc:  # noqa: BLE001 — the retry reports the real outcome
+        logger.debug("auto-wait for %s failed: %s", selector, exc)
+
+
+async def _session_tab_alive(sess) -> bool:
+    """True while the MCP session's own page tab is still open in the browser."""
+    # Bypass the 5 s tab-list cache: a tab closed a moment ago must read as gone.
+    sess.client._tabs_cache = []
+    sess.client._tabs_cache_ts = 0
+    try:
+        tabs = await sess.client.discover_tabs()
+    except Exception:  # noqa: BLE001 — browser unreachable: let the normal path report it
+        return True
+    return any(tab.get("id") == sess.tab_id and tab.get("type") == "page" for tab in tabs)
+
+
 async def _mcp_session():
     """Return (sess, run_op) for an MCP tool call, minting the session once.
 
@@ -52,9 +80,31 @@ async def _mcp_session():
         return None, run_op
 
     sess = _MCP_SESSION["session"]
-    if sess is not None and sess.session_id in session_registry._sessions:
+    if sess is not None and sess.session_id in session_registry._sessions and await _session_tab_alive(sess):
         _set_current_session(sess)
         return sess, (lambda op, method, *a, **kw: run_op(op, method, *a, sess_override=sess, **kw))
+    if sess is not None:
+        # The session's own tab is gone (closed by a person, or by a page that closed
+        # it). Drop the session so the next call mints a fresh tab, instead of failing
+        # with a stale tab id. The new id is reported by session_status.
+        _MCP_SESSION["session"] = None
+        _MCP_SESSION["replaced"] = _MCP_SESSION.get("replaced", 0) + 1
+        try:
+            await session_registry.destroy(sess.session_id)
+        except Exception as exc:  # noqa: BLE001 — the old tab may already be gone
+            logger.debug("dropping lost MCP session failed: %s", exc)
+        # Mint the replacement now: the shared default client may already be detached
+        # from the closed tab, and a call that falls back to it would fail.
+        try:
+            from main import _local_cdp_http, chrome_mgr
+
+            await chrome_mgr.launch()
+            fresh = await session_registry.create(_local_cdp_http())
+            _MCP_SESSION["session"] = fresh
+            _set_current_session(fresh)
+            return fresh, (lambda op, method, *a, **kw: run_op(op, method, *a, sess_override=fresh, **kw))
+        except Exception as exc:  # noqa: BLE001 — fall through to lazy minting on the next call
+            logger.warning("could not mint a replacement MCP session: %s", exc)
     # P0-1: MCP stdio has no HTTP middleware — force auto-mint so the first
     # browser tool never 400s with "Missing session". Mirrors BH_SESSION_AUTO=1.
     try:
@@ -113,20 +163,39 @@ async def _target():
 
 
 async def navigate(url: str, wait_until: str = "domcontentloaded", timeout: float = 15.0,
-                   ctx: Context | None = None) -> str:
+                   wait_for: str | None = None, ctx: Context | None = None) -> str:
     """Navigate the active browser tab to *url* (capability ``browser.core``, READY).
 
     Waits until the page reaches ``wait_until`` (``commit``, ``domcontentloaded``
     or ``load``) and returns the ready state. A page that does not get there
     within ``timeout`` seconds is an error, not a success.
 
+    ``wait_for`` waits for content the page renders after load (single-page apps,
+    dev servers): a CSS selector such as ``"#app .product"``, or ``"text:Welcome"``
+    for visible text. If it does not appear within ``timeout`` the call is an error.
+
     Backed by the same engine as ``POST /navigate``.
     """
     if ctx is not None:
         await ctx.info(f"navigate -> {url} (wait_until={wait_until})")
     target, run_op = await _target()
-    return json_dumps(await run_op("navigate", target.navigate, url,
-                                   wait_until=wait_until, timeout=timeout))
+    res = await run_op("navigate", target.navigate, url, wait_until=wait_until, timeout=timeout)
+    if not wait_for or not isinstance(res, dict) or res.get("status") != "ok":
+        return json_dumps(res)
+    if wait_for.startswith("text:"):
+        waited = await run_op("navigate_wait_for", target.wait_for_text, wait_for[5:], int(timeout))
+    else:
+        waited = await run_op("navigate_wait_for", target.wait_for_element, wait_for, int(timeout), True)
+    inner = (waited.get("data") or {}).get("result") if isinstance(waited, dict) else None
+    if not (isinstance(inner, dict) and inner.get("status") == "ok") and not (
+        isinstance(inner, dict) and inner.get("found") is True
+    ):
+        return tool_error("navigate", "wait_for_timeout",
+                          f"{wait_for!r} did not appear within {timeout:g}s after the page loaded")
+    res.setdefault("data", {})
+    if isinstance(res["data"], dict):
+        res["data"]["waited_for"] = wait_for
+    return json_dumps(res)
 
 
 async def click(selector: str, expect: dict | None = None, ctx: Context | None = None) -> str:
@@ -141,6 +210,9 @@ async def click(selector: str, expect: dict | None = None, ctx: Context | None =
         return await act("click", selector=selector, expect=expect, ctx=ctx)
     target, run_op = await _target()
     result = await run_op("click", target.click, selector)
+    if isinstance(result, dict) and isinstance(result.get("data"), dict) and _not_found(result["data"]):
+        await _await_element(target, selector)  # auto-wait, then one retry
+        result = await run_op("click", target.click, selector)
     # Unwrap the run_op envelope: the inner data.status can be "error" even
     # though the envelope is "ok" — turn "Element not found" into a useful
     # tool result instead of a misleading success JSON.
@@ -163,6 +235,11 @@ async def type(selector: str, text: str, ctx: Context | None = None) -> str:
     target, run_op = await _target()
     result = await run_op("type", target.type_text, selector, text)
     inner = result.get("data") if isinstance(result, dict) else None
+    if isinstance(inner, dict) and inner.get("status") == "error" and _not_found(inner):
+        # Auto-wait: the field may still be rendering. Wait for it, then try once more.
+        await _await_element(target, selector)
+        result = await run_op("type", target.type_text, selector, text)
+        inner = result.get("data") if isinstance(result, dict) else None
     if isinstance(inner, dict) and inner.get("status") == "error":
         err = str(inner.get("error", ""))
         if "not found" in err.lower() or "no element" in err.lower():
@@ -205,6 +282,7 @@ async def observe(
     include_screenshot: bool = False,
     store_screenshot: bool = False,
     exclude_urls: list[str] | None = None,
+    since_snapshot_id: str | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Observe the page as accessibility tree or semantic snapshot (capability ``agent.semantic``, READY).
@@ -289,6 +367,14 @@ async def observe(
                     data["screenshot"]["artifact_url"] = f"/artifacts/{_art.get('artifact_id')}"
             except Exception as exc:  # noqa: BLE001
                 data["screenshot"] = {"error": str(exc)}
+        if since_snapshot_id:
+            # Diff against an earlier observation of this session: lists what changed,
+            # so an agent does not re-read a whole page after each action.
+            diff = _observe_diff(mode, since_snapshot_id, snap)
+            if diff is None:
+                return tool_error("observe", "stale_snapshot",
+                                  f"snapshot {since_snapshot_id!r} is missing or expired; observe again")
+            data["diff"] = diff
         return tool_result("observe", data)
     except Exception as exc:  # noqa: BLE001
         return tool_error("observe", "operation_failed", str(exc))
@@ -419,9 +505,17 @@ async def session_status(ctx: Context | None = None) -> str:
         await ctx.info("reading session persistence status")
     try:
         sessions = _session_mgr.list_sessions()
+        own = _MCP_SESSION.get("session")
         return tool_result(
             "session_status",
-            {"sessions": sessions, "total": len(sessions)},
+            {
+                "sessions": sessions,
+                "total": len(sessions),
+                # This MCP client's own tab; None until the first browser call.
+                "mcp_tab_id": own.tab_id if own is not None else None,
+                # How many times the own tab was lost and replaced by a fresh one.
+                "mcp_tab_replaced": _MCP_SESSION.get("replaced", 0),
+            },
         )
     except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
         return tool_error("session_status", "operation_failed", str(exc))
@@ -2392,3 +2486,206 @@ async def accessibility_audit(ctx: Context | None = None) -> str:
     if err:
         return tool_error("accessibility_audit", "audit_failed", err)
     return tool_result("accessibility_audit", data)
+
+
+# ---------------------------------------------------------------------------
+# Human hand-off, form controls and overlays.
+# ---------------------------------------------------------------------------
+
+
+def _observe_diff(mode: str, since_snapshot_id: str, snap) -> dict | None:
+    """Diff the new observation against an earlier one. None when the old snapshot is gone."""
+    if mode == "accessibility":
+        from main import ax_snapshots
+
+        old = ax_snapshots.get(since_snapshot_id)
+        if old is None:
+            return None
+        old_refs = {n.ref: n.as_dict() for n in old.nodes}
+        new_refs = {n.ref: n.as_dict() for n in snap.nodes}
+        changed = [v for k, v in new_refs.items() if old_refs.get(k) != v]
+        return {"from_snapshot_id": old.snapshot_id, "to_snapshot_id": snap.snapshot_id,
+                "changed": old.fingerprint != snap.fingerprint,
+                "nodes_changed": changed,
+                "refs_removed": sorted(set(old_refs) - set(new_refs))}
+    from agent_runtime import diff_snapshots
+    from main import snapshot_store
+
+    try:
+        old = snapshot_store.get(since_snapshot_id)
+    except Exception:  # noqa: BLE001 — StaleSnapshotError: the caller re-observes
+        return None
+    return diff_snapshots(old, snap)
+
+
+@_envelope_errors("await_user")
+async def await_user(url_contains: str | None = None, selector: str | None = None,
+                     text: str | None = None, timeout: float = 300.0, poll_ms: int = 1000,
+                     ctx: Context | None = None) -> str:
+    """Wait for a person to finish a step in the visible browser (capability ``browser.core``, READY).
+
+    Use it for logins, CAPTCHAs and two-factor prompts that the agent must not
+    handle. Give at least one condition: ``url_contains`` (the URL includes this
+    text), ``selector`` (an element exists) or ``text`` (the page shows this text).
+    Returns when all given conditions hold. After ``timeout`` seconds without them
+    it returns an error. The agent then continues from the page the person left.
+    """
+    import asyncio as _asyncio
+
+    if not any((url_contains, selector, text)):
+        return tool_error("await_user", "invalid_params",
+                          "give at least one of url_contains, selector or text")
+    if ctx is not None:
+        await ctx.info("await_user: waiting for a person to finish a step")
+    _, run_op = await _target()
+    probe = (
+        "JSON.stringify({url: location.href, "
+        f"sel: {_json_mod.dumps(selector)} ? !!document.querySelector({_json_mod.dumps(selector)}) : null, "
+        f"txt: {_json_mod.dumps(text)} ? document.body.innerText.includes({_json_mod.dumps(text)}) : null}})"
+    )
+    loop = _asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, float(timeout))
+    last: dict = {}
+    while True:
+        data, err = await _eval_json(run_op, "await_user", probe)
+        if err:
+            return tool_error("await_user", "page_unreadable", err)
+        last = data or {}
+        ok = (
+            (url_contains is None or url_contains in last.get("url", ""))
+            and (selector is None or bool(last.get("sel")))
+            and (text is None or bool(last.get("txt")))
+        )
+        if ok:
+            return tool_result("await_user", {"url": last.get("url"), "matched": True})
+        if loop.time() >= deadline:
+            return tool_error("await_user", "timeout",
+                              f"conditions not met within {timeout:g}s; current url {last.get('url')!r}")
+        await _asyncio.sleep(max(0.1, poll_ms / 1000.0))
+
+
+@_envelope_errors("select_option")
+async def select_option(selector: str, value: str | None = None, label: str | None = None,
+                        index: int | None = None, ctx: Context | None = None) -> str:
+    """Choose one option of a <select> element (capability ``browser.core``, READY).
+
+    Give exactly one of ``value`` (the option's value attribute), ``label`` (its
+    visible text) or ``index`` (zero-based position). The change and input events
+    are fired so page scripts see the new value.
+    """
+    chosen = [(k, v) for k, v in (("value", value), ("label", label), ("index", index)) if v is not None]
+    if len(chosen) != 1:
+        return tool_error("select_option", "invalid_params", "give exactly one of value, label or index")
+    by, val = chosen[0]
+    if ctx is not None:
+        await ctx.info(f"select_option {selector} by {by}")
+    _, run_op = await _target()
+    js = (
+        "(function(sel, by, val){"
+        " const el = document.querySelector(sel);"
+        " if (!el) return JSON.stringify({error: 'not_found'});"
+        " if (el.tagName !== 'SELECT') return JSON.stringify({error: 'not_select', tag: el.tagName});"
+        " let idx = -1;"
+        " if (by === 'index') idx = Number(val);"
+        " else for (let i = 0; i < el.options.length; i++) {"
+        "   const o = el.options[i];"
+        "   if ((by === 'value' && o.value === val) || (by === 'label' && o.text.trim() === val)) { idx = i; break; }"
+        " }"
+        " if (!(idx >= 0 && idx < el.options.length)) return JSON.stringify({error: 'no_such_option'});"
+        " el.selectedIndex = idx;"
+        " el.dispatchEvent(new Event('input', {bubbles: true}));"
+        " el.dispatchEvent(new Event('change', {bubbles: true}));"
+        " return JSON.stringify({value: el.value, label: el.options[idx].text.trim(), index: idx});"
+        "})"
+        f"({_json_mod.dumps(selector)}, {_json_mod.dumps(by)}, {_json_mod.dumps(val)})"
+    )
+    data, err = await _eval_json(run_op, "select_option", js)
+    if err:
+        return tool_error("select_option", "select_failed", err)
+    data = data or {}
+    if "error" in data:
+        code = data["error"]
+        messages = {
+            "not_found": f"no element matches {selector!r}",
+            "not_select": f"element is <{data.get('tag', '?').lower()}>, not a select",
+            "no_such_option": f"no option matches {by}={val!r}",
+        }
+        return tool_error("select_option", code, messages.get(code, code))
+    return tool_result("select_option", data)
+
+
+_OVERLAY_JS = r"""(function(maxClicks){
+  // Labels in the common languages of cookie banners and modal notices.
+  const accept = /^(accept( all( cookies)?)?|allow( all)?|i agree|agree|got it|ok|okay|continue|i understand|understood|reject( all)?|decline( all)?|refuse( all)?|deny|no thanks|not now|later|skip|close|dismiss|alle akzeptieren|akzeptieren|alle ablehnen|ablehnen|verstanden|schlie(ss|ß)en|elfogadom|elfogad(ás|om)|összes elfogadása|elutasít(om)?|bezár|accepter|tout accepter|j'accepte|refuser|tout refuser|fermer|aceptar|aceptar todo|rechazar|cerrar|entendido|×|✕|✖|x)$/i;
+  const closeLike = /close|dismiss|fermer|schlie(ss|ß)en|bezár|cerrar|×|✕|✖/i;
+  const container = /cookie|consent|gdpr|banner|overlay|modal|popup|dialog|notice|notification|privacy|toast/i;
+  const clicked = [];
+  const visible = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  // The overlay a button belongs to: a dialog, a modal, a fixed/sticky box or a named container.
+  const overlayOf = (e) => {
+    for (let n = e; n && n !== document.body && n !== document.documentElement; n = n.parentElement || (n.getRootNode() && n.getRootNode().host)) {
+      if (n.nodeType !== 1) continue;
+      const s = getComputedStyle(n);
+      if (n.getAttribute('role') === 'dialog' || n.getAttribute('role') === 'alertdialog' || n.getAttribute('aria-modal') === 'true') return n;
+      if ((s.position === 'fixed' || s.position === 'sticky') && visible(n)) return n;
+      if (container.test((n.id || '') + ' ' + (typeof n.className === 'string' ? n.className : '') + ' ' + (n.getAttribute('aria-label') || ''))) return n;
+    }
+    return null;
+  };
+  // Buttons in the page and in open shadow roots (cookie banners are often web components).
+  const buttons = [];
+  const collect = (root) => {
+    root.querySelectorAll('button, a[role=button], input[type=button], input[type=submit], [role=button], [aria-label]').forEach((b) => buttons.push(b));
+    root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot && el.shadowRoot.mode !== 'closed') collect(el.shadowRoot); });
+  };
+  collect(document);
+  const answered = new Set();  // one decision per overlay: a second click would answer a second prompt
+  for (const b of buttons) {
+    if (clicked.length >= maxClicks) break;
+    const text = (b.innerText || b.value || '').trim();
+    const aria = (b.getAttribute('aria-label') || '').trim();
+    const label = text || aria;
+    const isClose = closeLike.test(aria) || closeLike.test(text);
+    if (!(accept.test(label) || accept.test(aria) || isClose) || !visible(b)) continue;
+    const overlay = overlayOf(b);
+    // An overlay answered in an earlier pass stays on the page: skip it, or the loop clicks it again.
+    if (!overlay || answered.has(overlay) || overlay.hasAttribute('data-bh-dismissed')) continue;
+    answered.add(overlay);
+    overlay.setAttribute('data-bh-dismissed', '1');
+    b.click();
+    clicked.push(label || aria);
+  }
+  return JSON.stringify({clicked: clicked});
+})"""
+
+
+@_envelope_errors("dismiss_overlays")
+async def dismiss_overlays(max_clicks: int = 3, wait_ms: int = 2000,
+                           ctx: Context | None = None) -> str:
+    """Accept or close cookie banners, consent prompts and modal notices (capability ``browser.core``, READY).
+
+    Looks in the page and in open shadow roots for buttons labelled as accept,
+    reject, close or dismiss (English, German, Hungarian, French, Spanish, and
+    the close icons) that sit inside a dialog, a modal or a fixed/sticky box.
+    Clicks at most one button per overlay and at most ``max_clicks`` in total.
+    Banners often appear after load, so it keeps looking for up to ``wait_ms``
+    milliseconds (default 2000, max 10000). Returns the labels it clicked.
+    """
+    import asyncio as _asyncio
+
+    if ctx is not None:
+        await ctx.info("dismiss_overlays")
+    _, run_op = await _target()
+    limit = max(0, min(int(max_clicks), 10))
+    deadline = _asyncio.get_running_loop().time() + max(0, min(int(wait_ms), 10000)) / 1000.0
+    clicked: list[str] = []
+    while True:
+        remaining = max(0, limit - len(clicked))
+        data, err = await _eval_json(run_op, "dismiss_overlays", f"{_OVERLAY_JS}({remaining})")
+        if err:
+            return tool_error("dismiss_overlays", "dismiss_failed", err)
+        clicked.extend((data or {}).get("clicked", []))
+        if len(clicked) >= limit or _asyncio.get_running_loop().time() >= deadline:
+            break
+        await _asyncio.sleep(0.3)
+    return tool_result("dismiss_overlays", {"clicked": clicked})

@@ -23,7 +23,7 @@ accessibility snapshots — with every answer.
 |---|---|
 | **What it is** | A lightweight FastAPI proxy that drives your real Chrome via CDP |
 | **Who it is for** | AI agents (Hermes, Claude Code, Codex CLI, Cursor), QA automation, scrapers |
-| **Interfaces** | REST API · 75-tool MCP server · WebSocket stream · GUI dashboard |
+| **Interfaces** | REST API · 78-tool MCP server · WebSocket stream · GUI dashboard |
 | **Why fast** | Local CDP + compact payloads; measured **1.9–2.2× faster than Playwright** on the same E2E journey (~1641ms vs ~3163ms) |
 | **Killer feature** | The browser is **visible to you** — log in manually (Google, Perplexity, anything with CAPTCHA/bot-walls), and your agent reuses *your* logged-in session |
 | **License / status** | Personal-lab project, actively developed — releases every few days |
@@ -37,7 +37,7 @@ accessibility snapshots — with every answer.
 - [Install & run](#install--run)
 - [The four interfaces](#the-four-interfaces)
   - [REST API](#rest-api)
-  - [MCP server (75 tools)](#mcp-server-75-tools)
+  - [MCP server (78 tools)](#mcp-server-75-tools)
   - [WebSocket streaming](#websocket-streaming)
   - [GUI dashboard](#gui-dashboard)
 - [Built for AI agents](#built-for-ai-agents)
@@ -200,10 +200,10 @@ always binds `0.0.0.0` and expects `API_TOKEN` to be set.
 
 Agent contracts: [docs/agent-api.md](docs/agent-api.md). The full endpoint list is in the route decorators of `src/main.py` and `src/fleet/api.py`.
 
-### MCP server (75 tools)
+### MCP server (78 tools)
 
 Ships a [Model Context Protocol](https://modelcontextprotocol.io) server exposing the
-same engine as **75 MCP tools** — for Claude Code, Codex CLI, Cursor, Windsurf, any MCP client.
+same engine as **78 MCP tools** — for Claude Code, Codex CLI, Cursor, Windsurf, any MCP client.
 In-process, no HTTP self-calls, no LLM in the middle.
 
 ```bash
@@ -428,7 +428,7 @@ Your machine                        Remote server (AI agents)
 │  │ + MCP + dashboard │   │        │                          │
 │  └───────────────────┘   │        └──────────────────────────┘
 └──────────────────────────┘
-     src/main.py (REST)      src/mcp_server/ (75 tools)
+     src/main.py (REST)      src/mcp_server/ (78 tools)
      src/cdp_client.py       src/fleet/ (orchestration)
      src/session_registry.py src/anti_detection/
 ```
@@ -456,7 +456,7 @@ sessions), `src/mcp_server/registry.py::build_tool_defs()` (tool source of truth
 | Getting started | See *Install & run* above (a separate getting-started doc does not exist yet) |
 | Endpoint list | Route decorators in `src/main.py` and `src/fleet/api.py`; agent contracts in [LLM Agent API](docs/agent-api.md) | Stable refs, observations, actions, artifacts |
 | [Agent Navigation Engine](docs/agent-navigation-engine.md) | AX-tree observation, semantic forms, execute-task |
-| [MCP Server](docs/mcp-server.md) | Transports, client configs, full 75-tool reference |
+| [MCP Server](docs/mcp-server.md) | Transports, client configs, full 78-tool reference |
 | [Perf roadmap](docs/perf-prioritized.md) · [Phase 2](docs/perf-phase2.md) | Speed design + benchmarks |
 | [Tab Auto-Activation](docs/tab-auto-activation.md) | How transparent tab activation works |
 | [Visual workflow builder](docs/visual-workflow-builder.md) | Accessible Automation workspace for the repeated actions (navigate, click, type, wait, screenshot, analyze, page text); edits JSON, never executes |
@@ -476,7 +476,7 @@ ruff check src/                                  # lint (must pass before commit
 pytest tests/test_mcp_server.py tests/test_agent_api.py tests/test_agent_highlevel.py -o addopts='' -q
                                                  # core suite (~69 tests, <20s)
 pytest -q                                        # full suite (slow; use timeout)
-bash scripts/release-validate.sh                 # release gate: version + 75 tools + docs consistency
+bash scripts/release-validate.sh                 # release gate: version + 78 tools + docs consistency
 ```
 
 Release process: feature branch → FF-merge to main → version bump

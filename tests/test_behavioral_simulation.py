@@ -741,7 +741,10 @@ class TestScrollSimulatorMomentumBehavior:
     @pytest.mark.asyncio
     async def test_scroll_momentum_non_uniform_steps(self):
         """Scroll produces non-uniform step sizes (momentum)."""
-        result = await ScrollSimulator().human_scroll("ws://localhost:9222")
+        import random
+
+        # The simulator draws from its own RNG: seed that one so the draw is fixed.
+        result = await ScrollSimulator(rng=random.Random(20261010)).human_scroll("ws://localhost:9222")
         assert isinstance(result, ScrollResult)
         if result.scroll_steps:
             deltas = [

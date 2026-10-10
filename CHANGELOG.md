@@ -44,6 +44,57 @@ All notable changes to browser-helper will be documented in this file.
 - **Proxy-teszt időzítési hiba.** A `test_concurrent_add_and_health_check` valódi hálózati health-checket indított
   nem létező hostokra (17–30 s, terhelés alatt elbukott). Most stub van a hálózati részre, és a teszt ellenőrzi, hogy
   minden szál befejeződött. Futásideje ~2 s.
+- **Távoli MCP-hozzáférés.** A streamable-http transport tokent követel: `BH_MCP_TOKEN` nélkül a kérés 401-et kap,
+  és nem loopback címen a szerver nem indul el token nélkül. Helyesen beállított token mellett az MCP `initialize`
+  működik (ellenőrizve). Tesztek: `tests/test_mcp_remote_access.py`.
+- **Új eszközök (78 összesen):**
+  - `await_user`: vár, amíg egy ember befejez egy lépést (bejelentkezés, CAPTCHA, kétlépcsős azonosítás). Feltétel:
+    `url_contains`, `selector` vagy `text`. Élőben: a 3 másodperces megjelenésre 3,0 s alatt tér vissza.
+  - `select_option`: legördülő értéke `value`, `label` vagy `index` alapján, input/change eseményekkel. Hibás értéknél
+    `no_such_option`.
+  - `dismiss_overlays`: cookie-banner és modal elfogadása vagy elutasítása. Bannerenként egy döntés. Élőben: `Reject all`.
+- **`form_fill` visszaolvasás.** Mezőnként `verified` és `value_after`, így a React-jellegű visszaállítás is látszik.
+- **`observe` `since_snapshot_id` (MCP).** Diff az előző megfigyeléshez. Ismeretlen vagy lejárt azonosító
+  `stale_snapshot` hibát ad.
+- **Shadow DOM és azonos origin-ű iframe.** Az `observe` a nyitott shadow root-ok és az azonos origin-ű iframe-ek
+  vezérlőit is listázza, `context: "shadow"|"iframe"` jelöléssel. A `click`, `type`, `fill` ezeket is megtalálja
+  (`bhDeepQuery`), iframe-ben a koordináták a frame pozíciójával eltolódnak. Élőben: shadow-gomb, iframe-gomb és
+  shadow-mező kitöltése, ellenőrizve az oldal értékeivel.
+- **Teszt-stabilitás.** A proxy-párhuzamossági tesztek a tényleges átfedést mérik (barrier, in-flight számláló),
+  nem falióra-időt. A scroll-momentum teszt rögzített véletlenmagot kap.
+- **Cross-site iframe.** Az olyan iframe-ek vezérlői, amelyek más origin-ről jönnek (out-of-process), most
+  listázódnak az `observe`-ben, `context: "iframe"` jelöléssel. A saját CDP-session-jükön keresztül kattinthatók,
+  tölthetők ki (`oopif|fN|selector` formátum). Ellenőrizve: a `username` és `password` mező értéke a frame-ben,
+  a gomb kattintása a szülő oldalon `msg:submitted`-et vált ki. A `Target.setDiscoverTargets` engedélyezése kell a
+  listázáshoz. Az `X-Frame-Options: SAMEORIGIN` oldalakat a böngésző nem engedi beágyazni, azok nem érhetők el.
+- **Zárt shadow root.** A zárt shadow root vezérlői az `accessibility` módban láthatók és működnek (fill, click,
+  ellenőrizve). A `semantic` mód továbbra sem látja őket, mert a JS nem éri el.
+- **Diff mezőértékekkel.** A `diff` most `value_changes` és `checked_changes` listát ad: a változott mező neve,
+  régi és új értéke (`Username: '' → 'hello'`).
+- **`dismiss_overlays` lefedettség.** Több nyelv (angol, német, magyar, francia, spanyol), bezárás-ikonok (`×`,
+  `aria-label="Close"`), nyitott shadow root-ok, fixed/sticky overlay-ek név nélkül, és várakozás (`wait_ms`,
+  alapértelmezés 2000 ms) a később megjelenő bannerekre. Overlay-enként egy kattintás; az egyszer kezelt
+  overlay-t megjelöli, így a következő körben nem kattint rá újra. Ellenőrizve: német banner (késleltetett),
+  modal `×`, shadow-banner `Accept`, tartalmi `OK` gomb érintetlen.
+- **Szerver-oldali stabilitás:** a `form_fill` és a `type` a cross-origin mezőket is kezeli; a `smart_form_fill`
+  változatlan visszatérési alakot ad, ha nincs cross-origin mező.
+- **Semantic mód zárt shadow rootokkal.** Ha az oldalon van egyedi elem nyitott shadow root nélkül, az `observe`
+  (semantic) a böngésző accessibility-fájából hozzáadja a vezérlőket, `context: "closed-shadow"` jelöléssel és
+  `backend_node_id`-vel. Az `act` fill és click backend-id-n keresztül működik, CSS selector nélkül. Ellenőrizve:
+  a `Closed note:` mezőbe írt érték az accessibility-fában megjelenik, a `Closed save` gomb kattintása hatásos.
+- **Izolált ügynök-profil.** Az MCP-szerver a `BH_CHROME_PROFILE_DIR` és `BH_CHROME_DEBUG_PORT` (és `DISPLAY`)
+  környezeti változókkal saját Chrome-profilt és portot kap, így nem a bejelentkezett felhasználói profilhoz
+  csatlakozik. A felülírások csak a memóriában élnek, a közös `settings.json`-t nem írják, a 8020-as szerviz
+  beállításai változatlanok. Ellenőrizve: a 9560-as porton külön Chrome indul az `agent-profile` mappával.
+- **Navigate `wait_for`.** A `wait_for` CSS-szelektort vagy `text:<szöveg>`-et vár a betöltés után (SPA, dev-szerver).
+  Ha nem jelenik meg a `timeout` alatt, `wait_for_timeout` hiba. Ellenőrizve egy 2 másodperc után renderelő oldalon.
+- **Auto-wait a `click`-en és `type`-on.** Ha az elem még nincs az oldalon, az eszköz legfeljebb 5 másodpercet vár
+  rá, majd egyszer újrapróbálja. Ellenőrizve: a 2 másodperc után megjelenő mezőbe írás és gombra kattintás működik.
+- **Saját fül és helyreállítás.** Ha az MCP-munkamenet fülét bezárták, a következő hívás új fület nyit (nem
+  `tab_not_found`). A `session_status` megmutatja az aktuális fület (`mcp_tab_id`) és a cseréket (`mcp_tab_replaced`).
+  Ellenőrizve: a fül bezárása után az `eval` sikeres, a csere száma 1.
+- **Egyértelmű fülhiba:** a `Tab X is not open…` üzenet megmondja, hogy a fület bezárták vagy más kliens birtokolja,
+  és hogy a `get_tabs` adja a nyitott füleket.
 - **Stdio-harness holtpont javítva.** A teszt-harness `select()`-et és a `TextIO.readline()`-t keverte. Ha a szerver
   egy értesítést és a választ egy csomagban írta, a második sor elveszett, és a teszt az időkorlátig várt. Most nyers
   `os.read` és saját sor-puffer. Terhelés alatt a teszt eddig 65 s után bukott, most 5 s alatt átmegy.

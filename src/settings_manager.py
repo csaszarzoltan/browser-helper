@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import platform
+from typing import ClassVar
 
 logger = logging.getLogger("browser-helper.settings")
 
@@ -78,11 +79,26 @@ def _guess_data_root() -> str:
 class SettingsManager:
     """Load, save, and provide access to browser-helper settings."""
 
+    # Environment overrides for an isolated agent instance (MCP server): a dedicated
+    # Chrome profile and debug port, so agent sessions never attach to the user's
+    # logged-in browser. Overrides live in memory only; the shared settings file is
+    # left alone, so the 8020 service keeps its own profile and port.
+    _ENV_OVERRIDES: ClassVar[dict[str, tuple[str, type]]] = {
+        "BH_CHROME_PROFILE_DIR": ("chrome_profile_dir", str),
+        "BH_CHROME_DEBUG_PORT": ("chrome_debug_port", int),
+        "BH_CHROME_LAUNCHED_PORT": ("chrome_launched_port", int),
+    }
+
     def __init__(self, path: str | None = None):
         if path is None:
             path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
         self.path = path
         self._data: dict = {}
+        self._overrides: dict = {}
+        for env_name, (key, cast) in self._ENV_OVERRIDES.items():
+            raw = os.environ.get(env_name, "").strip()
+            if raw:
+                self._overrides[key] = cast(raw)
 
         # Load or create defaults
         if os.path.exists(self.path):
@@ -109,7 +125,9 @@ class SettingsManager:
             logger.info("Created default settings at %s", self.path)
 
     def _save(self) -> None:
-        """Persist current settings to disk."""
+        """Persist current settings to disk (never from an isolated instance with overrides)."""
+        if self._overrides:
+            return
         try:
             dirname = os.path.dirname(self.path)
             if dirname and not os.path.exists(dirname):
@@ -122,6 +140,8 @@ class SettingsManager:
     # ── Accessors ────────────────────────────────────────────────
 
     def get(self, key: str, default=None):
+        if key in self._overrides:
+            return self._overrides[key]
         return self._data.get(key, default)
 
     def get_all(self) -> dict:
