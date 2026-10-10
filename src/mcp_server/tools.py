@@ -2245,16 +2245,28 @@ async def browser_reset_session(
 
 
 async def _clear_site_cookies(target) -> int:
-    """Delete the cookies that apply to the page's current URL. Returns how many were removed."""
-    href = await target.evaluate("location.href")
-    url = ((href or {}).get("result") or href or "") if isinstance(href, dict) else str(href or "")
-    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+    """Delete every cookie of the page's site (its host and parent domains), on any path.
+
+    A cookie for /admin on the same site is part of the site, so the match is by
+    domain, not by the current URL. Cookies of other sites are kept.
+    Returns how many cookies were removed.
+    """
+    host = await target.evaluate("location.hostname")
+    host = ((host or {}).get("result") or "") if isinstance(host, dict) else str(host or "")
+    if not isinstance(host, str) or not host:
         return 0
-    cookies = (await target._send_command("Network.getCookies", {"urls": [url]})).get("cookies", [])
+    host = host.lower().strip(".")
+    cookies = (await target._send_command("Network.getAllCookies")).get("cookies", [])
+    removed = 0
     for cookie in cookies:
-        await target._send_command("Network.deleteCookies", {
-            "name": cookie["name"], "domain": cookie["domain"], "path": cookie.get("path", "/")})
-    return len(cookies)
+        domain = str(cookie.get("domain", "")).lower().lstrip(".")
+        if not domain:
+            continue
+        if host == domain or host.endswith("." + domain):
+            await target._send_command("Network.deleteCookies", {
+                "name": cookie["name"], "domain": cookie["domain"], "path": cookie.get("path", "/")})
+            removed += 1
+    return removed
 
 
 # ---------------------------------------------------------------------------

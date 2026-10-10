@@ -60,11 +60,11 @@ def test_reset_session_default_does_not_wipe_the_whole_profile(monkeypatch):
 
     class _Target:
         async def evaluate(self, js):
-            return {"result": "https://example.test/page"}
+            return {"result": "example.test"}
 
         async def _send_command(self, method, params=None, **_):
             sent.append(method)
-            if method == "Network.getCookies":
+            if method == "Network.getAllCookies":
                 return {"cookies": [{"name": "a", "domain": "example.test", "path": "/"}]}
             return {}
 
@@ -151,3 +151,28 @@ def test_browser_navigate_result_urls_are_redacted(monkeypatch):
     monkeypatch.setattr(tools, "_target", fake_target)
     out = json.loads(asyncio.run(tools.browser_navigate(url="https://a.test/cb?token=SECRET#access_token=X")))
     assert "SECRET" not in json.dumps(out) and "X" not in out["data"]["url"].split("#")[1].split("=")[1]
+
+
+def test_site_reset_removes_every_path_of_the_site_and_keeps_other_sites(monkeypatch):
+    from mcp_server import tools
+
+    jar = [
+        {"name": "a", "domain": "site.test", "path": "/admin"},
+        {"name": "b", "domain": ".site.test", "path": "/shop"},
+        {"name": "c", "domain": "other.test", "path": "/"},
+    ]
+    deleted = []
+
+    class _Target:
+        async def evaluate(self, js):
+            return {"result": "site.test"}
+
+        async def _send_command(self, method, params=None, **_):
+            if method == "Network.getAllCookies":
+                return {"cookies": jar}
+            if method == "Network.deleteCookies":
+                deleted.append(params["name"])
+            return {}
+
+    removed = asyncio.run(tools._clear_site_cookies(_Target()))
+    assert removed == 2 and sorted(deleted) == ["a", "b"]
