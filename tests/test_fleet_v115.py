@@ -254,7 +254,8 @@ class TestHealthChecking:
         recheck endpoint must flip ``healthy`` back on when reachable.
         """
         reg = await api_client.post(
-            "/fleet/nodes/register", json=node_payload("http://127.0.0.1:8000")
+            # Port 9 has no listener; 8000/8013 are the live llm-budget-gateway.
+            "/fleet/nodes/register", json=node_payload("http://127.0.0.1:9")
         )
         node_id = _node_id(reg)
         health = await api_client.get(f"/fleet/nodes/{node_id}/health")
@@ -472,7 +473,7 @@ class TestFailover:
     async def test_state_transferred_via_save_restore(self, api_client):
         """Failover uses /session/save + /session/restore for state transfer."""
         reg = await api_client.post(
-            "/fleet/nodes/register", json=node_payload("http://127.0.0.1:8013")
+            "/fleet/nodes/register", json=node_payload("http://127.0.0.1:9")
         )
         node_id = _node_id(reg)
         await api_client.post("/fleet/session", json={"session_id": "sess_fo1"})
@@ -495,7 +496,7 @@ class TestFailover:
     async def test_retry_on_healthy_node(self, api_client):
         """After failover, the re-allocated session lives on a healthy node."""
         reg = await api_client.post(
-            "/fleet/nodes/register", json=node_payload("http://127.0.0.1:8014")
+            "/fleet/nodes/register", json=node_payload("http://127.0.0.1:9")
         )
         node_id = _node_id(reg)
         await api_client.post("/fleet/session", json={"session_id": "sess_fo2"})
