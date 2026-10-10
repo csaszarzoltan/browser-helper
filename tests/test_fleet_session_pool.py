@@ -74,7 +74,7 @@ async def test_allocate_zero_nodes_falls_back_to_local(tmp_path):
         assert result["decision"] == "local"
         session = result["session"]
         assert session["node_id"] == "node_local"
-        assert session["node_url"] == "http://localhost:8000"
+        assert session["node_url"] == "http://localhost:8020"
         assert session["queued"] is False
         # The coordinator node stays hidden from listings
         ids = [n.node_id for n in await pool.registry.list()]

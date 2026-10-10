@@ -53,7 +53,8 @@ logger = logging.getLogger("browser-helper.fleet.pool")
 #: Node id of the coordinator-local fallback host (hidden from listings).
 LOCAL_NODE_ID = "node_local"
 #: Default coordinator URL used when no worker nodes are registered.
-LOCAL_NODE_URL = "http://localhost:8000"
+#: Must be the browser-helper port (8020); 8000 is the llm-budget-gateway.
+LOCAL_NODE_URL = "http://localhost:8020"
 
 #: Launch endpoints tried in order on a worker node (repo exposes /browser/launch).
 _LAUNCH_PATHS = ("/browser/launch", "/headless/launch")

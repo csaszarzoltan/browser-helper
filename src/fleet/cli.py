@@ -2,12 +2,12 @@
 
 Usage::
 
-    python -m fleet.cli node list       # → GET  http://localhost:8000/fleet/nodes
-    python -m fleet.cli session list    # → GET  http://localhost:8000/fleet/sessions
+    python -m fleet.cli node list       # → GET  http://localhost:8020/fleet/nodes
+    python -m fleet.cli session list    # → GET  http://localhost:8020/fleet/sessions
     python -m fleet.cli --base-url http://localhost:9000 node list
 
 The coordinator base URL comes from ``--base-url`` or ``FLEET_API_URL``
-(default ``http://localhost:8000``) and the Bearer token from ``API_TOKEN``
+(default ``http://localhost:8020``) and the Bearer token from ``API_TOKEN``
 (the same variable the server's auth middleware reads).  When the coordinator
 is unreachable the CLI prints a readable message and exits 0 — the integration
 tests exercise the CLI without a live server, so a clean, explanatory report
@@ -23,7 +23,7 @@ from typing import Any
 
 import httpx
 
-DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_BASE_URL = "http://localhost:8020"
 
 
 def _base_url(explicit: str | None = None) -> str:
