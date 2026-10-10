@@ -63,3 +63,13 @@ def test_token_in_the_url_fragment_is_hidden_too():
 
     assert redact_url("https://a.test/cb#access_token=SECRET&state=ok") == "https://a.test/cb#access_token=[redacted]&state=ok"
     assert redact_url("https://a.test/p#section") == "https://a.test/p#section"
+
+
+def test_act_navigate_is_checked_against_the_origin_allowlist(monkeypatch):
+    from mcp_server import tools
+
+    monkeypatch.setenv("BH_ALLOWED_ORIGINS", "https://example.com")
+    out = json.loads(asyncio.run(tools.act(action="navigate", url="https://evil.test/x")))
+    assert out["error"]["code"] == "origin_not_allowed"
+    out = json.loads(asyncio.run(tools.act(action="navigate", url="https://evil.test/x", snapshot_id="s")))
+    assert out["error"]["code"] == "origin_not_allowed"

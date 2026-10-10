@@ -428,6 +428,13 @@ async def act(
     import json as _json
 
     from pydantic import ValidationError
+
+    # act(navigate) is a navigation too: the same origin allowlist applies.
+    allowlist = _origin_allowlist()
+    target_url = url if (action or "").lower().strip() == "navigate" else None
+    if allowlist is not None and target_url is not None and not _origin_allowed(target_url, allowlist):
+        return tool_error("act", "origin_not_allowed",
+                          f"{target_url} is not in BH_ALLOWED_ORIGINS; allowed: {', '.join(allowlist)}")
     from starlette.requests import Request as _Request
 
     from main import AgentActionRequest, _set_current_session, agent_act
@@ -471,7 +478,7 @@ async def act(
     except Exception as exc:  # noqa: BLE001 — e.g. 400 Missing session: report it in the envelope
         return tool_error("act", "operation_failed", str(exc))
     if isinstance(resp, dict):
-        return tool_result("act", resp.get("data", {}))
+        return tool_result("act", _redact_urls(resp.get("data", {})))
     # Error responses come back as JSONResponse: surface the engine's code and message.
     body = _json.loads(bytes(resp.body) or b"{}")
     err = body.get("error") or {}
@@ -1637,7 +1644,7 @@ async def browser_navigate(
                     d["settle"] = extra if isinstance(extra, dict) else {}
             except Exception as skip_exc:  # noqa: BLE001
                 logger.debug("best-effort navigate settle failed: %s", skip_exc)
-        return tool_result("browser_navigate", res.get("data", res) if isinstance(res, dict) else res)
+        return tool_result("browser_navigate", _redact_urls(res.get("data", res) if isinstance(res, dict) else res))
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_navigate", "navigation_failed", str(exc))
 

@@ -133,3 +133,21 @@ def test_legacy_all_scope_still_clears_the_cache(monkeypatch):
     monkeypatch.setattr(tools, "_target", fake_target)
     out = json.loads(asyncio.run(tools.browser_reset_session(scope="all")))
     assert out["data"]["cleared"]["cache"] is True and cleared == {"cache": True}
+
+
+def test_browser_navigate_result_urls_are_redacted(monkeypatch):
+    from mcp_server import tools
+
+    class _Target:
+        async def add_script_to_evaluate_on_new_document(self, js):
+            return {}
+
+        async def navigate(self, url, **kw):
+            return {"status": "ok", "url": url, "tab_id": "t"}
+
+    async def fake_target():
+        return _Target(), (lambda op, fn, *a, **kw: fn(*a, **kw))
+
+    monkeypatch.setattr(tools, "_target", fake_target)
+    out = json.loads(asyncio.run(tools.browser_navigate(url="https://a.test/cb?token=SECRET#access_token=X")))
+    assert "SECRET" not in json.dumps(out) and "X" not in out["data"]["url"].split("#")[1].split("=")[1]
