@@ -158,7 +158,12 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     "accessibility_audit": {"type": "object", "properties": {}},
     "navigate": {
         "type": "object",
-        "properties": {"url": {"type": "string", "description": "URL to navigate to"}},
+        "properties": {
+            "url": {"type": "string", "description": "URL to navigate to"},
+            "wait_until": {"type": "string", "enum": ["commit", "domcontentloaded", "load"],
+                           "description": "Ready state to wait for before returning (default domcontentloaded)"},
+            "timeout": {"type": "number", "description": "Seconds to wait for wait_until (default 15)"},
+        },
         "required": ["url"],
     },
     "click": {
@@ -776,7 +781,7 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     'get_page_text': 'Visible text of the page. Use it to read content. Use observe to find targets to click.',
     'get_content': 'Load a URL (or use the current page) and return its main content. For reading and research, not for interacting.',
     'search': 'One-call web search. Returns the extracted answer text.',
-    'navigate': 'Navigate the active tab to a URL. For load strategy, cookies or storage state use browser_navigate.',
+    'navigate': 'Navigate the active tab to a URL and wait until the page is ready (wait_until: commit, domcontentloaded or load; default domcontentloaded). A page that does not get there in timeout seconds is an error. For cookies or storage state use browser_navigate.',
     'browser_navigate': 'Navigate with a chosen load strategy (wait_until), an optional settle wait, and optional origins or storage_state applied before the page renders.',
     'reload': 'Reload the current page. ignore_cache bypasses the cache.',
     'get_tabs': 'List open tabs with id, title, url and active flag. Call it before switch_tab or close_tab.',

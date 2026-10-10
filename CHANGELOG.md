@@ -32,6 +32,18 @@ All notable changes to browser-helper will be documented in this file.
   `test_parallel_session_isolation`) csak `BH_LIVE=1`-gyel futnak. A Chrome-ot indító E2E-tesztek egy xdist
   csoportba kerültek (`--dist loadgroup`). A profil-tesztek saját tárolót kapnak a közös `profiles.json` helyett.
   A session- és backend-tesztek nem függnek a korábbi tesztek sorrendjétől.
+- **`navigate` megvárja a betöltést.** Új `wait_until` (`commit`, `domcontentloaded` alapértelmezés, `load`) és
+  `timeout` (15 s) paraméter. A várakozás csak akkor fogad el egy állapotot, ha már új dokumentum van a helyén
+  (`performance.timeOrigin` változik). Ha az oldal nem ér el az állapotig, hiba a válaszban. Ha az állapot nem olvasható,
+  `ready_state: null` jelzi, nem hamis időtúllépés.
+- **`observe` semantic mód: ARIA-szerepek és címke-nevek.** Eddig a szerep a HTML `type` volt (`text`, `tel`), a név
+  az `name=` attribútum (`custname`). Most `textbox`, `radio`, `checkbox`, `spinbutton` stb., a név a címke szövege
+  (`Customer name:`). Egymásba ágyazott `<label>` és a közvetlen szöveges címke is működik.
+- **`type` hiba-envelope.** A nem létező mező hibája most a szokásos envelope (`error: {code, message}`), nem a régi
+  `{status, error: "..."}` alak. A `click` és a `type` ugyanúgy jelzi a `element_not_found` hibát.
+- **Proxy-teszt időzítési hiba.** A `test_concurrent_add_and_health_check` valódi hálózati health-checket indított
+  nem létező hostokra (17–30 s, terhelés alatt elbukott). Most stub van a hálózati részre, és a teszt ellenőrzi, hogy
+  minden szál befejeződött. Futásideje ~2 s.
 - **Stdio-harness holtpont javítva.** A teszt-harness `select()`-et és a `TextIO.readline()`-t keverte. Ha a szerver
   egy értesítést és a választ egy csomagban írta, a második sor elveszett, és a teszt az időkorlátig várt. Most nyers
   `os.read` és saját sor-puffer. Terhelés alatt a teszt eddig 65 s után bukott, most 5 s alatt átmegy.

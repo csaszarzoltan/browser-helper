@@ -112,15 +112,21 @@ async def _target():
     return (sess.client if sess is not None else client), run_op
 
 
-async def navigate(url: str, ctx: Context | None = None) -> str:
+async def navigate(url: str, wait_until: str = "domcontentloaded", timeout: float = 15.0,
+                   ctx: Context | None = None) -> str:
     """Navigate the active browser tab to *url* (capability ``browser.core``, READY).
+
+    Waits until the page reaches ``wait_until`` (``commit``, ``domcontentloaded``
+    or ``load``) and returns the ready state. A page that does not get there
+    within ``timeout`` seconds is an error, not a success.
 
     Backed by the same engine as ``POST /navigate``.
     """
     if ctx is not None:
-        await ctx.info(f"navigate -> {url}")
+        await ctx.info(f"navigate -> {url} (wait_until={wait_until})")
     target, run_op = await _target()
-    return json_dumps(await run_op("navigate", target.navigate, url))
+    return json_dumps(await run_op("navigate", target.navigate, url,
+                                   wait_until=wait_until, timeout=timeout))
 
 
 async def click(selector: str, expect: dict | None = None, ctx: Context | None = None) -> str:
@@ -142,7 +148,8 @@ async def click(selector: str, expect: dict | None = None, ctx: Context | None =
     if isinstance(inner, dict) and inner.get("status") == "error":
         err = str(inner.get("error", ""))
         if "not found" in err.lower() or "no element" in err.lower():
-            return json_dumps({"status": "error", "error": f"Element not found for selector {selector!r} on the current tab"})
+            return tool_error("click", "element_not_found",
+                              f"Element not found for selector {selector!r} on the current tab")
     return json_dumps(result)
 
 
@@ -159,7 +166,8 @@ async def type(selector: str, text: str, ctx: Context | None = None) -> str:
     if isinstance(inner, dict) and inner.get("status") == "error":
         err = str(inner.get("error", ""))
         if "not found" in err.lower() or "no element" in err.lower():
-            return json_dumps({"status": "error", "error": f"Element not found for selector {selector!r} on the current tab"})
+            return tool_error("type", "element_not_found",
+                              f"Element not found for selector {selector!r} on the current tab")
     return json_dumps(result)
 
 

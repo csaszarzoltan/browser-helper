@@ -214,11 +214,16 @@ class TestConcurrentHealthChecks:
             t.start()
         for t in threads:
             t.join(timeout=30)
+        assert not any(t.is_alive() for t in threads), "a worker thread did not finish"
 
         assert len(errors) == 0, f"Concurrent health checks raised: {errors}"
 
-    def test_concurrent_add_and_health_check(self, pool):
+    def test_concurrent_add_and_health_check(self, pool, monkeypatch):
         """Adding proxies concurrently with health checks should not crash."""
+        # The health check would dial the made-up hosts (DNS timeouts, 17-30 s and
+        # flaky under load). This test is about the locking, so stub the network part.
+        monkeypatch.setattr(pool, "health_check",
+                            lambda pid: {"id": pid, "healthy": True}, raising=True)
         errors: list[BaseException] = []
         lock = threading.Lock()
 

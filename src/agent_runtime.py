@@ -30,6 +30,36 @@ class ElementNotFoundError(ValueError):
     pass
 
 
+# ARIA role for an <input> type, as the browser's accessibility tree reports it.
+# Without this the semantic list says role "text" for a plain text box.
+_INPUT_ARIA_ROLE = {
+    "text": "textbox", "email": "textbox", "tel": "textbox", "url": "textbox",
+    "password": "textbox", "search": "searchbox", "number": "spinbutton",
+    "range": "slider", "checkbox": "checkbox", "radio": "radio",
+    "submit": "button", "reset": "button", "button": "button", "image": "button",
+    "time": "textbox", "date": "textbox", "datetime-local": "textbox",
+    "month": "textbox", "week": "textbox", "color": "textbox",
+}
+_FIELD_GROUPS = {"form_fields", "inputs"}
+
+
+def _aria_role(item: dict, default_role: str) -> str:
+    """Return the ARIA role of a page item. An explicit role wins; a textarea or
+    input maps from its tag and type; anything else keeps the group's default."""
+    explicit = item.get("role")
+    if explicit:
+        return str(explicit)
+    tag = str(item.get("tag") or "").lower()
+    if tag == "textarea":
+        return "textbox"
+    if tag == "select":
+        return "combobox"
+    kind = str(item.get("type") or "").lower()
+    if kind:
+        return _INPUT_ARIA_ROLE.get(kind, default_role)
+    return default_role
+
+
 class SnapshotStore:
     def __init__(self, max_snapshots: int = 200, ttl_seconds: int = 1800):
         self.max_snapshots = max_snapshots
@@ -100,15 +130,15 @@ class SnapshotStore:
                     item = {"name": item}
                 if not isinstance(item, dict):
                     continue
-                name = str(
-                    item.get("name")
-                    or item.get("text")
-                    or item.get("label")
-                    or item.get("placeholder")
-                    or ""
-                ).strip()
+                # A field's accessible name is its label, not its name= attribute
+                # ("Customer name:" rather than "custname").
+                if key in _FIELD_GROUPS:
+                    name_order = ("label", "placeholder", "name", "text")
+                else:
+                    name_order = ("name", "text", "label", "placeholder")
+                name = str(next((item.get(k) for k in name_order if item.get(k)), "") or "").strip()
                 selector = item.get("selector") or item.get("css_selector")
-                role = str(item.get("role") or item.get("type") or default_role)
+                role = _aria_role(item, default_role)
                 key_sig = json.dumps([role, name, selector], ensure_ascii=False)
                 if key_sig in seen:
                     continue

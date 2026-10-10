@@ -18,7 +18,7 @@ import logging
 import math
 import random
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import websockets
@@ -757,8 +757,62 @@ class CDPClient:
 
     # ─── Page operations ─────────────────────────────────────────
 
-    async def navigate(self, url: str) -> dict:
-        """Navigate to URL.
+    _WAIT_UNTIL_STATES: ClassVar[dict[str, tuple[str, ...]]] = {
+        "domcontentloaded": ("interactive", "complete"), "load": ("complete",)}
+
+    async def _document_state(self) -> tuple[str, float]:
+        """Return ``(document.readyState, performance.timeOrigin)`` of the current page.
+
+        ``timeOrigin`` is per document, so a change means a new document has replaced the old one.
+        """
+        r = await self._send_command("Runtime.evaluate", {
+            "expression": "JSON.stringify([document.readyState, performance.timeOrigin])",
+            "returnByValue": True,
+        })
+        raw = ((r or {}).get("result") or {}).get("value")
+        if not isinstance(raw, str):
+            return None, 0.0  # the page did not answer with a readable state
+        state, origin = json.loads(raw)
+        return str(state), float(origin)
+
+    async def _wait_for_document(self, wait_until: str, origin_before: float, timeout: float) -> dict:
+        """Wait until the navigated document reaches *wait_until* or *timeout* seconds pass.
+
+        A state only counts once a new document has replaced the old one, so a
+        still-loaded previous page cannot satisfy the wait. A same-document
+        navigation (hash change, pushState) never replaces it, so after one
+        second the current state is accepted.
+        """
+        started = time.monotonic()
+        state: str | None = ""
+        while True:
+            try:
+                state, origin = await self._document_state()
+            except CDPDisconnectedError:
+                raise
+            except (CDPError, OSError, ValueError):
+                state, origin = None, origin_before
+            elapsed = time.monotonic() - started
+            if state is None:
+                # Readiness cannot be read from this page. Report that instead of
+                # waiting out the timeout and calling the page slow.
+                return {"ready_state": None, "waited_ms": round(elapsed * 1000)}
+            new_document = origin != origin_before
+            if state in self._WAIT_UNTIL_STATES[wait_until] and (new_document or elapsed > 1.0):
+                return {"ready_state": state, "waited_ms": round(elapsed * 1000)}
+            if elapsed >= timeout:
+                raise CDPError(
+                    f"page did not reach {wait_until} within {timeout:g}s (readyState={state or 'unknown'})"
+                )
+            await asyncio.sleep(0.1)
+
+    async def navigate(self, url: str, wait_until: str = "domcontentloaded", timeout: float = 15.0) -> dict:
+        """Navigate to URL and wait for the document to reach *wait_until*.
+
+        ``wait_until``: ``commit`` (return once Chrome has the response),
+        ``domcontentloaded`` (default, matches the REST API and the README) or
+        ``load``. Raises CDPError when the page does not reach that state in
+        *timeout* seconds, so callers never act on a half-loaded page.
 
         Fix-3 (1-tab-per-session): after navigation, check if Chrome created
         a new target (cross-origin navigation). If so, reconnect WS to the
@@ -771,6 +825,14 @@ class CDPClient:
         # pre-navigation URL). Fix-7 track: get_tabs must reflect the live URL.
         self._tabs_cache = []
         self._tabs_cache_ts = 0
+        if wait_until not in ("commit", "domcontentloaded", "load"):
+            raise ValueError(f"wait_until must be commit, domcontentloaded or load, got {wait_until!r}")
+        try:
+            _, origin_before = await self._document_state()
+        except CDPDisconnectedError:
+            raise  # a dropped connection is the caller's error, not a missing baseline
+        except (CDPError, OSError, ValueError):
+            origin_before = 0.0
         result = await self._send_command("Page.navigate", {"url": url})
         # Page.navigate returns errorText when the load failed (offline, DNS, TLS,
         # refused connection). Chrome still shows an error page in that case, so
@@ -822,8 +884,11 @@ class CDPClient:
             except (CDPError, OSError) as exc:
                 logger.debug("Navigate tab sync skipped: %s", exc)
 
+        waited = {"ready_state": None, "waited_ms": 0}
+        if wait_until != "commit":
+            waited = await self._wait_for_document(wait_until, origin_before, timeout)
         return {"status": "ok", "frame_id": result.get("frameId", ""), "url": url,
-                "tab_id": self._ws_tab_id or self._active_tab_id}
+                "tab_id": self._ws_tab_id or self._active_tab_id, **waited}
 
     # navigate() is complete — note: JSON-page detection lives in
     # /page/analyze (main.py) where agents typically check page state
@@ -3862,6 +3927,17 @@ class CDPClient:
     var pl = el.parentElement.querySelector("label");
     if (pl) label = (pl.textContent || "").trim();
   }
+  // Wrapping <label>Customer name: <input></label>: the label text is the wrapper's text.
+  if (!label) {
+    var wrapLbl = el.closest("label");
+    if (wrapLbl) label = (wrapLbl.textContent || "").trim();
+  }
+  // Plain text before the input ("Customer name: <input>") with no <label> element.
+  if (!label) {
+    var prev = el.previousSibling;
+    while (prev && prev.nodeType === 3 && !prev.textContent.trim()) prev = prev.previousSibling;
+    if (prev && prev.nodeType === 3) label = prev.textContent.trim();
+  }
   if (!label) label = el.getAttribute("placeholder") || el.getAttribute("aria-label") || el.name || "";
 
   // ── Section context: find the closest heading or bold text ──
@@ -4135,6 +4211,17 @@ class CDPClient:
     if (!label && el.parentElement) {
       var pl = el.parentElement.querySelector("label");
       if (pl) label = (pl.textContent || "").trim();
+    }
+    // Wrapping <label>Customer name: <input></label>: the wrapper's text is the label.
+    if (!label) {
+      var wrapLbl = el.closest("label");
+      if (wrapLbl) label = (wrapLbl.textContent || "").trim();
+    }
+    // Plain text before the input ("Customer name: <input>") with no <label> element.
+    if (!label) {
+      var prev = el.previousSibling;
+      while (prev && prev.nodeType === 3 && !prev.textContent.trim()) prev = prev.previousSibling;
+      if (prev && prev.nodeType === 3) label = prev.textContent.trim();
     }
     if (!label) label = el.getAttribute("placeholder") || el.getAttribute("aria-label") || el.name || "";
     result.form_fields.push({
