@@ -2190,8 +2190,9 @@ async def browser_reset_session(
     scope ``site`` (default): the cookies and local/session storage of the page's
     own site only. ``profile``: every cookie and the HTTP cache of the whole Chrome
     profile, which can log you out of every site (your own profile is used by
-    default), so it must be asked for explicitly. ``cookies``, ``storage`` and
-    ``all`` are kept for compatibility and act on the current site only.
+    default), so it must be asked for explicitly. ``cookies`` and ``storage`` act on
+    the current site. ``all`` (legacy) is the current site's cookies and storage plus
+    the HTTP cache, which is profile-wide.
     """
     sc = (scope or "site").lower().strip()
     if sc not in {"site", "profile", "cookies", "storage", "all"}:
@@ -2224,6 +2225,13 @@ async def browser_reset_session(
                 done["storage"] = True
             except Exception as exc:  # noqa: BLE001
                 return tool_error("browser_reset_session", "clear_storage_failed", str(exc))
+        if sc == "all":
+            # Legacy scope: also the HTTP cache. The cache is profile-wide, not per site.
+            try:
+                await target.clear_browser_cache()  # type: ignore[attr-defined]
+                done["cache"] = True
+            except Exception:  # noqa: BLE001
+                done["cache"] = False
         return tool_result("browser_reset_session", {"scope": sc, "cleared": done})
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_reset_session", "failed", str(exc))
@@ -2615,20 +2623,29 @@ _SENSITIVE_URL_KEYS = re.compile(
     re.IGNORECASE)
 
 
-def redact_url(url: str) -> str:
-    """Hide the values of token-like query parameters, so a URL can be shown safely."""
-    if not url or "?" not in url:
-        return url
-    base, _, query = url.partition("?")
-    query, hash_sep, fragment = query.partition("#")
-    parts = []
-    for piece in query.split("&"):
+def _redact_pairs(pairs: str) -> str:
+    """Redact the values of token-like key=value pairs in a query or a fragment."""
+    out = []
+    for piece in pairs.split("&"):
         key, eq, _value = piece.partition("=")
-        if eq and _SENSITIVE_URL_KEYS.search(key):
-            parts.append(f"{key}=[redacted]")
-        else:
-            parts.append(piece)
-    return base + "?" + "&".join(parts) + hash_sep + fragment
+        out.append(f"{key}=[redacted]" if eq and _SENSITIVE_URL_KEYS.search(key) else piece)
+    return "&".join(out)
+
+
+def redact_url(url: str) -> str:
+    """Hide the values of token-like parameters in the query and in the fragment.
+
+    OAuth redirects put tokens in the fragment (``#access_token=...``), so both are covered.
+    """
+    if not url or ("?" not in url and "#" not in url):
+        return url
+    head, hash_sep, fragment = url.partition("#")
+    base, q_sep, query = head.partition("?")
+    if q_sep:
+        query = _redact_pairs(query)
+    if hash_sep:
+        fragment = _redact_pairs(fragment) if "=" in fragment else fragment
+    return base + (q_sep + query if q_sep else "") + (hash_sep + fragment if hash_sep else "")
 
 
 def _redact_urls(payload):

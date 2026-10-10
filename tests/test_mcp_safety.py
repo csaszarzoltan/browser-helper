@@ -56,3 +56,10 @@ def test_cookie_values_are_redacted_unless_asked(monkeypatch):
     assert hidden["cookies"][0]["value"] == "[redacted]" and hidden["values_redacted"] is True
     shown = json.loads(asyncio.run(tools.export_cookies(include_values=True)))["data"]
     assert shown["cookies"][0]["value"] == "SECRET"
+
+
+def test_token_in_the_url_fragment_is_hidden_too():
+    from mcp_server.tools import redact_url
+
+    assert redact_url("https://a.test/cb#access_token=SECRET&state=ok") == "https://a.test/cb#access_token=[redacted]&state=ok"
+    assert redact_url("https://a.test/p#section") == "https://a.test/p#section"

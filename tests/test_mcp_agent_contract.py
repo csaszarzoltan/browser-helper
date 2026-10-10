@@ -110,3 +110,26 @@ def test_documented_error_codes_cover_the_codes_the_handlers_return():
     source = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "src" / "mcp_server").glob("*.py"))
     missing = {c for c in must_document if f'"{c}"' not in source and f"'{c}'" not in source}
     assert not missing, f"documented but not in the code: {sorted(missing)}"
+
+
+def test_legacy_all_scope_still_clears_the_cache(monkeypatch):
+    from mcp_server import tools
+
+    cleared = {}
+
+    class _Target:
+        async def evaluate(self, js):
+            return {"result": "https://example.test/page"}
+
+        async def _send_command(self, method, params=None, **_):
+            return {"cookies": []} if method == "Network.getCookies" else {}
+
+        async def clear_browser_cache(self):
+            cleared["cache"] = True
+
+    async def fake_target():
+        return _Target(), None
+
+    monkeypatch.setattr(tools, "_target", fake_target)
+    out = json.loads(asyncio.run(tools.browser_reset_session(scope="all")))
+    assert out["data"]["cleared"]["cache"] is True and cleared == {"cache": True}
