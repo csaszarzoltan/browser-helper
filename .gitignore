@@ -7,3 +7,6 @@ settings.json
 src/browser_helper.egg-info/
 .testmondata
 .worktrees/
+
+# local scratch (measurements, run folders); not part of the repo
+scratch/
