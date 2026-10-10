@@ -84,8 +84,15 @@ class Session:
         self.last_seen = time.monotonic()
 
 
+class SessionCapacityError(RuntimeError):
+    """Raised when the session cap is reached and every session is still in use."""
+
+
 class SessionRegistry:
     """Mint, resolve and reap per-client browser sessions."""
+
+    # A session used within this window counts as active and is never evicted.
+    ACTIVE_WINDOW_S = 60.0
 
     def __init__(self, ttl: float = 1800.0, max_sessions: int = 15):
         self._sessions: dict[str, Session] = {}
@@ -159,7 +166,16 @@ class SessionRegistry:
             else:
                 self._cap_warned = False
             return None
-        victim_id = min(self._sessions, key=lambda sid: self._sessions[sid].last_seen)
+        # Never close a tab another client used recently: that would break its next
+        # call. Evict only idle sessions; if every session is active, refuse instead.
+        now = time.monotonic()
+        idle = [sid for sid, s in self._sessions.items() if now - s.last_seen >= self.ACTIVE_WINDOW_S]
+        if not idle:
+            raise SessionCapacityError(
+                f"all {len(self._sessions)} browser sessions were used in the last "
+                f"{int(self.ACTIVE_WINDOW_S)}s; retry shortly or close a session"
+            )
+        victim_id = min(idle, key=lambda sid: self._sessions[sid].last_seen)
         victim = self._sessions[victim_id]
         await self.destroy(victim_id)
         logger.warning(

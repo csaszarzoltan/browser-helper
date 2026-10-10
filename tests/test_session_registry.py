@@ -133,11 +133,12 @@ async def test_cap_evicts_lru(monkeypatch):
     c = await reg.create("http://127.0.0.1:9557")
     assert reg.count == 3
 
-    # Touch b and c so a becomes the LRU.
+    # Age a past the active window (an idle client), touch b and c, so a is the idle LRU.
+    a.last_seen -= SessionRegistry.ACTIVE_WINDOW_S + 1
     reg.get(b.session_id)
     reg.get(c.session_id)
 
-    d = await reg.create("http://127.0.0.1:9557")  # cap 3 → evict a
+    d = await reg.create("http://127.0.0.1:9557")  # cap 3 → evict idle a
     assert reg.count == 3
     assert reg.get(a.session_id) is None       # evicted
     assert reg.get(b.session_id) is not None   # kept
@@ -158,7 +159,11 @@ async def test_cap_never_exceeded(monkeypatch):
     monkeypatch.setattr(reg, "_open_tab_http", fake_open_tab)
 
     for _ in range(10):
-        await reg.create("http://127.0.0.1:9557")
+        made = await reg.create("http://127.0.0.1:9557")
+        # Each new client goes idle at once, so the cap may evict it on the next round.
+        for sess in list(reg._sessions.values()):
+            if sess is not made:
+                sess.last_seen -= SessionRegistry.ACTIVE_WINDOW_S + 1
     assert reg.count == 2  # never above the cap
 
 
@@ -177,6 +182,7 @@ async def test_evicted_session_heals_on_next_call(monkeypatch):
 
     a = await reg.create("http://127.0.0.1:9557")
     old_tab = a.tab_id
+    a.last_seen -= SessionRegistry.ACTIVE_WINDOW_S + 1  # idle, so it may be evicted
     await reg.create("http://127.0.0.1:9557")  # evicts a (cap 1)
 
     # The evicted session is gone from the registry.
@@ -185,6 +191,29 @@ async def test_evicted_session_heals_on_next_call(monkeypatch):
     # reaped) — the client would mint a NEW session, not reuse the dead id.
     # The auto-heal guarantee is that the *client* (with a fresh session)
     # always gets a working tab, which the cap+create provides:
+    for sess in list(reg._sessions.values()):
+        sess.last_seen -= SessionRegistry.ACTIVE_WINDOW_S + 1  # the other client is now idle
     fresh = await reg.create("http://127.0.0.1:9557")
     assert fresh.tab_id != old_tab
     assert reg.count == 1
+
+
+@pytest.mark.asyncio
+async def test_cap_refuses_to_evict_an_active_session(monkeypatch):
+    """When every session was used recently, the cap refuses instead of closing another client's tab."""
+    from session_registry import SessionCapacityError
+
+    reg = SessionRegistry(ttl=3600.0, max_sessions=2)
+    monkeypatch.setattr("session_registry.CDPClient", FakeClient)
+
+    async def fake_open_tab(client, url="about:blank", profile_dir=None):
+        FakeClient._counter += 1
+        return f"tab-{FakeClient._counter}"
+
+    monkeypatch.setattr(reg, "_open_tab_http", fake_open_tab)
+    a = await reg.create("http://127.0.0.1:9557")
+    b = await reg.create("http://127.0.0.1:9557")
+    with pytest.raises(SessionCapacityError):
+        await reg.create("http://127.0.0.1:9557")
+    assert reg.get(a.session_id) is not None and reg.get(b.session_id) is not None
+    assert a.client.closed is False

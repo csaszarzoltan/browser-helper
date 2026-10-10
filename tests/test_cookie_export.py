@@ -194,7 +194,7 @@ def test_mcp_tool_registered_with_capability():
     assert tool is not None
     assert tool.capability_id == "diagnostics.cookies"
     assert tool.status.value == "ready"
-    assert tool.parameters["required"] == ["session_id"]
+    assert tool.parameters["required"] == []  # session_id is optional: the current session is used
 
 
 @pytest.mark.asyncio

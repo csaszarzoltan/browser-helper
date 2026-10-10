@@ -100,6 +100,21 @@ CDP_GATED_TOOLS = {
     "get_tabs",
     "switch_tab",
     "close_tab",
+    "accessibility_audit",
+    "browser_download_file",
+    "assert",
+    "act",
+    "get_performance_metrics",
+    "print_pdf",
+    "set_viewport",
+    "set_geolocation",
+    "set_offline",
+    "drag",
+    "select_option",
+    "dismiss_overlays",
+    "await_user",
+    "wait_js",
+    "wait_network_idle",
 }
 
 #: High-level agent tools that perform long multi-step operations (search
@@ -179,6 +194,20 @@ def _assert_tool_ok(resp: dict) -> dict:
         return json.loads(text)
     except json.JSONDecodeError as exc:  # pragma: no cover — should never happen
         raise AssertionError(f"tool result is not a JSON envelope: {text!r}") from exc
+
+
+def _error_envelope(resp: dict) -> dict:
+    """A tool call that failed: isError true, text is the error envelope (after FastMCP's prefix)."""
+    import json as _json
+
+    result = _assert_rpc_ok(resp)
+    assert result.get("isError") is True, f"expected an error result, got: {result}"
+    text = "".join(c.get("text", "") for c in result.get("content") or [])
+    raw = text[text.find("{"):] if "{" in text else text
+    env = _json.loads(raw)
+    assert env.get("status") == "error", f"error envelope without status error: {env!r}"
+    assert (env.get("error") or {}).get("code"), f"error envelope without a code: {env!r}"
+    return env
 
 
 def _assert_tool_error(resp: dict) -> str:
@@ -273,7 +302,9 @@ class TestStdioE2E:
             req_id += 1
             if name in CDP_GATED_TOOLS:
                 msg = _assert_tool_error(resp)
-                assert "CDP" in msg, f"{name}: unexpected error: {msg}"
+                assert any(k in msg for k in ("CDP", "session", "Chrome", "browser")), f"{name}: unexpected error: {msg}"
+            elif (resp.get("result") or {}).get("isError"):
+                _error_envelope(resp)  # a legitimate failure: must carry a coded error envelope
             else:
                 envelope = _assert_tool_ok(resp)
                 assert envelope["operation"] == name, f"{name}: operation mismatch"
@@ -410,16 +441,20 @@ class TestHTTPE2E:
                     if c.get("type") == "text"
                 ]
                 assert texts, f"{name}: no text content: {result}"
+                # A tool error carries the FastMCP prefix "Error executing tool X: " before the envelope.
+                raw = texts[0][texts[0].find("{"):] if texts[0].startswith("Error executing tool") else texts[0]
                 try:
-                    env = _json.loads(texts[0])
+                    env = _json.loads(raw)
                 except ValueError:  # pragma: no cover — non-JSON error text
-                    assert "CDP" in texts[0], f"{name}: unexpected error: {texts[0]}"
+                    assert any(k in texts[0] for k in ("CDP", "session", "Chrome", "browser")), f"{name}: unexpected error: {texts[0]}"
                     continue
                 assert env.get("status") == "error", (
                     f"{name}: expected a clean failure without CDP, got {env!r}"
                 )
                 msg = _json.dumps(env.get("error") or env)
-                assert "CDP" in msg, f"{name}: unexpected error: {msg}"
+                assert any(k in msg for k in ("CDP", "session", "Chrome", "browser")), f"{name}: unexpected error: {msg}"
+            elif (resp.get("result") or {}).get("isError"):
+                _error_envelope(resp)  # a legitimate failure: must carry a coded error envelope
             else:
                 envelope = _assert_tool_ok(resp)
                 # The envelope's `operation` field is echoed with the same

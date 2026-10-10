@@ -140,7 +140,7 @@ EXPECTED_REQUIRED_PARAMS = {
     "switch_tab": ["id"],
     "close_tab": ["id"],
     "session_status": [],
-    "export_cookies": ["session_id"],
+    "export_cookies": [],
     "import_cookies": ["cookies"],
     "clone_session": [],
     "wait_for": ["value"],

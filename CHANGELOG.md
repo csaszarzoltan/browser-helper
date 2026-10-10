@@ -82,10 +82,10 @@ All notable changes to browser-helper will be documented in this file.
   (semantic) a böngésző accessibility-fájából hozzáadja a vezérlőket, `context: "closed-shadow"` jelöléssel és
   `backend_node_id`-vel. Az `act` fill és click backend-id-n keresztül működik, CSS selector nélkül. Ellenőrizve:
   a `Closed note:` mezőbe írt érték az accessibility-fában megjelenik, a `Closed save` gomb kattintása hatásos.
-- **Izolált ügynök-profil.** Az MCP-szerver a `BH_CHROME_PROFILE_DIR` és `BH_CHROME_DEBUG_PORT` (és `DISPLAY`)
-  környezeti változókkal saját Chrome-profilt és portot kap, így nem a bejelentkezett felhasználói profilhoz
-  csatlakozik. A felülírások csak a memóriában élnek, a közös `settings.json`-t nem írják, a 8020-as szerviz
-  beállításai változatlanok. Ellenőrizve: a 9560-as porton külön Chrome indul az `agent-profile` mappával.
+- **Opcionális izolált profil.** Az MCP-szerver a `BH_CHROME_PROFILE_DIR` és `BH_CHROME_DEBUG_PORT` (és `DISPLAY`)
+  környezeti változókkal külön Chrome-profilt és portot kaphat. Alapértelmezetten a `settings.json` profilját
+  (a felhasználó bejelentkezett profilját) használja. A felülírások csak a memóriában élnek, a közös `settings.json`-t
+  nem írják. Ellenőrizve: a 9560-as porton külön Chrome indul az `agent-profile` mappával.
 - **Navigate `wait_for`.** A `wait_for` CSS-szelektort vagy `text:<szöveg>`-et vár a betöltés után (SPA, dev-szerver).
   Ha nem jelenik meg a `timeout` alatt, `wait_for_timeout` hiba. Ellenőrizve egy 2 másodperc után renderelő oldalon.
 - **Auto-wait a `click`-en és `type`-on.** Ha az elem még nincs az oldalon, az eszköz legfeljebb 5 másodpercet vár
@@ -95,6 +95,21 @@ All notable changes to browser-helper will be documented in this file.
   Ellenőrizve: a fül bezárása után az `eval` sikeres, a csere száma 1.
 - **Egyértelmű fülhiba:** a `Tab X is not open…` üzenet megmondja, hogy a fület bezárták vagy más kliens birtokolja,
   és hogy a `get_tabs` adja a nyitott füleket.
+- **Akadálymentesség: axe-core.** Az `accessibility_audit` a vendorolt axe-core 4.12.1-et futtatja (WCAG-szabályok,
+  súlyosság, súgó-link, érintett elemek). Ha nem fut le az oldalon, a beépített heurisztika marad fallbackként, és
+  a válasz jelzi (`engine`). Ellenőrizve: a látható hibás oldalon 8 valós hiba. Licenc: MPL-2.0, `src/static/vendor/axe-core/`.
+- **Biztonság:** a `export_cookies` alapértelmezésben `[redacted]` értékeket ad. Értékek csak `include_values: true`-val.
+  **Változás:** a korábbi kliensek, amelyek az értéket olvasták, most `include_values: true`-t kellenek. A tab- és
+  observe-URL-ekben a token-jellegű paraméterek értéke `[redacted]`. `BH_ALLOWED_ORIGINS` (vesszővel elválasztott
+  origin-ek) esetén a navigáció más origin-re `origin_not_allowed` hibát ad. A redirectek nincsenek ellenőrizve.
+- **Emberi átadás (`await_user`).** Új `reason` paraméter. Az átadás alatt a `session_status` mutatja (`handoff_pending`).
+  Értesítés `notify-send`-del, ha elérhető. A folytatás előtt a hibaoldal nem számít sikernek.
+- **Profil-láthatóság.** A `session_status` megmutatja a használt profilt és portot (`browser_profile`), azt, hogy
+  a felhasználó saját profilja-e, és figyelmeztet, ha a porton futó Chrome más profilt használ.
+- **Megosztott pool.** A munkamenet-kiürítés csak tétlen (60 s-nél régebben használt) munkamenetet zár be. Ha minden
+  munkamenet aktív, `SessionCapacityError` hibát ad, nem zárja be más kliens fülét.
+- **Ellenállóság.** Egy fül, amely szerepel a listában, de nem válaszol (Memory Saver), cserélődik. A válasz-próba
+  5 másodpercenként fut. Letöltő link kattintása nem omlasztotta össze a szervert (ellenőrizve).
 - **Stdio-harness holtpont javítva.** A teszt-harness `select()`-et és a `TextIO.readline()`-t keverte. Ha a szerver
   egy értesítést és a választ egy csomagban írta, a második sor elveszett, és a teszt az időkorlátig várt. Most nyers
   `os.read` és saját sor-puffer. Terhelés alatt a teszt eddig 65 s után bukott, most 5 s alatt átmegy.

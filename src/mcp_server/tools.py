@@ -18,10 +18,12 @@ spamming a new tab per call.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json as _json_mod
 import logging
 import os
+import re
 from typing import Any
 
 from mcp.server.fastmcp import Context  # typing only — never called here
@@ -60,7 +62,23 @@ async def _session_tab_alive(sess) -> bool:
         tabs = await sess.client.discover_tabs()
     except Exception:  # noqa: BLE001 — browser unreachable: let the normal path report it
         return True
-    return any(tab.get("id") == sess.tab_id and tab.get("type") == "page" for tab in tabs)
+    listed = any(tab.get("id") == sess.tab_id and tab.get("type") == "page" for tab in tabs)
+    if not listed:
+        return False
+    # Listed is not the same as alive: Chrome can discard a background tab (Memory Saver)
+    # and leave it in the list while it no longer answers. Probe it, at most every 5 s.
+    import time as _time
+
+    now = _time.monotonic()
+    if now - getattr(sess, "_alive_checked_at", 0.0) < 5.0:
+        return True
+    try:
+        await asyncio.wait_for(sess.client._send_command(
+            "Runtime.evaluate", {"expression": "1", "returnByValue": True}), timeout=3.0)
+    except Exception:  # noqa: BLE001 — no answer means the tab is gone for our purposes
+        return False
+    sess._alive_checked_at = now
+    return True
 
 
 async def _mcp_session():
@@ -178,10 +196,14 @@ async def navigate(url: str, wait_until: str = "domcontentloaded", timeout: floa
     """
     if ctx is not None:
         await ctx.info(f"navigate -> {url} (wait_until={wait_until})")
+    allowlist = _origin_allowlist()
+    if allowlist is not None and not _origin_allowed(url, allowlist):
+        return tool_error("navigate", "origin_not_allowed",
+                          f"{url} is not in BH_ALLOWED_ORIGINS; allowed: {', '.join(allowlist)}")
     target, run_op = await _target()
     res = await run_op("navigate", target.navigate, url, wait_until=wait_until, timeout=timeout)
     if not wait_for or not isinstance(res, dict) or res.get("status") != "ok":
-        return json_dumps(res)
+        return json_dumps(_redact_urls(res))
     if wait_for.startswith("text:"):
         waited = await run_op("navigate_wait_for", target.wait_for_text, wait_for[5:], int(timeout))
     else:
@@ -195,7 +217,7 @@ async def navigate(url: str, wait_until: str = "domcontentloaded", timeout: floa
     res.setdefault("data", {})
     if isinstance(res["data"], dict):
         res["data"]["waited_for"] = wait_for
-    return json_dumps(res)
+    return json_dumps(_redact_urls(res))
 
 
 async def click(selector: str, expect: dict | None = None, ctx: Context | None = None) -> str:
@@ -326,7 +348,7 @@ async def observe(
             target = pinned
         if mode.lower() in {"accessibility", "ax"}:
             snap = await _capture_accessibility_snapshot(
-                scope=("dialog" if True and scope == "page" else scope),
+                scope=scope,
                 include=None, interactive_only=interactive_only,
                 include_hidden=include_hidden,
                 target=target,
@@ -375,7 +397,7 @@ async def observe(
                 return tool_error("observe", "stale_snapshot",
                                   f"snapshot {since_snapshot_id!r} is missing or expired; observe again")
             data["diff"] = diff
-        return tool_result("observe", data)
+        return tool_result("observe", _redact_urls(data))
     except Exception as exc:  # noqa: BLE001
         return tool_error("observe", "operation_failed", str(exc))
 
@@ -467,7 +489,7 @@ async def get_tabs(ctx: Context | None = None) -> str:
     if ctx is not None:
         await ctx.info("listing tabs")
     target, run_op = await _target()
-    return json_dumps(await run_op("get_tabs", target.get_tabs))
+    return json_dumps(_redact_urls(await run_op("get_tabs", target.get_tabs)))
 
 
 async def switch_tab(id: str, ctx: Context | None = None) -> str:
@@ -515,6 +537,12 @@ async def session_status(ctx: Context | None = None) -> str:
                 "mcp_tab_id": own.tab_id if own is not None else None,
                 # How many times the own tab was lost and replaced by a fresh one.
                 "mcp_tab_replaced": _MCP_SESSION.get("replaced", 0),
+                # Which Chrome profile this server drives, and whether it is the user's own.
+                "browser_profile": _browser_profile_info(),
+                # A hand-off waiting for a person (await_user), or None.
+                "handoff_pending": _MCP_SESSION.get("handoff"),
+                # Emulation that stays on the page until cleared: viewport, geolocation, offline.
+                "emulation": dict(_MCP_SESSION.get("emulation", {})),
             },
         )
     except Exception as exc:  # noqa: BLE001 — normalize to the envelope contract
@@ -557,7 +585,11 @@ async def search(query: str, engine: str = "google", timeout: int = 45,
 
     if ctx is not None:
         await ctx.info(f"search {engine}: {query[:60]}")
-    resp = await agent_search(AgentSearchRequest(query=query, engine=engine, timeout=timeout))
+    await _mcp_session()  # the engine reads the session from context: set it for this call
+    try:
+        resp = await agent_search(AgentSearchRequest(query=query, engine=engine, timeout=timeout))
+    except Exception as exc:  # noqa: BLE001 — every failure becomes an envelope
+        return tool_error("search", "operation_failed", str(exc))
     return json_dumps(resp)
 
 
@@ -597,12 +629,19 @@ async def run_flow(steps: list[dict], name: str = "flow", stop_on_error: bool = 
     steps = steps or []
     if not steps:
         return tool_error("run_flow", "invalid_params", "steps is required")
-    req = AgentFlowRequest(
-        name=name,
-        steps=[AgentFlowStep(**s) for s in steps],
-        stop_on_error=stop_on_error,
-    )
-    resp = await agent_run_flow(req)
+    try:
+        req = AgentFlowRequest(
+            name=name,
+            steps=[AgentFlowStep(**s) for s in steps],
+            stop_on_error=stop_on_error,
+        )
+    except (TypeError, ValueError) as exc:
+        return tool_error("run_flow", "invalid_params", f"a step is malformed: {exc}")
+    await _mcp_session()  # the engine reads the session from context: set it for this call
+    try:
+        resp = await agent_run_flow(req)
+    except Exception as exc:  # noqa: BLE001 — every failure becomes an envelope
+        return tool_error("run_flow", "operation_failed", str(exc))
     return json_dumps(resp)
 
 
@@ -635,20 +674,24 @@ async def _resolve_cookie_target(session_id: str | None):
     return (sess.client if sess is not None else client), sess
 
 
-async def export_cookies(session_id: str, ctx: Context | None = None) -> str:
+async def export_cookies(session_id: str | None = None, include_values: bool = False,
+                         ctx: Context | None = None) -> str:
     """Export all cookies from a session (capability ``browser.core``, READY).
 
-    Returns CDP Cookie objects (name, value, domain, path, expires,
-    httpOnly, secure, sameSite) for re-import into another session.
-
-    Cookie values travel only over the direct client call and are never
-    written to the operation log or chat.
+    Returns the cookie names, domains, paths, expiry and flags. Values are
+    replaced by ``[redacted]`` unless ``include_values`` is true: a session cookie
+    is a login, and the agent rarely needs its value. Use the values only to
+    re-import into another session (``import_cookies``).
     """
     if ctx is not None:
-        await ctx.info(f"export_cookies session={session_id}")
+        await ctx.info(f"export_cookies session={session_id} include_values={include_values}")
     try:
         target, _ = await _resolve_cookie_target(session_id)
         res = await target.get_cookies()
+        if not include_values and isinstance(res, dict):
+            res = dict(res)
+            res["cookies"] = [{**c, "value": "[redacted]"} for c in res.get("cookies", [])]
+            res["values_redacted"] = True
         return tool_result("export_cookies", res)
     except KeyError as exc:
         return tool_error("export_cookies", "session_not_found", str(exc))
@@ -730,6 +773,9 @@ async def wait_for(value: str, kind: str = "selector", condition: str = "present
     try:
         res = await run_op_fn("wait_for", target.wait_for_condition,
                               kind, value, condition, timeout)
+        failure = _engine_failure(res)
+        if failure:
+            return _wait_failure("wait_for", failure)
         return json_dumps({"status": "ok", "operation": "wait_for",
                            "data": res, "error": None, "meta": {}})
     except Exception as exc:  # noqa: BLE001 — tool boundary catch-all
@@ -865,12 +911,12 @@ async def network_block(patterns: list[str], ctx: Context | None = None) -> str:
     useful for stubbing analytics/trackers or testing error paths.
     Empty list clears all blocks.
     """
-    from main import client, run_op
+    target, run_op = await _target()
 
     if ctx is not None:
         await ctx.info(f"network_block patterns={len(patterns)}")
     try:
-        result = await run_op("network_block", client.set_network_block, patterns)
+        result = await run_op("network_block", target.set_network_block, patterns)
         if not isinstance(result, dict) or result.get("status") != "ok":
             return tool_error("network_block", "block_failed", str(result))
         return json_dumps({"status": "ok", "operation": "network_block",
@@ -887,12 +933,12 @@ async def network_mock(mocks: list[dict], ctx: Context | None = None) -> str:
     "content_type": "application/json"}``.  Matching requests receive the
     mocked response instead of hitting the network.  Empty list clears.
     """
-    from main import client, run_op
+    target, run_op = await _target()
 
     if ctx is not None:
         await ctx.info(f"network_mock mocks={len(mocks)}")
     try:
-        result = await run_op("network_mock", client.set_request_mocks, mocks)
+        result = await run_op("network_mock", target.set_request_mocks, mocks)
         if not isinstance(result, dict) or result.get("status") != "ok":
             return tool_error("network_mock", "mock_failed", str(result))
         return json_dumps({"status": "ok", "operation": "network_mock",
@@ -1051,6 +1097,9 @@ async def wait_js(
         raw = result.get("result", "{}") if isinstance(result, dict) else "{}"
         import json as _json
         data = _json.loads(raw) if isinstance(raw, str) else raw
+        failure = _engine_failure(data)
+        if failure:
+            return _wait_failure("wait_js", failure)
         return tool_result("wait_js", data)
     except Exception as exc:  # noqa: BLE001
         return tool_error("wait_js", "failed", str(exc))
@@ -1080,12 +1129,13 @@ async def eval(js: str, timeout: int = 30, tab_id: str | None = None, ctx: Conte
             pinned = await _tab_pinned_client(tab_id)
             if isinstance(pinned, str):
                 return pinned  # tool_error envelope (unknown tab / unreachable)
-            result = await pinned.evaluate_js(js)
+            result = await _with_timeout("eval", pinned.evaluate_js(js), timeout)
         else:
-            result = await target.evaluate_js(js)
+            result = await _with_timeout("eval", target.evaluate_js(js), timeout)
         return tool_result("eval", result)
     except Exception as exc:  # noqa: BLE001
-        return tool_error("eval", "failed", str(exc))
+        code = "timeout" if isinstance(exc, TimeoutError) else "failed"
+        return tool_error("eval", code, str(exc))
 
 
 async def get_page_text(
@@ -1302,6 +1352,9 @@ async def wait_network_idle(
         result = await run_op_fn(
             "wait_for_network_idle", target.wait_for_network_idle, timeout, quiet_ms
         )
+        failure = _engine_failure(result)
+        if failure:
+            return _wait_failure("wait_network_idle", failure)
         return tool_result("wait_network_idle", result)
     except Exception as exc:  # noqa: BLE001
         return tool_error("wait_network_idle", "failed", str(exc))
@@ -1525,9 +1578,13 @@ async def browser_navigate(
     if ctx is not None:
         await ctx.info(f"browser_navigate {url} wait_until={wait_until} settle={settle} origins={bool(origins or storage_state)}")
     try:
-        target, run_op = await _target()
         if wait_until and wait_until not in _NEGOTIATE:
             return tool_error("browser_navigate", "invalid_wait_until", "must be domContentLoaded|load|networkIdle")
+        allowlist = _origin_allowlist()
+        if allowlist is not None and not _origin_allowed(url, allowlist):
+            return tool_error("browser_navigate", "origin_not_allowed",
+                              f"{url} is not in BH_ALLOWED_ORIGINS; allowed: {', '.join(allowlist)}")
+        target, run_op = await _target()
         # P0-3: normalize storage_state alias
         payload_origins = origins
         if storage_state is not None:
@@ -1555,7 +1612,15 @@ async def browser_navigate(
                     await target.add_script_to_evaluate_on_new_document("".join(parts))
                 except Exception as skip_exc:  # noqa: BLE001 — best-effort localStorage seed; navigation continues without it
                     logger.debug("best-effort localStorage seed (session) failed: %s", skip_exc)
-        res = await run_op("navigate", target.navigate, url)
+        # wait_until is honoured: domContentLoaded and load map onto navigate;
+        # networkIdle navigates, then waits for the network to go quiet.
+        ready = {"domContentLoaded": "domcontentloaded", "load": "load"}.get(wait_until or "", "domcontentloaded")
+        res = await run_op("navigate", target.navigate, url, wait_until=ready, timeout=float(timeout))
+        if wait_until == "networkIdle" and isinstance(res, dict) and res.get("status") == "ok":
+            idle = await run_op("navigate_idle", target.wait_for_network_idle, int(timeout), 500)
+            failure = _engine_failure(idle)
+            if failure:
+                return _wait_failure("browser_navigate", failure)
         # P0 navigate-active: surface the resolved tab and honor make_active=false
         if isinstance(res, dict):
             _d = res.get("data")
@@ -2117,42 +2182,64 @@ async def browser_inject_storage_state(
 
 
 async def browser_reset_session(
-    scope: str = "all",
+    scope: str = "site",
     ctx = None,
 ) -> str:
-    """Clear cache / cookies / storage between tests (capability ``browser.core``, READY)."""
-    sc = (scope or "all").lower().strip()
-    if sc not in {"cookies", "storage", "all"}:
-        return tool_error("browser_reset_session", "invalid_scope", "scope must be cookies|storage|all")
+    """Clear state between tests (capability ``browser.core``, READY).
+
+    scope ``site`` (default): the cookies and local/session storage of the page's
+    own site only. ``profile``: every cookie and the HTTP cache of the whole Chrome
+    profile, which can log you out of every site (your own profile is used by
+    default), so it must be asked for explicitly. ``cookies``, ``storage`` and
+    ``all`` are kept for compatibility and act on the current site only.
+    """
+    sc = (scope or "site").lower().strip()
+    if sc not in {"site", "profile", "cookies", "storage", "all"}:
+        return tool_error("browser_reset_session", "invalid_scope",
+                          "scope must be site|profile (cookies|storage|all act on the current site)")
     if ctx is not None:
         await ctx.info(f"browser_reset_session scope={sc}")
     try:
         target, _ = await _target()
-        done: dict[str, bool] = {}
-        if sc in ("cookies", "all"):
+        done: dict[str, object] = {}
+        if sc == "profile":
             try:
-                await target.clear_browser_cookies()  # type: ignore[attr-defined]
-                done["cookies"] = True
-            except AttributeError:
                 await target._send_command("Network.clearBrowserCookies")
-                done["cookies"] = True
+                done["cookies"] = "profile"
             except Exception as exc:  # noqa: BLE001
                 return tool_error("browser_reset_session", "clear_cookies_failed", str(exc))
-        if sc in ("storage", "all"):
-            try:
-                await target.evaluate("localStorage.clear(); sessionStorage.clear();")
-                done["storage"] = True
-            except Exception as exc:  # noqa: BLE001
-                return tool_error("browser_reset_session", "clear_storage_failed", str(exc))
-        if sc == "all":
             try:
                 await target.clear_browser_cache()  # type: ignore[attr-defined]
                 done["cache"] = True
             except Exception:  # noqa: BLE001
                 done["cache"] = False
+        if sc in ("site", "cookies", "all"):
+            try:
+                done["cookies"] = await _clear_site_cookies(target)
+            except Exception as exc:  # noqa: BLE001
+                return tool_error("browser_reset_session", "clear_cookies_failed", str(exc))
+        if sc in ("site", "storage", "all"):
+            try:
+                await target.evaluate("localStorage.clear(); sessionStorage.clear();")
+                done["storage"] = True
+            except Exception as exc:  # noqa: BLE001
+                return tool_error("browser_reset_session", "clear_storage_failed", str(exc))
         return tool_result("browser_reset_session", {"scope": sc, "cleared": done})
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_reset_session", "failed", str(exc))
+
+
+async def _clear_site_cookies(target) -> int:
+    """Delete the cookies that apply to the page's current URL. Returns how many were removed."""
+    href = await target.evaluate("location.href")
+    url = ((href or {}).get("result") or href or "") if isinstance(href, dict) else str(href or "")
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return 0
+    cookies = (await target._send_command("Network.getCookies", {"urls": [url]})).get("cookies", [])
+    for cookie in cookies:
+        await target._send_command("Network.deleteCookies", {
+            "name": cookie["name"], "domain": cookie["domain"], "path": cookie.get("path", "/")})
+    return len(cookies)
 
 
 # ---------------------------------------------------------------------------
@@ -2243,6 +2330,7 @@ async def set_viewport(width: int, height: int, device_scale_factor: float = 1.0
         _, err = _cdp_data(env)
         if err:
             return tool_error("set_viewport", "viewport_failed", err)
+        _note_emulation("viewport", None)
         return tool_result("set_viewport", {"cleared": True})
     params = {"width": width, "height": height,
               "deviceScaleFactor": device_scale_factor, "mobile": mobile}
@@ -2251,6 +2339,7 @@ async def set_viewport(width: int, height: int, device_scale_factor: float = 1.0
     _, err = _cdp_data(env)
     if err:
         return tool_error("set_viewport", "viewport_failed", err)
+    _note_emulation("viewport", {"width": width, "height": height, "mobile": mobile})
     return tool_result("set_viewport", {"width": width, "height": height,
                                         "device_scale_factor": device_scale_factor,
                                         "mobile": mobile})
@@ -2316,6 +2405,7 @@ async def set_geolocation(latitude: float, longitude: float, accuracy: float = 1
     _, err = _cdp_data(env)
     if err:
         return tool_error("set_geolocation", "geolocation_failed", err)
+    _note_emulation("geolocation", {"latitude": latitude, "longitude": longitude})
     return tool_result("set_geolocation", {"latitude": latitude, "longitude": longitude,
                                            "accuracy": accuracy, "permission_granted_for": granted_origin})
 
@@ -2337,6 +2427,7 @@ async def set_offline(offline: bool, ctx: Context | None = None) -> str:
     _, err = _cdp_data(env)
     if err:
         return tool_error("set_offline", "network_emulation_failed", err)
+    _note_emulation("offline", True if offline else None)
     return tool_result("set_offline", {"offline": offline})
 
 
@@ -2471,6 +2562,142 @@ _A11Y_JS = """(() => {
 })()"""
 
 
+_AXE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "static", "vendor", "axe-core", "axe.min.js")
+_AXE_RUN_JS = """(async () => {
+  const r = await axe.run(document, {resultTypes: ["violations"]});
+  const impact = {};
+  for (const v of r.violations) impact[v.impact || "unknown"] = (impact[v.impact || "unknown"] || 0) + 1;
+  return JSON.stringify({
+    engine: "axe-core " + axe.version,
+    total: r.violations.length,
+    by_impact: impact,
+    violations: r.violations.slice(0, 50).map(v => ({
+      id: v.id, impact: v.impact, help: v.help, help_url: v.helpUrl,
+      nodes: v.nodes.length,
+      targets: v.nodes.slice(0, 3).map(n => n.target.join(" "))
+    }))
+  });
+})()"""
+
+
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+async def _axe_audit(target) -> dict | None:
+    """Run the vendored axe-core on the page. None when it cannot run here."""
+    from cdp_client import CDPError
+
+    try:
+        source = await asyncio.to_thread(_read_text, _AXE_PATH)
+    except OSError:
+        return None
+    try:
+        probe = await target._send_command("Runtime.evaluate", {
+            "expression": "typeof axe", "returnByValue": True})
+        if ((probe or {}).get("result") or {}).get("value") != "function":
+            await target._send_command("Runtime.evaluate", {
+                "expression": source, "returnByValue": True})
+        r = await target._send_command("Runtime.evaluate", {
+            "expression": _AXE_RUN_JS, "returnByValue": True, "awaitPromise": True})
+        if (r or {}).get("exceptionDetails"):
+            return None
+        raw = ((r or {}).get("result") or {}).get("value")
+        return _json_mod.loads(raw) if isinstance(raw, str) else None
+    except (CDPError, OSError, ValueError, KeyError):
+        return None
+
+
+_SENSITIVE_URL_KEYS = re.compile(
+    r"(token|session|sid|auth|key|secret|password|passwd|jwt|code|signature|sig|apikey|access)",
+    re.IGNORECASE)
+
+
+def redact_url(url: str) -> str:
+    """Hide the values of token-like query parameters, so a URL can be shown safely."""
+    if not url or "?" not in url:
+        return url
+    base, _, query = url.partition("?")
+    query, hash_sep, fragment = query.partition("#")
+    parts = []
+    for piece in query.split("&"):
+        key, eq, _value = piece.partition("=")
+        if eq and _SENSITIVE_URL_KEYS.search(key):
+            parts.append(f"{key}=[redacted]")
+        else:
+            parts.append(piece)
+    return base + "?" + "&".join(parts) + hash_sep + fragment
+
+
+def _redact_urls(payload):
+    """Return *payload* with every ``url`` string value redacted (recursively)."""
+    if isinstance(payload, dict):
+        return {k: (redact_url(v) if k == "url" and isinstance(v, str) else _redact_urls(v))
+                for k, v in payload.items()}
+    if isinstance(payload, list):
+        return [_redact_urls(v) for v in payload]
+    return payload
+
+
+def _origin_allowlist() -> list[str] | None:
+    """Origins the agent may navigate to, from BH_ALLOWED_ORIGINS; None means no restriction."""
+    raw = os.environ.get("BH_ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        return None
+    return [o.strip().rstrip("/").lower() for o in raw.split(",") if o.strip()]
+
+
+def _origin_allowed(url: str, allowlist: list[str]) -> bool:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    origin = f"{parts.scheme}://{parts.netloc}".lower()
+    return origin in allowlist
+
+
+def _chrome_profile_on_port(port: int) -> str | None:
+    """The --user-data-dir of the Chrome process listening on *port*, or None when none is found."""
+    import glob
+
+    needle = f"--remote-debugging-port={port}"
+    for path in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(path, "rb") as fh:
+                args = fh.read().split(b"\0")
+        except OSError:
+            continue
+        line = [a.decode("utf-8", "replace") for a in args if a]
+        if not any(a == needle for a in line):
+            continue
+        for a in line:
+            if a.startswith("--user-data-dir="):
+                return a.split("=", 1)[1]
+    return None
+
+
+def _browser_profile_info() -> dict:
+    """Which Chrome profile and port this server uses, and whether that is the user's own profile."""
+    from main import settings_mgr
+
+    profile = settings_mgr.get("chrome_profile_dir") or ""
+    port = int(settings_mgr.get("chrome_debug_port") or 9557)
+    overridden = bool(os.environ.get("BH_CHROME_PROFILE_DIR", "").strip())
+    running = _chrome_profile_on_port(port)
+    info = {
+        "profile_dir": profile,
+        "debug_port": port,
+        "source": "BH_CHROME_PROFILE_DIR" if overridden else "settings.json",
+        "is_user_default_profile": "google-chrome/Default" in profile or profile.endswith("/Default"),
+        "chrome_on_port_profile": running,
+    }
+    if running and profile and os.path.normpath(running) != os.path.normpath(profile):
+        info["warning"] = (f"the Chrome on port {port} uses {running}, not the configured {profile}; "
+                           "the agent will act in the browser that is running")
+    return info
+
+
 @_envelope_errors("accessibility_audit")
 async def accessibility_audit(ctx: Context | None = None) -> str:
     """Check the active page for common accessibility problems (capability ``browser.core``, READY).
@@ -2481,11 +2708,15 @@ async def accessibility_audit(ctx: Context | None = None) -> str:
     """
     if ctx is not None:
         await ctx.info("accessibility_audit")
-    _, run_op = await _target()
+    target, run_op = await _target()
+    axe = await _axe_audit(target)
+    if axe is not None:
+        return tool_result("accessibility_audit", axe)
+    # axe-core could not run on this page: fall back to the built-in heuristic and say so.
     data, err = await _eval_json(run_op, "accessibility_audit", _A11Y_JS)
     if err:
         return tool_error("accessibility_audit", "audit_failed", err)
-    return tool_result("accessibility_audit", data)
+    return tool_result("accessibility_audit", {"engine": "heuristic", **(data or {})})
 
 
 # ---------------------------------------------------------------------------
@@ -2518,50 +2749,132 @@ def _observe_diff(mode: str, since_snapshot_id: str, snap) -> dict | None:
     return diff_snapshots(old, snap)
 
 
+async def _with_timeout(op: str, coro, timeout: float):
+    """Await *coro* for at most *timeout* seconds. Returns the value, or raises TimeoutError."""
+    import asyncio
+
+    try:
+        return await asyncio.wait_for(coro, timeout=max(0.1, float(timeout)))
+    except TimeoutError as exc:
+        raise TimeoutError(f"{op} timed out after {timeout}s") from exc
+
+
+def _note_emulation(key: str, value) -> None:
+    """Remember an emulation that stays active on the page (None clears it), for session_status."""
+    state = _MCP_SESSION.setdefault("emulation", {})
+    if value is None:
+        state.pop(key, None)
+    else:
+        state[key] = value
+
+
+def _engine_failure(res) -> str | None:
+    """The failure message inside an engine result, or None when it succeeded.
+
+    The engine wraps a timed-out wait as an ok envelope whose method result has
+    status "error". Callers must report that as an error, not as success.
+    """
+    if not isinstance(res, dict):
+        return None
+    if res.get("status") == "error":
+        err = res.get("error")
+        return err.get("message", "failed") if isinstance(err, dict) else str(err or "failed")
+    data = res.get("data")
+    if isinstance(data, dict):
+        if data.get("status") == "error":
+            return str(data.get("error") or "failed")
+        inner = data.get("result")
+        if isinstance(inner, dict) and inner.get("status") == "error":
+            return str(inner.get("error") or "failed")
+    return None
+
+
+def _wait_failure(op: str, msg: str) -> str:
+    """Error envelope for a failed wait: code timeout when the wait ran out of time."""
+    code = "timeout" if "timeout" in msg.lower() or "timed out" in msg.lower() else "wait_failed"
+    return tool_error(op, code, msg)
+
+
 @_envelope_errors("await_user")
 async def await_user(url_contains: str | None = None, selector: str | None = None,
                      text: str | None = None, timeout: float = 300.0, poll_ms: int = 1000,
-                     ctx: Context | None = None) -> str:
-    """Wait for a person to finish a step in the visible browser (capability ``browser.core``, READY).
+                     reason: str | None = None, ctx: Context | None = None) -> str:
+    """Hand a step to a person in the visible browser, then resume (capability ``browser.core``, READY).
 
-    Use it for logins, CAPTCHAs and two-factor prompts that the agent must not
-    handle. Give at least one condition: ``url_contains`` (the URL includes this
-    text), ``selector`` (an element exists) or ``text`` (the page shows this text).
-    Returns when all given conditions hold. After ``timeout`` seconds without them
-    it returns an error. The agent then continues from the page the person left.
+    Use it for logins, CAPTCHAs, two-factor prompts and confirmations that the agent
+    must not handle. Give at least one condition: ``url_contains`` (the URL includes
+    this text), ``selector`` (an element exists) or ``text`` (the page shows this text).
+    ``reason`` says what the person must do (shown in session_status and, if the
+    system has one, as a desktop notification).
+
+    While waiting, session_status reports the pending hand-off. When the conditions hold
+    the page is checked again: an error page is not a success, and the call says so.
+    After ``timeout`` seconds without the conditions it returns an error.
     """
     import asyncio as _asyncio
+    import time as _time
 
     if not any((url_contains, selector, text)):
         return tool_error("await_user", "invalid_params",
                           "give at least one of url_contains, selector or text")
     if ctx is not None:
-        await ctx.info("await_user: waiting for a person to finish a step")
+        await ctx.info(f"await_user: {reason or 'waiting for a person to finish a step'}")
     _, run_op = await _target()
-    probe = (
-        "JSON.stringify({url: location.href, "
-        f"sel: {_json_mod.dumps(selector)} ? !!document.querySelector({_json_mod.dumps(selector)}) : null, "
-        f"txt: {_json_mod.dumps(text)} ? document.body.innerText.includes({_json_mod.dumps(text)}) : null}})"
-    )
-    loop = _asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, float(timeout))
-    last: dict = {}
-    while True:
-        data, err = await _eval_json(run_op, "await_user", probe)
-        if err:
-            return tool_error("await_user", "page_unreadable", err)
-        last = data or {}
-        ok = (
-            (url_contains is None or url_contains in last.get("url", ""))
-            and (selector is None or bool(last.get("sel")))
-            and (text is None or bool(last.get("txt")))
+    started = _time.monotonic()
+    _MCP_SESSION["handoff"] = {"reason": reason or "step for a person", "since": started}
+    _notify_person(reason)
+    try:
+        probe = (
+            "JSON.stringify({url: location.href, state: document.readyState, "
+            f"sel: {_json_mod.dumps(selector)} ? !!document.querySelector({_json_mod.dumps(selector)}) : null, "
+            f"txt: {_json_mod.dumps(text)} ? document.body.innerText.includes({_json_mod.dumps(text)}) : null, "
+            "title: document.title})"
         )
-        if ok:
-            return tool_result("await_user", {"url": last.get("url"), "matched": True})
-        if loop.time() >= deadline:
-            return tool_error("await_user", "timeout",
-                              f"conditions not met within {timeout:g}s; current url {last.get('url')!r}")
-        await _asyncio.sleep(max(0.1, poll_ms / 1000.0))
+        loop = _asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(timeout))
+        last: dict = {}
+        while True:
+            data, err = await _eval_json(run_op, "await_user", probe)
+            if err:
+                return tool_error("await_user", "page_unreadable", err)
+            last = data or {}
+            ok = (
+                (url_contains is None or url_contains in last.get("url", ""))
+                and (selector is None or bool(last.get("sel")))
+                and (text is None or bool(last.get("txt")))
+            )
+            if ok:
+                break
+            if loop.time() >= deadline:
+                return tool_error("await_user", "timeout",
+                                  f"conditions not met within {timeout:g}s; current url {last.get('url')!r}")
+            await _asyncio.sleep(max(0.1, poll_ms / 1000.0))
+    finally:
+        _MCP_SESSION.pop("handoff", None)
+    # Resume check: the person may have ended on an error page, or the page may still be loading.
+    url = last.get("url", "")
+    if url.startswith("chrome-error:"):
+        return tool_error("await_user", "error_page", f"the page after the hand-off is an error page ({url})")
+    if last.get("state") != "complete":
+        return tool_error("await_user", "still_loading", "the page after the hand-off is still loading; call again")
+    return tool_result("await_user", {
+        "url": redact_url(url), "title": last.get("title", ""), "matched": True,
+        "reason": reason, "waited_s": round(_time.monotonic() - started, 1),
+    })
+
+
+def _notify_person(reason: str | None) -> None:
+    """Best-effort desktop notification that a person is needed. Silent when unavailable."""
+    import shutil
+    import subprocess
+
+    if shutil.which("notify-send") is None:
+        return
+    try:
+        subprocess.Popen(["notify-send", "Browser Helper", reason or "A step needs you in the browser"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
 
 
 @_envelope_errors("select_option")

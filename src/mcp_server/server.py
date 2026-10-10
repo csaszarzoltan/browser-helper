@@ -31,6 +31,32 @@ def project_version() -> str:
     return match.group(1) if match else "unknown"
 
 
+def _as_tool_result(handler):
+    """Wrap a handler so an error envelope becomes a tool error (isError true).
+
+    The wrapper keeps the handler's signature (functools.wraps), so FastMCP still
+    injects the Context argument. Success envelopes and non-JSON text pass through.
+    """
+    import functools
+    import json
+
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    @functools.wraps(handler)
+    async def wrapper(*args, **kwargs):
+        out = await handler(*args, **kwargs)
+        if isinstance(out, str):
+            try:
+                env = json.loads(out)
+            except ValueError:
+                return out
+            if isinstance(env, dict) and env.get("status") == "error":
+                raise ToolError(out)
+        return out
+
+    return wrapper
+
+
 class MCPServer:
     """FastMCP server wrapper (spec §6.1)."""
 
@@ -56,13 +82,23 @@ class MCPServer:
         return self._mcp
 
     def register_tools(self, mcp: FastMCP) -> None:
-        """Register every ToolDef in the capability-derived registry."""
+        """Register every ToolDef in the capability-derived registry.
+
+        Two things the agent depends on are set here:
+        - the registry's input schema (enums, defaults, descriptions) replaces the one
+          generated from the handler signature, so the agent sees the hints;
+        - a failed call (an envelope with status "error") is raised as a tool error,
+          so the MCP ``isError`` flag is set. The envelope text is kept as the message.
+        """
         for tool in build_tool_defs():
             mcp.add_tool(
-                tool.handler,
+                _as_tool_result(tool.handler),
                 name=tool.name,
                 description=tool.description,
             )
+            registered = mcp._tool_manager.get_tool(tool.name)
+            if registered is not None and tool.parameters:
+                registered.parameters = tool.parameters
 
     def _build_instructions(self) -> str:
         """Build the server instructions from CapabilityRegistry (spec §4.6)."""

@@ -431,18 +431,17 @@ BH_MCP_TOKEN="$(openssl rand -hex 32)" bh mcp --http --host 0.0.0.0 --port 8765
 - Client config for a remote agent: an HTTP MCP server at `http://127.0.0.1:8765/mcp` (through the tunnel)
   with the header `Authorization: Bearer <token>`.
 
-## Agent profile isolation
+## Which browser profile the agent uses
 
-Agent sessions should not use the browser you are logged into. Start the MCP server with its own
-profile and debug port (environment variables, memory-only; the shared `settings.json` is not written):
+By default the server uses the profile in `settings.json`, your own Chrome profile. That is the point:
+the agent works inside your logged-in sessions. To run agents in a separate profile instead (for example
+on a shared machine), start the server with its own profile and port. These variables are memory-only;
+the shared `settings.json` is not written:
 
 ```bash
 BH_CHROME_PROFILE_DIR=$HOME/.browser-helper/agent-profile BH_CHROME_DEBUG_PORT=9560 DISPLAY=:1 \
   bh mcp --stdio
 ```
-
-Without these variables the server uses the profile in `settings.json`, which is usually your own
-logged-in Chrome profile.
 
 ## Tips for reliable browsing
 
@@ -451,3 +450,42 @@ logged-in Chrome profile.
 - `click` and `type` wait up to 5 seconds for an element that is not rendered yet, then retry once.
 - If the session's own tab is closed, the next call opens a fresh tab; `session_status` reports the
   current tab (`mcp_tab_id`) and how often it was replaced (`mcp_tab_replaced`).
+
+## Safety defaults
+
+- Cookie values are `[redacted]` unless a caller asks with `include_values: true`.
+- Token-like URL parameters (`token`, `session`, `key`, `code`, ...) are shown as `[redacted]` in tab lists,
+  observations and navigation results.
+- Set `BH_ALLOWED_ORIGINS=https://a.example,https://b.example` to restrict where `navigate` may go. Redirects are not checked.
+- `session_status` shows which Chrome profile the server drives (`browser_profile`) and warns if the Chrome on the
+  configured port uses another profile.
+
+## Errors and how an agent should react
+
+A failed tool call is returned with `isError: true`. The text is the error envelope,
+`{"status":"error","operation":...,"error":{"code":...,"message":...}}`, after the
+FastMCP prefix `Error executing tool <name>: `. Read the JSON after the first `{`.
+
+| code | meaning | what to do |
+|---|---|---|
+| `timeout` | a wait or an evaluate ran out of time | check the condition, or wait longer |
+| `wait_for_timeout` | `navigate` with `wait_for` did not see the content | check the selector or text |
+| `element_not_found` | no element matches the selector or element_id | observe again, then retry |
+| `not_actionable` | the element is hidden or disabled | wait for it, or choose another |
+| `stale_snapshot` | the snapshot_id expired or is unknown | observe again |
+| `origin_not_allowed` | `BH_ALLOWED_ORIGINS` does not include the URL's origin | ask the user to allow it |
+| `tab_not_found` | the tab id is not open | call get_tabs |
+| `invalid_params` / `invalid_request` | the arguments are wrong | fix them and retry |
+| `still_loading` / `error_page` | `await_user` resumed onto a page that is not ready or is an error page | wait, or ask the user |
+| `no_such_option` / `not_select` | `select_option` cannot choose | check the option list |
+| `chrome_unavailable` / `session_capacity` | no browser, or every session is busy | retry later |
+| `operation_failed` | any other engine failure | read the message |
+
+## Behaviour changes in this version
+
+- Waits (`wait_for`, `wait_js`, `wait_network_idle`) report a timeout as an error, not as ok.
+- Failed calls set `isError: true`. Before, they looked like success to a client that checks the flag.
+- `browser_reset_session` clears the current site by default. `scope: "profile"` clears every
+  cookie of the whole Chrome profile (this can log you out of every site).
+- `export_cookies` redacts values unless `include_values: true`.
+- The parameter schemas the agent sees are the registry schemas (enums and defaults included).
