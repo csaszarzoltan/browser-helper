@@ -493,10 +493,9 @@ def validate_expectations(
             "failures": [],
         }
     clauses = expect.get("any_of", [expect])
-    matched, failures = [], []
-    after_text = " ".join(
-        filter(None, [n.name for n in after.nodes] + [str(n.value or "") for n in after.nodes])
-    ).lower()
+    matched, failures, already_visible = [], [], []
+    after_text = _visible_text(after)
+    before_text = _visible_text(before)
     for clause in clauses:
         ok = False
         label = json.dumps(clause, sort_keys=True)
@@ -508,7 +507,13 @@ def validate_expectations(
             before_keys = {_dialog_key(n) for n in before.nodes if n.role == "dialog"}
             ok = any(_dialog_key(n) not in before_keys for n in after.nodes if n.role == "dialog")
         elif "text_visible" in clause:
-            ok = str(clause["text_visible"]).lower() in after_text
+            # Text that was already on the page does not show that the action worked
+            # (an "Add" button is there before and after a click that opened nothing),
+            # so only text that is new after the action counts.
+            phrase = str(clause["text_visible"]).lower()
+            if _has_phrase(before_text, phrase):
+                already_visible.append(clause["text_visible"])
+            ok = _has_phrase(after_text, phrase) and not _has_phrase(before_text, phrase)
         elif "element_visible" in clause:
             spec = clause["element_visible"]
             ok = any(
@@ -520,7 +525,20 @@ def validate_expectations(
             matched.append(label)
         else:
             failures.append(label)
-    return {"satisfied": bool(matched), "matched": matched, "failures": failures}
+    return {"satisfied": bool(matched), "matched": matched, "failures": failures,
+            "already_visible": already_visible}
+
+
+def _visible_text(snapshot: AccessibilitySnapshot) -> str:
+    """All node names and values of a snapshot, lower-cased, for phrase checks."""
+    return " ".join(
+        filter(None, [n.name for n in snapshot.nodes] + [str(n.value or "") for n in snapshot.nodes])
+    ).lower()
+
+
+def _has_phrase(text: str, phrase: str) -> bool:
+    """True when *phrase* occurs as whole words, so "add" does not match "address"."""
+    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
 
 
 def extract_by_schema(

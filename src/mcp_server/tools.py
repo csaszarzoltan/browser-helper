@@ -24,6 +24,9 @@ import json as _json_mod
 import logging
 import os
 import re
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import Context  # typing only — never called here
@@ -35,6 +38,32 @@ _MCP_SESSION = {"session": None}
 
 
 logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _git(*args: str) -> str | None:
+    """Output of ``git <args>`` in this checkout, or None when git cannot answer."""
+    try:
+        done = subprocess.run(["git", "-C", str(_REPO_ROOT), *args],
+                              capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = done.stdout.strip()
+    return out if done.returncode == 0 and out else None
+
+
+# The commit this process loaded. Read once at import: later, git reports the checkout's
+# HEAD, which is not the code this process runs.
+_CODE_COMMIT = _git("rev-parse", "--short", "HEAD")
+_PROCESS_STARTED_AT = datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _repo_head() -> tuple[str | None, int | None]:
+    """The checkout's HEAD now, and how many commits it is ahead of the code this process loaded."""
+    head = _git("rev-parse", "--short", "HEAD")
+    behind = _git("rev-list", "--count", f"{_CODE_COMMIT}..HEAD") if _CODE_COMMIT and head else None
+    return head, int(behind) if behind and behind.isdigit() else None
 
 
 def _not_found(inner: dict) -> bool:
@@ -376,6 +405,8 @@ async def click(selector: str, expect: dict | None = None, ctx: Context | None =
     inner = result.get("data") if isinstance(result, dict) else None
     if isinstance(inner, dict) and inner.get("status") == "error":
         err = str(inner.get("error", ""))
+        if inner.get("code") == "not_actionable":
+            return tool_error("click", "not_actionable", f"{err}; nothing was clicked")
         if "not found" in err.lower() or "no element" in err.lower():
             return tool_error("click", "element_not_found",
                               f"Element not found for selector {selector!r} on the current tab")
@@ -402,7 +433,29 @@ async def type(selector: str, text: str, ctx: Context | None = None) -> str:
         if "not found" in err.lower() or "no element" in err.lower():
             return tool_error("type", "element_not_found",
                               f"Element not found for selector {selector!r} on the current tab")
+    if isinstance(result, dict) and result.get("status") == "ok" and not (
+        isinstance(inner, dict) and inner.get("status") == "error"
+    ):
+        # Read the field back: keystrokes can be lost or reordered, and the caller must not
+        # have to take "ok" on trust. Only the match is reported, never the value (it may be a password).
+        matches = await _typed_value_matches(target, selector, text)
+        if matches is not None:
+            result.setdefault("meta", {})["readback"] = {"matches": matches}
     return json_dumps(result)
+
+
+async def _typed_value_matches(target, selector: str, text: str) -> bool | None:
+    """Whether the field now holds exactly *text*; None when it has no readable value."""
+    from cdp_client import _DEEP_QUERY_JS
+
+    js = (f"(function() {{ {_DEEP_QUERY_JS} const el = bhDeepQuery({_json_mod.dumps(selector)});"
+          f" return el && 'value' in el ? String(el.value) : null; }})()")
+    try:
+        raw = await asyncio.wait_for(target.evaluate(js), timeout=5)
+    except Exception:  # noqa: BLE001 — a read-back is a check; it never fails the type itself
+        return None
+    value = raw.get("result") if isinstance(raw, dict) else raw
+    return value == text if isinstance(value, str) else None
 
 
 def _screenshot_to_file(shot: dict, inline: bool = False) -> dict:
@@ -787,6 +840,10 @@ async def session_status(tidy: str = "", apply: bool = False, ctx: Context | Non
         every = _session_mgr.list_sessions()
         sessions = [s for s in every if not s.get("expired")]
         own = _MCP_SESSION.get("session")
+        try:
+            head, behind = await asyncio.wait_for(asyncio.to_thread(_repo_head), timeout=5)
+        except Exception:  # noqa: BLE001 — the build check is informational; git may be absent
+            head, behind = None, None
         return tool_result(
             "session_status",
             {
@@ -795,6 +852,15 @@ async def session_status(tidy: str = "", apply: bool = False, ctx: Context | Non
                 # Saved sessions past their timeout; hidden from the list. Remove them with tidy.
                 "expired_sessions": len(every) - len(sessions),
                 **({"tidy": tidied} if tidied is not None else {}),
+                # The code this MCP process loaded, against the checkout. stale=true means a
+                # newer commit exists: restart this MCP client (and the service) to run it.
+                "build": {
+                    "code_commit": _CODE_COMMIT,
+                    "started_at": _PROCESS_STARTED_AT,
+                    "checkout_head": head,
+                    "commits_behind_checkout": behind,
+                    "stale": None if behind is None else behind > 0,
+                },
                 # This MCP client's own tab; None until the first browser call.
                 "mcp_tab_id": own.tab_id if own is not None else None,
                 # How many times the own tab was lost and replaced by a fresh one.

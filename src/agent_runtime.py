@@ -30,6 +30,14 @@ class ElementNotFoundError(ValueError):
     pass
 
 
+class AmbiguousTargetError(ValueError):
+    """The target's name matches more than one visible element; nothing was clicked."""
+
+
+class NotActionableError(ValueError):
+    """The target is disabled, so the action was not sent."""
+
+
 # ARIA role for an <input> type, as the browser's accessibility tree reports it.
 # Without this the semantic list says role "text" for a plain text box.
 _INPUT_ARIA_ROLE = {

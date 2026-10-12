@@ -499,6 +499,14 @@ BH_CHROME_PROFILE_DIR=$HOME/.browser-helper/agent-profile BH_CHROME_DEBUG_PORT=9
 - Set `BH_ALLOWED_ORIGINS=https://a.example,https://b.example` to restrict where `navigate` may go. Redirects are not checked.
 - `session_status` shows which Chrome profile the server drives (`browser_profile`) and warns if the Chrome on the
   configured port uses another profile.
+- `session_status` also reports `build`: the commit this MCP process loaded (`code_commit`), the checkout's HEAD, and
+  `stale: true` when the checkout has newer commits. A stale MCP client keeps its old code until it is restarted.
+- `type` reads the field back and sets `meta.readback.matches`. A `false` means the field does not hold the text
+  (keys lost or reordered, or a field that reformats its input); the value itself is never returned.
+- `act` with `expect: {text_visible: …}` counts only text that is new after the action. Text already on the page
+  before it is listed in `data.verification.already_visible`.
+- `act` with an `element_id` from observe clicks the element by its listed name, matched exactly (its aria-label, then
+  its text). A name that matches two visible elements returns `ambiguous_target` instead of clicking the first.
 
 ## Errors and how an agent should react
 
@@ -511,7 +519,8 @@ FastMCP prefix `Error executing tool <name>: `. Read the JSON after the first `{
 | `timeout` | a wait or an evaluate ran out of time | check the condition, or wait longer |
 | `wait_for_timeout` | `navigate` with `wait_for` did not see the content | check the selector or text |
 | `element_not_found` | no element matches the selector or element_id | observe again, then retry |
-| `not_actionable` | the element is hidden or disabled | wait for it, or choose another |
+| `not_actionable` | the element is hidden or disabled; nothing was clicked | wait for it, or choose another (`enabled` in observe shows which are disabled) |
+| `ambiguous_target` | the element's name matches more than one visible element; nothing was clicked | observe again and click with a selector or `nth` |
 | `stale_snapshot` | the snapshot_id expired or is unknown | observe again |
 | `origin_not_allowed` | `BH_ALLOWED_ORIGINS` does not include the URL's origin | ask the user to allow it |
 | `tab_not_found` | the tab id is not open | call get_tabs |

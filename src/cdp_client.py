@@ -1483,7 +1483,7 @@ class CDPClient:
 
     async def click_by_text(self, text: str, timeout: int = 5,
                             container_selector: str | None = None,
-                            nth: int = 0) -> dict:
+                            nth: int = 0, exact: bool = False) -> dict:
         """Click an element by its visible text content.
 
         Searches all visible ``a``, ``button``, ``input[type=submit]``,
@@ -1497,6 +1497,13 @@ class CDPClient:
         If *nth* is given (0-indexed), clicks the Nth matching element
         instead of the first. Useful for lists of identical buttons
         (e.g. "Edit", "Delete" in a table).
+
+        With *exact* the text must equal the element's name (``aria-label``,
+        then its text, then ``value`` or ``title``), not be a substring of it,
+        and it must match one visible element: a second match returns
+        ``code: "ambiguous"`` and a disabled one ``code: "not_actionable"``,
+        and neither is clicked. ``act`` uses this for a target it resolved from
+        an observe snapshot, so the click lands on the element that was listed.
         """
         await self._activate_current()
         container_js = ""
@@ -1509,6 +1516,7 @@ class CDPClient:
   const low = target.toLowerCase().trim();
   const deadline = Date.now() + {timeout * 1000};
   const nth = {nth};
+  const exact = {json.dumps(bool(exact))};
 
   // P1 determinism (v1.36): `el.offsetParent === null` is TRUE for an element
   // that is itself `position: fixed` (sticky footer CTA, fixed modal button),
@@ -1537,7 +1545,8 @@ class CDPClient:
     for (let el of interactive) {{
       if (!__bhVisible(el)) continue;
       const txt = (el.textContent || "").toLowerCase().trim();
-      if (txt === low || txt.includes(low)) {{
+      const named = (el.getAttribute("aria-label") || txt || el.value || el.title || "").toLowerCase().trim();
+      if (exact ? named === low : (txt === low || txt.includes(low))) {{
         const key = txt + ":" + Math.round(el.getBoundingClientRect().x) + ":" + Math.round(el.getBoundingClientRect().y);
         if (!seen.has(key)) {{
           seen.add(key);
@@ -1568,7 +1577,15 @@ class CDPClient:
   while (Date.now() < deadline) {{
     const matches = findAll();
     if (matches.length > nth) {{
+      if (exact && nth === 0 && matches.length > 1) {{
+        return JSON.stringify({{status: "error", code: "ambiguous",
+          error: matches.length + " visible elements are named " + JSON.stringify(target) + "; pass nth or a selector"}});
+      }}
       const el = matches[nth];
+      if (exact && (el.disabled || el.getAttribute("aria-disabled") === "true")) {{
+        return JSON.stringify({{status: "error", code: "not_actionable",
+          error: "element is disabled: " + JSON.stringify(target)}});
+      }}
       el.scrollIntoView({{behavior: "instant", block: "center"}});
       const r = el.getBoundingClientRect();
       return JSON.stringify({{
@@ -1611,6 +1628,8 @@ class CDPClient:
             data = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
             return {"status": "error", "error": "parse failed"}
+        if data.get("status") == "error" and data.get("code") in ("ambiguous", "not_actionable"):
+            return data  # the text was found; the hint about missing text would mislead
         if data.get("status") == "error":
             # P1 determinism (v1.36): attach an actionable hint listing the
             # clickable texts the page DOES expose, so a retry is informed
@@ -2096,7 +2115,8 @@ class CDPClient:
             f"  if (!el) return {{'status': 'error', 'error': 'Element not found: {json.dumps(selector)}'}};"
             f"  el.scrollIntoView({{behavior: 'instant', block: 'center'}});"
             f"  const rect = bhTopRect(el);"
-            f"  return {{'status': 'ok', 'x': rect.x + rect.width/2, 'y': rect.y + rect.height/2, 'tag': el.tagName}};"
+            f"  return {{'status': 'ok', 'x': rect.x + rect.width/2, 'y': rect.y + rect.height/2, 'tag': el.tagName,"
+            f" 'disabled': !!(el.disabled || el.getAttribute('aria-disabled') === 'true')}};"
             f"}})()"
         )
         eval_result = await self.evaluate(js)
@@ -2111,6 +2131,10 @@ class CDPClient:
                 "status": "error",
                 "error": f"Element not found: {selector}",
             }
+        if pos.get("disabled"):
+            # A mouse click on a disabled control does nothing; say so instead of "ok".
+            return {"status": "error", "code": "not_actionable",
+                    "error": f"element is disabled: {selector}"}
         x, y = pos.get("x", 0), pos.get("y", 0)
         # Use behavioral engine if enabled
         if self._behavioral and self._behavioral.profile.enabled:
@@ -3850,12 +3874,19 @@ class CDPClient:
             raise CDPError("Could not resolve accessibility node")
         result = await self._send_command("Runtime.callFunctionOn", {
             "objectId": object_id,
-            "functionDeclaration": "function(){this.scrollIntoView({block:'center'});this.click();return true;}",
+            "functionDeclaration": (
+                "function(){if(this.disabled||this.getAttribute('aria-disabled')==='true'){return 'disabled';}"
+                "this.scrollIntoView({block:'center'});this.click();return true;}"
+            ),
             "returnByValue": True,
             "awaitPromise": True,
         })
-        return {"status": "ok", "backend_node_id": backend_node_id,
-                "clicked": result.get("result", {}).get("value", False)}
+        value = result.get("result", {}).get("value", False)
+        if value == "disabled":
+            # .click() on a disabled control fires nothing; do not report it as clicked.
+            return {"status": "error", "code": "not_actionable", "backend_node_id": backend_node_id,
+                    "error": "element is disabled"}
+        return {"status": "ok", "backend_node_id": backend_node_id, "clicked": value}
 
     async def fill_backend_node(self, backend_node_id: int, value: str) -> dict:
         """Fill a textbox/contenteditable referenced by an AX backend node ID."""

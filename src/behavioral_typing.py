@@ -262,6 +262,9 @@ class BehavioralTyping:
             {"key": str, "code": str, "text": str | None,
              "windowsVirtualKeyCode": int | None,
              "nativeVirtualKeyCode": int | None}
+
+        The two virtual key code keys are absent for punctuation and non-ASCII
+        characters (see the note in that branch).
         """
         named = _NAMED_KEYS.get(char)
         if named is not None:
@@ -304,15 +307,12 @@ class BehavioralTyping:
             }
 
         # Punctuation and non-ASCII: no dedicated key code exists, so the char
-        # doubles as its own face value.  Shift is implied by the char itself.
-        vk = ord(char) if len(char) == 1 and ord(char) < 256 else None
-        return {
-            "key": char,
-            "code": "",
-            "text": char,
-            "windowsVirtualKeyCode": vk,
-            "nativeVirtualKeyCode": vk,
-        }
+        # doubles as its own face value.  No virtual key code is sent: Chrome reads
+        # it as a key press, and ord(".") is 46 (Delete), ord("%") is 37 (Left arrow),
+        # so the caret moves or text is deleted instead of the character being
+        # inserted. Measured against the test browser, typing "a.b-c%d&e'f(g)/:":
+        # with the code the field held "eafb-dcg)/:", without it the exact string.
+        return {"key": char, "code": "", "text": char}
 
     @staticmethod
     async def _dispatch_key_event(

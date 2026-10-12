@@ -4,6 +4,15 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **Agent-reported defects on the MCP tool surface (2026-10-12).** Typing dropped or reordered characters: the
+  default human-typing path sent punctuation with a virtual key code that Chrome reads as Delete or an arrow key
+  (`https://github.com/a.b` came back as `ehfttps://githubcom/ab`); it no longer does, and `type` reads the field back
+  (`meta.readback.matches`). `expect: {text_visible}` passed on text that was already on the page (an "Add" button
+  before and after a click that opened nothing); only new text counts now. A click on a disabled element reported
+  `ok` and did nothing; it returns `not_actionable`. `act` with an `element_id` clicked the first element whose text
+  contained the listed name (`Add` hit `Address`) and failed on icon buttons named by aria-label; it now matches the
+  listed name exactly and refuses a duplicate with `ambiguous_target`. `session_status` reports the commit the MCP
+  process runs and whether the checkout is newer.
 - **Tabs no longer close while an agent works on them.** Two reapers closed live tabs. The MCP liveness probe read a
   busy page or an open JavaScript dialog as a dead tab, replaced the session and closed its tab; a listed tab that
   does not answer within 3 s now counts as alive, and only a tab missing from the list is replaced. The orphan sweep

@@ -53,7 +53,9 @@ from agent_navigation import (
     verification_evidence,
 )
 from agent_runtime import (
+    AmbiguousTargetError,
     ElementNotFoundError,
+    NotActionableError,
     SnapshotStore,
     StaleSnapshotError,
     diff_snapshots,
@@ -5667,6 +5669,8 @@ async def agent_act(request: Request, body: AgentActionRequest):
         elif action == "click":
             if target.get("backend_node_id"):
                 result = await tc.click_backend_node(target["backend_node_id"])
+                if isinstance(result, dict) and result.get("code") == "not_actionable":
+                    raise NotActionableError(f"{target.get('name') or 'element'} is disabled; it was not clicked")
                 if isinstance(result, dict) and result.get("status") == "error":
                     # S5: surface as proper 404 with candidates instead of Uncaught
                     try:
@@ -5699,6 +5703,8 @@ async def agent_act(request: Request, body: AgentActionRequest):
                                 result["auto_recovered"] = {"selector": sel, "attempt": 2}
                     except Exception:  # noqa: BLE001 — recovery best-effort, never blocks the 404 path
                         logger.debug("auto_recover selector retry failed for %r", sel)
+                if isinstance(result, dict) and result.get("code") == "not_actionable":
+                    raise NotActionableError(f"selector {sel!r} is disabled; it was not clicked")
                 if isinstance(result, dict) and result.get("status") == "error":
                     # S4: enrich with candidates for SPA selector debugging
                     try:
@@ -5739,7 +5745,13 @@ async def agent_act(request: Request, body: AgentActionRequest):
                     else:
                         raise ValueError("click requires an element reference, selector or text")
                 else:
-                    result = await tc.click_by_text(text, body.timeout)
+                    # A target resolved from an observe snapshot is clicked by its listed name,
+                    # matched exactly, so "Add" never lands on "Address" and a duplicate is refused.
+                    result = await tc.click_by_text(text, body.timeout, exact=bool(target.get("element_id")))
+                if isinstance(result, dict) and result.get("code") == "ambiguous":
+                    raise AmbiguousTargetError(str(result.get("error")))
+                if isinstance(result, dict) and result.get("code") == "not_actionable":
+                    raise NotActionableError(f"{text!r} is disabled; it was not clicked")
                 if isinstance(result, dict) and result.get("status") == "error":
                     try:
                         snap_e2 = await _capture_accessibility_snapshot(target=tc)
@@ -5924,6 +5936,10 @@ async def agent_act(request: Request, body: AgentActionRequest):
         return api_error("agent_act", "stale_snapshot", str(exc), 409)
     except ElementNotFoundError as exc:
         return api_error("agent_act", "element_not_found", str(exc), 404)
+    except AmbiguousTargetError as exc:
+        return api_error("agent_act", "ambiguous_target", str(exc), 409)
+    except NotActionableError as exc:
+        return api_error("agent_act", "not_actionable", str(exc), 409)
     except ValueError as exc:
         return api_error("agent_act", "invalid_request", str(exc), 422)
     except Exception as exc:
