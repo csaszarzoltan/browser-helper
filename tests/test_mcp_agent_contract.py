@@ -200,13 +200,13 @@ def test_challenge_is_reported_as_blocked_then_cleared(monkeypatch):
     from mcp_server import tools
 
     tools._MCP_SESSION["challenge"] = None
-    blocked, cleared = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Just a moment...", "")))
+    blocked, cleared, _check = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Just a moment...", "")))
     env = json.loads(blocked)
     assert env["error"]["code"] == "blocked_challenge" and "SECRET" not in blocked
     assert env["data"]["url"].startswith("https://a.test/") and cleared is False
-    again, cleared = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Dashboard", "hello")))
+    again, cleared, _check = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Dashboard", "hello")))
     assert again is None and cleared is True
-    _, cleared = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Dashboard", "hello")))
+    _, cleared, _check = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Dashboard", "hello")))
     assert cleared is False
 
 

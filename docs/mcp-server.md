@@ -476,6 +476,10 @@ BH_CHROME_PROFILE_DIR=$HOME/.browser-helper/agent-profile BH_CHROME_DEBUG_PORT=9
 - **A bot check is not content.** `blocked_challenge` means the page is an interstitial such as Cloudflare's
   "Just a moment". Do not retry or reload in a loop. Call `await_user` so a person completes it, then repeat the
   call; `meta.challenge_cleared: true` confirms it passed.
+- **`meta.challenge_check` means the page was not checked.** A result with `unavailable: …` in that field was
+  returned without the bot-check test (the read timed out, failed, or the page had no content yet). Treat the
+  page as unverified; do not take it as proof that no challenge is showing. A `get_page_text` read by `tab_id`
+  is checked the same way as the session tab.
 - **Read `meta.notices`.** If the session tab was closed and replaced, the next result says so once (`tab_replaced`,
   old and new id) and the page you were on is gone. `tab_closed` means a tab you saw in `get_tabs` no longer exists.
 - **A failed `expect` explains itself.** `data.verification.evidence` lists the dialogs visible now with their text,

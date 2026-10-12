@@ -131,27 +131,41 @@ def take_notices() -> list[dict]:
     return out
 
 
+#: How long the page read may take. It first activates the tab, which can be slow.
+_CHALLENGE_CHECK_TIMEOUT_S = 8.0
+
+
 async def _challenge_gate(op: str, target=None):
     """Check the current page for a bot challenge.
 
-    Returns ``(error_json_or_None, cleared)``. ``error`` is a ``blocked_challenge``
-    envelope while a challenge is showing; ``cleared`` is True on the first call
-    after a person completed a challenge that was reported earlier. Never retries.
-    Best effort: an unreadable page is treated as not blocked.
+    Returns ``(error_json_or_None, cleared, check)``. ``error`` is a ``blocked_challenge``
+    envelope while a challenge is showing; ``cleared`` is True on the first call after a
+    person completed a challenge that was reported earlier. ``check`` is None when the page
+    was read. Otherwise it says why the page was not read (a timeout, an error, or a page
+    with no content yet): the caller reports the page as unchecked, never as clear, and an
+    earlier block stays in place. Never retries.
     """
     info = None
+    check = None
     try:
         if target is None:
             # The first browser call mints the session inside run_op, so a client resolved
             # before it still points at the disconnected default: resolve again.
             target, _ = await _target()
-        raw = await asyncio.wait_for(target.evaluate(_CHALLENGE_JS), timeout=3.0)
+        raw = await asyncio.wait_for(target.evaluate(_CHALLENGE_JS), timeout=_CHALLENGE_CHECK_TIMEOUT_S)
         value = raw.get("result") if isinstance(raw, dict) else raw
         info = _json_mod.loads(value) if isinstance(value, str) else None
-    except Exception as exc:  # noqa: BLE001 — a page we cannot read is not reported as blocked
-        logger.debug("challenge check failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — unread is reported as unchecked, not blocked and not clear
+        check = f"unavailable: {exc.__class__.__name__}" + (f": {exc}" if str(exc) else "")
+        logger.warning("challenge check could not read the page for %s: %s", op, check)
+    if check is None and info is None:
+        check = "unavailable: the page did not answer"
+    if check is None and not (info.get("title") or info.get("text")):
+        check = "unavailable: the page has no content yet"
+    if check is not None:
+        return None, False, check
     was_blocked = _MCP_SESSION.get("challenge")
-    if info and is_challenge_page(info.get("title", ""), info.get("text", "")):
+    if is_challenge_page(info.get("title", ""), info.get("text", "")):
         url = redact_url(str(info.get("url", "")))
         _MCP_SESSION["challenge"] = url
         return tool_error(
@@ -160,9 +174,9 @@ async def _challenge_gate(op: str, target=None):
             "Do not retry. A person has to complete it in the browser; call await_user, "
             "then call this tool again.",
             data={"url": url, "title": info.get("title", "")},
-        ), False
+        ), False, None
     _MCP_SESSION["challenge"] = None
-    return None, bool(was_blocked)
+    return None, bool(was_blocked), None
 
 
 async def _mcp_session():
@@ -316,11 +330,13 @@ async def navigate(url: str, wait_until: str = "domcontentloaded", timeout: floa
     target, run_op = await _target()
     res = await run_op("navigate", target.navigate, url, wait_until=wait_until, timeout=timeout)
     if isinstance(res, dict) and res.get("status") == "ok":
-        blocked, cleared = await _challenge_gate("navigate")
+        blocked, cleared, check = await _challenge_gate("navigate")
         if blocked:
             return blocked
         if cleared:
             res.setdefault("meta", {})["challenge_cleared"] = True
+        if check:
+            res.setdefault("meta", {})["challenge_check"] = check
     if not wait_for or not isinstance(res, dict) or res.get("status") != "ok":
         return json_dumps(_redact_urls(res))
     if wait_for.startswith("text:"):
@@ -1420,8 +1436,15 @@ async def get_page_text(
                     await pinned.wait_for_ready(timeout)
                 except Exception:  # noqa: BLE001,S110 — wait is best-effort
                     pass
+            # A tab read by id is gated like the session tab: a bot check must not pass as text.
+            blocked, cleared, check = await _challenge_gate("get_page_text", pinned)
+            if blocked:
+                return blocked
             inner = await pinned.get_page_text()
-            return tool_result("get_page_text", inner)
+            meta = {"challenge_cleared": True} if cleared else {}
+            if check:
+                meta["challenge_check"] = check
+            return tool_result("get_page_text", inner, meta=meta)
         if wait_ready:
             try:
                 await run_op_fn("get_page_text_wait", target.wait_for_ready, timeout)
@@ -1430,19 +1453,21 @@ async def get_page_text(
         # 2026-09-02 heal fix: run via run_op so _ensure_browser reconnects the
         # session tab after a Chrome restart (direct target.get_page_text hit
         # "Not connected to Chrome CDP" when the MCP session held a dead WS).
-        blocked, cleared = await _challenge_gate("get_page_text")
+        blocked, cleared, check = await _challenge_gate("get_page_text")
         if blocked:
             return blocked
         result = await run_op_fn("get_page_text", target.get_page_text)
+        meta = {"challenge_check": check} if check else {}
         if cleared:
-            return tool_result("get_page_text", _unwrap_text(result), meta={"challenge_cleared": True})
+            meta["challenge_cleared"] = True
+            return tool_result("get_page_text", _unwrap_text(result), meta=meta)
         # run_op wraps as {status, data, ...}; unwrap on success
         if isinstance(result, dict) and result.get("data") is not None:
             inner = result["data"]
             # inner may be {status:"ok", text, length} — keep envelope compat
             if isinstance(inner, dict) and "text" in inner:
                 result = inner
-        return tool_result("get_page_text", result)
+        return tool_result("get_page_text", result, meta=meta)
     except Exception as exc:  # noqa: BLE001
         return tool_error("get_page_text", "failed", str(exc))
 
@@ -1880,11 +1905,13 @@ async def browser_navigate(
             if failure:
                 return _wait_failure("browser_navigate", failure)
         if isinstance(res, dict) and res.get("status") == "ok":
-            blocked, cleared = await _challenge_gate("browser_navigate")
+            blocked, cleared, check = await _challenge_gate("browser_navigate")
             if blocked:
                 return blocked
             if cleared:
                 res.setdefault("meta", {})["challenge_cleared"] = True
+            if check:
+                res.setdefault("meta", {})["challenge_check"] = check
         # P0 navigate-active: surface the resolved tab and honor make_active=false
         if isinstance(res, dict):
             _d = res.get("data")

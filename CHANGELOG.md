@@ -10,6 +10,9 @@ All notable changes to browser-helper will be documented in this file.
   closed every unowned page tab, including popups, sign-in windows and the person's own tabs; it now closes only
   `about:blank` orphans. MCP tool calls also never refreshed the session's idle timer, so the reaper closed its tab
   one TTL (30 min) after it was minted; a tool call now refreshes it.
+- **The bot-check gate no longer reports an unread page as ok.** A read that timed out (now 8 s, was 3 s), failed, or
+  found no content yet returns `meta.challenge_check: "unavailable: …"` and a warning in the log, instead of a silent
+  "not blocked" that also cleared an earlier block. `get_page_text` read by `tab_id` is now gated too.
 - **The test suite no longer reaches the live browser or service.** Tests that created sessions on 127.0.0.1:9557
   ran the orphan sweep and the anchor tab against the user's logged-in Chrome. An autouse guard in `tests/conftest.py`
   refuses in-process requests to 9557 and 8020 unless `BH_LIVE=1`; the live e2e test now needs `BH_LIVE=1` too.
