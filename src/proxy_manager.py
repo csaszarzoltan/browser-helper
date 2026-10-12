@@ -245,7 +245,7 @@ class ProxyPool:
 
     def get_pool(self, type: str | None = None) -> list[dict[str, Any]]:
         """Return all proxy entries as a list of dicts (optionally type-filtered)."""
-        entries = self._proxies.values()
+        entries = list(self._proxies.values())
         if type:
             entries = [e for e in entries if e.type == type]
         return [self._entry_to_dict(e) for e in entries]
@@ -579,7 +579,7 @@ class ProxyPool:
         """
         now = time.time()
         candidates = [
-            e for e in self._proxies.values()
+            e for e in list(self._proxies.values())
             if e.healthy and e.enabled and e.cooling_until <= now
         ]
         if group:
@@ -591,7 +591,8 @@ class ProxyPool:
     def _save_atomically(self) -> None:
         """Write pool data to a temp file, then atomically rename."""
         data = []
-        for entry in self._proxies.values():
+        # A snapshot: another thread may add a proxy while this loop runs Python code per entry.
+        for entry in list(self._proxies.values()):
             data.append(self._entry_to_dict(entry))
 
         dir_path = os.path.dirname(self.storage_path)
