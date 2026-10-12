@@ -128,6 +128,28 @@ API_TOKEN = os.environ.get("API_TOKEN", "")
 # FastAPI application
 # ---------------------------------------------------------------------------
 
+#: Background tasks started at startup, kept referenced so they are not collected mid-run.
+_startup_tasks: set[asyncio.Task] = set()
+
+
+async def _startup_orphan_reap() -> None:
+    """Reap orphan headless Chrome at startup. Bounded, and never fatal."""
+    try:
+        reaped = await asyncio.wait_for(asyncio.to_thread(_reap_orphan_headless), timeout=60)
+        if reaped:
+            logger.warning("Reaped %d orphaned headless Chrome process(es) at startup", reaped)
+    except Exception as exc:  # noqa: BLE001 — startup must never abort
+        logger.warning("Orphan headless reap failed: %r", exc)
+
+
+def _schedule_startup_orphan_reap() -> asyncio.Task:
+    """Start the startup reap in the background, so startup does not wait for it."""
+    task = asyncio.create_task(_startup_orphan_reap())
+    _startup_tasks.add(task)
+    task.add_done_callback(_startup_tasks.discard)
+    return task
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup and shutdown lifecycle handler."""
@@ -138,13 +160,9 @@ async def lifespan(application: FastAPI):
     # Headless sessions whose registry was lost (server restart/crash) leave
     # zombie Chrome processes (--headless --remote-debugging-port=N or 0)
     # that no reaper can reach — they eat RAM until killed manually.
-    # Kill any headless Chrome NOT owned by this process's live sessions.
-    try:
-        reaped = await asyncio.wait_for(asyncio.to_thread(_reap_orphan_headless), timeout=60)
-        if reaped:
-            logger.warning("Reaped %d orphaned headless Chrome process(es) at startup", reaped)
-    except Exception as exc:  # noqa: BLE001 — startup must never abort
-        logger.warning("Orphan headless reap failed: %s", exc)
+    # Kill any headless Chrome NOT owned by this process's live sessions. In the background:
+    # the scan can wait on a process stuck in I/O, and startup must not wait with it.
+    _schedule_startup_orphan_reap()
     # Connect to the LOCAL Chrome on the saved launched/debug port — NOT the
     # CDPClient default (9555), which may be another machine's SSH tunnel.
     # Priority: CHROME_AUTO_PORT (run.py --debug-port) > settings > 9557.

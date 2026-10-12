@@ -73,6 +73,22 @@ def test_a_synchronous_scan_on_the_loop_stalls_it_control(monkeypatch):
     assert asyncio.run(run()) <= 1
 
 
+def test_the_startup_orphan_reap_does_not_hold_up_startup(monkeypatch):
+    # A stuck scan must not delay the server's startup (it took 60 s on 2026-10-12).
+    import main
+
+    monkeypatch.setattr(main, "_reap_orphan_headless", lambda: (time.sleep(1.0), 0)[1])
+
+    async def run():
+        start = time.monotonic()
+        task = main._schedule_startup_orphan_reap()
+        scheduled_in = time.monotonic() - start
+        await task
+        return scheduled_in
+
+    assert asyncio.run(run()) < 0.2
+
+
 def test_a_timed_out_scan_raises_instead_of_reporting_no_browser(monkeypatch):
     # "no browser holds the profile" lets launch() clear the singleton lock. A scan
     # that never answered says nothing about that, so it must not return None.

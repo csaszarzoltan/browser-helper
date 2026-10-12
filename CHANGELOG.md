@@ -10,6 +10,10 @@ All notable changes to browser-helper will be documented in this file.
   closed every unowned page tab, including popups, sign-in windows and the person's own tabs; it now closes only
   `about:blank` orphans. MCP tool calls also never refreshed the session's idle timer, so the reaper closed its tab
   one TTL (30 min) after it was minted; a tool call now refreshes it.
+- **The test suite no longer reaches the live browser or service.** Tests that created sessions on 127.0.0.1:9557
+  ran the orphan sweep and the anchor tab against the user's logged-in Chrome. An autouse guard in `tests/conftest.py`
+  refuses in-process requests to 9557 and 8020 unless `BH_LIVE=1`; the live e2e test now needs `BH_LIVE=1` too.
+  The startup orphan reap runs in the background, so a stuck scan no longer delays startup.
 - **The service no longer stalls on a process scan.** The Chrome process scans (`ps`) ran on the event loop, and one
   that waited on a process stuck in I/O froze every request: the service answered nothing for about 19 minutes
   (2026-10-12). The scans now run in a thread with a bound (`_PROCESS_SCAN_TIMEOUT_S`); a scan that times out raises

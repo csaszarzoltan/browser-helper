@@ -19,7 +19,8 @@ Design:
 - Only *read-only* tools are exercised (``get_tabs``, ``session_status``) plus
   one navigation to a deterministic local page — no destructive actions.
 
-Run: ``.venv/bin/python -m pytest tests/test_mcp_live_e2e.py -v``
+Run: ``BH_LIVE=1 .venv/bin/python -m pytest tests/test_mcp_live_e2e.py -v`` (skipped without BH_LIVE=1,
+so an ordinary suite run never drives the user's browser)
 """
 
 from __future__ import annotations
@@ -60,8 +61,9 @@ def _live_service_available() -> bool:
 
 
 live_service = pytest.mark.skipif(
-    not _live_service_available(),
-    reason="browser-helper Chrome CDP not reachable — start the service first",
+    # BH_LIVE is checked first: without it this module does not probe the real browser at all.
+    os.environ.get("BH_LIVE") != "1" or not _live_service_available(),
+    reason="live browser test: set BH_LIVE=1 with the browser-helper Chrome running",
 )
 
 

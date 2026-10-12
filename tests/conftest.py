@@ -29,6 +29,39 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+#: The user's logged-in Chrome (9557) and the real service (8020). A test must never reach
+#: them: the orphan sweep and the anchor tab would close or open tabs in the browser in use.
+_LIVE_HOSTS = {"127.0.0.1:9557", "localhost:9557", "127.0.0.1:8020", "localhost:8020"}
+
+
+@pytest.fixture(autouse=True)
+def _never_reach_the_live_browser(monkeypatch):
+    """Refuse in-process httpx requests to the live Chrome or service unless BH_LIVE=1."""
+    import os
+
+    import httpx
+
+    if os.environ.get("BH_LIVE") == "1":
+        return
+
+    def _refuse(request: httpx.Request) -> None:
+        if f"{request.url.host}:{request.url.port}" in _LIVE_HOSTS:
+            raise httpx.ConnectError(f"test isolation: refused {request.url}, the live browser or service")
+
+    real_async_send = httpx.AsyncClient.send
+    real_sync_send = httpx.Client.send
+
+    async def async_send(self, request, *args, **kwargs):
+        _refuse(request)
+        return await real_async_send(self, request, *args, **kwargs)
+
+    def sync_send(self, request, *args, **kwargs):
+        _refuse(request)
+        return real_sync_send(self, request, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", async_send)
+    monkeypatch.setattr(httpx.Client, "send", sync_send)
+
 
 @pytest.fixture(autouse=True)
 def _reset_module_fingerprint_db(tmp_path, monkeypatch):
