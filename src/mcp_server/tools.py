@@ -53,6 +53,10 @@ async def _await_element(target, selector: str, timeout: float = 5.0) -> None:
         logger.debug("auto-wait for %s failed: %s", selector, exc)
 
 
+#: How long a listed tab may take to answer the liveness probe before it counts as busy.
+_PROBE_TIMEOUT_S = 3.0
+
+
 async def _session_tab_alive(sess) -> bool:
     """True while the MCP session's own page tab is still open in the browser."""
     # Bypass the 5 s tab-list cache: a tab closed a moment ago must read as gone.
@@ -74,8 +78,15 @@ async def _session_tab_alive(sess) -> bool:
         return True
     try:
         await asyncio.wait_for(sess.client._send_command(
-            "Runtime.evaluate", {"expression": "1", "returnByValue": True}), timeout=3.0)
-    except Exception:  # noqa: BLE001 — no answer means the tab is gone for our purposes
+            "Runtime.evaluate", {"expression": "1", "returnByValue": True}), timeout=_PROBE_TIMEOUT_S)
+    except TimeoutError:
+        # Listed but silent: a busy page or an open JavaScript dialog. The tab is still
+        # open, and replacing the session would close it, so the call goes ahead and
+        # reports the real state (dialog_handle answers a dialog). A discarded tab that
+        # never answers now surfaces as that call's own timeout.
+        sess._alive_checked_at = now
+        return True
+    except Exception:  # noqa: BLE001 — the connection itself failed: treat the tab as gone
         return False
     sess._alive_checked_at = now
     return True

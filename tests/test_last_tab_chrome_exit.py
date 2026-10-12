@@ -163,8 +163,8 @@ async def test_orphan_sweep_never_closes_the_anchor(monkeypatch):
     anchor = "ANCHORTAB"
 
     tabs = [
-        {"id": owned_tab, "type": "page"},
-        {"id": anchor, "type": "page"},
+        {"id": owned_tab, "type": "page", "url": "about:blank"},
+        {"id": anchor, "type": "page", "url": "about:blank"},
     ]
     closed: list[str] = []
 

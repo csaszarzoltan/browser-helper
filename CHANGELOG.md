@@ -4,6 +4,11 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **Tabs no longer close while an agent works on them.** Two reapers closed live tabs. The MCP liveness probe read a
+  busy page or an open JavaScript dialog as a dead tab, replaced the session and closed its tab; a listed tab that
+  does not answer within 3 s now counts as alive, and only a tab missing from the list is replaced. The orphan sweep
+  closed every unowned page tab, including popups, sign-in windows and the person's own tabs; it now closes only
+  `about:blank` orphans.
 - **Bot-check, closed tabs, failed actions (feedback from a peer agent session).** `navigate`, `browser_navigate` and
   `get_page_text` return `blocked_challenge` (with the URL) on a Cloudflare-style interstitial and report
   `meta.challenge_cleared` once a person passed it. A replaced session tab is reported once in `meta.notices`;

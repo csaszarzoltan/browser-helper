@@ -186,7 +186,7 @@ class SessionRegistry:
         return victim
 
     async def _reap_orphan_tabs(self, cdp_http_url: str) -> int:
-        """Close browser tabs not owned by any live session.
+        """Close about:blank tabs not owned by any live session.
 
         Tabs accumulate when a client never echoes its session cookie (each
         call mints a fresh session+tab) or when an evicted tab's close failed
@@ -210,10 +210,13 @@ class SessionRegistry:
         # closing it would reopen the 30-minute relaunch loop the anchor
         # exists to prevent.
         anchor = self._anchor_tab_id
+        # Only about:blank tabs: that is the accumulation this sweep exists for. A tab with
+        # a URL may be a popup, a sign-in window or a person's own tab, so it is left alone.
         orphans = [
             t.get("id")
             for t in tabs
             if t.get("type") == "page"
+            and t.get("url") == "about:blank"
             and t.get("id") not in owned
             and t.get("id") != anchor
         ]
