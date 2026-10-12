@@ -83,17 +83,19 @@ def tool_error(
     operation: str,
     code: str = "mcp_tool_error",
     message: str = "",
+    data: Any = None,
 ) -> str:
     """Build an error envelope ``{"status": "error", ...}`` JSON string.
 
     Matches the REST ``api_error`` payload shape (spec §5.10) so agents can
-    branch on ``error.code`` / ``error.message`` uniformly.
+    branch on ``error.code`` / ``error.message`` uniformly. ``data`` carries
+    facts the caller needs to act on the error (for example the blocked URL).
     """
     return json_dumps(
         {
             "status": "error",
             "operation": operation,
-            "data": None,
+            "data": data,
             "error": {"code": code, "message": message, "details": None},
             "meta": {},
         }

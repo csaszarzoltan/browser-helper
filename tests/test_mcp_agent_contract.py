@@ -105,7 +105,8 @@ def test_documented_error_codes_cover_the_codes_the_handlers_return():
         emitted |= set(re.findall(r'(?:tool_error|_wait_failure)\([^,]+,\s*"([a-z_]+)"', path.read_text(encoding="utf-8")))
     must_document = {"timeout", "element_not_found", "stale_snapshot", "origin_not_allowed", "tab_not_found",
                      "invalid_params", "no_such_option", "not_select", "still_loading", "error_page",
-                     "chrome_unavailable", "operation_failed", "wait_for_timeout", "not_actionable"}
+                     "chrome_unavailable", "operation_failed", "wait_for_timeout", "not_actionable",
+                     "tab_closed", "blocked_challenge"}
     assert must_document <= table_codes, f"undocumented: {sorted(must_document - table_codes)}"
     source = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "src" / "mcp_server").glob("*.py"))
     missing = {c for c in must_document if f'"{c}"' not in source and f"'{c}'" not in source}
@@ -176,3 +177,113 @@ def test_site_reset_removes_every_path_of_the_site_and_keeps_other_sites(monkeyp
 
     removed = asyncio.run(tools._clear_site_cookies(_Target()))
     assert removed == 2 and sorted(deleted) == ["a", "b"]
+
+
+def test_challenge_pages_are_recognised_and_normal_pages_are_not():
+    from mcp_server.tools import is_challenge_page
+
+    assert is_challenge_page("Just a moment...", "")
+    assert is_challenge_page("Upwork", "Cloudflare Ray ID: 8a1 Your IP: 1.2.3.4")
+    assert not is_challenge_page("Blog", "We use Cloudflare Ray ID headers. " + "x" * 3000)
+    assert not is_challenge_page("Home", "Welcome back")
+
+
+def _challenge_target(title, text):
+    class _Target:
+        async def evaluate(self, js):
+            return {"result": json.dumps({"title": title, "url": "https://a.test/?token=SECRET", "text": text})}
+
+    return _Target()
+
+
+def test_challenge_is_reported_as_blocked_then_cleared(monkeypatch):
+    from mcp_server import tools
+
+    tools._MCP_SESSION["challenge"] = None
+    blocked, cleared = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Just a moment...", "")))
+    env = json.loads(blocked)
+    assert env["error"]["code"] == "blocked_challenge" and "SECRET" not in blocked
+    assert env["data"]["url"].startswith("https://a.test/") and cleared is False
+    again, cleared = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Dashboard", "hello")))
+    assert again is None and cleared is True
+    _, cleared = asyncio.run(tools._challenge_gate("navigate", _challenge_target("Dashboard", "hello")))
+    assert cleared is False
+
+
+def test_get_page_text_refuses_a_challenge_page(monkeypatch):
+    from mcp_server import tools
+
+    class _Target:
+        async def evaluate(self, js):
+            return {"result": json.dumps({"title": "Just a moment...", "url": "https://a.test/", "text": ""})}
+
+        async def wait_for_ready(self, t):
+            return {}
+
+        async def get_page_text(self):
+            raise AssertionError("must not read a challenge page as content")
+
+    async def fake_target():
+        return _Target(), (lambda op, fn, *a, **kw: fn(*a, **kw))
+
+    monkeypatch.setattr(tools, "_target", fake_target)
+    out = json.loads(asyncio.run(tools.get_page_text()))
+    assert out["status"] == "error" and out["error"]["code"] == "blocked_challenge"
+
+
+def test_a_replaced_tab_is_reported_once_in_meta_notices():
+    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp_server import tools
+    from mcp_server.server import _as_tool_result
+
+    async def handler():
+        return json.dumps({"status": "ok", "data": 1, "meta": {}})
+
+    tools._NOTICES.clear()
+    tools._NOTICES.append({"code": "tab_replaced", "old_tab_id": "A", "new_tab_id": "B"})
+    first = json.loads(asyncio.run(_as_tool_result(handler)()))
+    assert first["meta"]["notices"][0]["new_tab_id"] == "B"
+    second = json.loads(asyncio.run(_as_tool_result(handler)()))
+    assert "notices" not in second["meta"]
+
+    async def failing():
+        return json.dumps({"status": "error", "error": {"code": "x", "message": "m"}})
+
+    tools._NOTICES.append({"code": "tab_closed"})
+    with pytest.raises(ToolError) as err:
+        asyncio.run(_as_tool_result(failing)())
+    assert "tab_closed" in str(err.value)
+
+
+def test_a_tab_seen_earlier_and_now_gone_is_tab_closed_not_unknown(monkeypatch):
+    import main
+    from mcp_server import tools
+
+    class _Resp:
+        body = json.dumps({"error": {"code": "tab_not_found", "message": "Tab T1 is not open"}}).encode()
+
+    async def gone(tab_id):
+        return _Resp()
+
+    monkeypatch.setattr(main, "_assert_tab_exists", gone)
+    tools._SEEN_TABS["T1"] = {"title": "Jobs", "url": "https://a.test/jobs?token=SECRET"}
+    out = json.loads(asyncio.run(tools._tab_pinned_client("T1")))
+    assert out["error"]["code"] == "tab_closed" and "SECRET" not in json.dumps(out)
+    other = json.loads(asyncio.run(tools._tab_pinned_client("NEVER")))
+    assert other["error"]["code"] == "tab_not_found"
+
+
+def test_an_unreachable_browser_is_not_reported_as_a_closed_tab(monkeypatch):
+    import main
+    from mcp_server import tools
+
+    class _Resp:
+        body = json.dumps({"error": {"code": "browser_unreachable", "message": "Cannot list tabs: refused"}}).encode()
+
+    async def down(tab_id):
+        return _Resp()
+
+    monkeypatch.setattr(main, "_assert_tab_exists", down)
+    tools._SEEN_TABS["T2"] = {"title": "x", "url": "https://a.test/"}
+    out = json.loads(asyncio.run(tools._tab_pinned_client("T2")))
+    assert out["error"]["code"] == "browser_unreachable"

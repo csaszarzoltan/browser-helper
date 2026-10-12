@@ -475,6 +475,8 @@ FastMCP prefix `Error executing tool <name>: `. Read the JSON after the first `{
 | `stale_snapshot` | the snapshot_id expired or is unknown | observe again |
 | `origin_not_allowed` | `BH_ALLOWED_ORIGINS` does not include the URL's origin | ask the user to allow it |
 | `tab_not_found` | the tab id is not open | call get_tabs |
+| `tab_closed` | the tab id was open earlier and is now closed (by a person or by the page; this server never closes a tab silently) | call get_tabs and continue in an open tab; the session tab is replaced automatically and the next result says so in `meta.notices` |
+| `blocked_challenge` | the page is a bot check (for example Cloudflare "Just a moment"), not the requested content; `data.url` is the page | do not retry; call await_user so a person completes the check, then repeat the call (`meta.challenge_cleared` confirms it passed) |
 | `invalid_params` / `invalid_request` | the arguments are wrong | fix them and retry |
 | `still_loading` / `error_page` | `await_user` resumed onto a page that is not ready or is an error page | wait, or ask the user |
 | `no_such_option` / `not_select` | `select_option` cannot choose | check the option list |

@@ -50,6 +50,13 @@ def _as_tool_result(handler):
                 env = json.loads(out)
             except ValueError:
                 return out
+            from .tools import take_notices
+
+            notices = take_notices()
+            if notices and isinstance(env, dict):
+                # A tab was replaced or closed behind the caller's back: say so, once.
+                env.setdefault("meta", {})["notices"] = notices
+                out = json.dumps(env, ensure_ascii=False)
             if isinstance(env, dict) and env.get("status") == "error":
                 raise ToolError(out)
         return out

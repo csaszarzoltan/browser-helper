@@ -81,6 +81,79 @@ async def _session_tab_alive(sess) -> bool:
     return True
 
 
+#: Tabs this server has reported to the caller (id -> {title, url}); lets a later
+#: tab_not_found say "it was open, and is now closed" instead of "unknown".
+_SEEN_TABS: dict[str, dict] = {}
+#: Facts the caller must hear once (a replaced tab); delivered in the next result's meta.
+_NOTICES: list[dict] = []
+
+_CHALLENGE_JS = (
+    "(()=>{const t=(document.title||'');const b=document.body;"
+    "return JSON.stringify({title:t,url:location.href,"
+    "text:(b?b.innerText:'').slice(0,1500)});})()"
+)
+_CHALLENGE_TITLES = ("just a moment", "attention required", "checking your browser",
+                     "verify you are human", "security check")
+_CHALLENGE_MARKERS = ("cloudflare ray id", "performance & security by cloudflare",
+                      "checking your browser before accessing", "verify you are human",
+                      "needs to review the security of your connection",
+                      "enable javascript and cookies to continue")
+
+
+def is_challenge_page(title: str, text: str) -> bool:
+    """True when a page is a bot-check interstitial rather than the requested content.
+
+    A title match is enough. A body marker counts only on a short page, so an
+    article that merely mentions Cloudflare is not mistaken for a challenge.
+    """
+    low_title = (title or "").strip().lower()
+    if any(low_title.startswith(t) for t in _CHALLENGE_TITLES):
+        return True
+    low = (text or "").lower()
+    return len(low) < 1500 and any(marker in low for marker in _CHALLENGE_MARKERS)
+
+
+def take_notices() -> list[dict]:
+    """Return and clear the facts the caller has not heard yet."""
+    out = list(_NOTICES)
+    _NOTICES.clear()
+    return out
+
+
+async def _challenge_gate(op: str, target=None):
+    """Check the current page for a bot challenge.
+
+    Returns ``(error_json_or_None, cleared)``. ``error`` is a ``blocked_challenge``
+    envelope while a challenge is showing; ``cleared`` is True on the first call
+    after a person completed a challenge that was reported earlier. Never retries.
+    Best effort: an unreadable page is treated as not blocked.
+    """
+    info = None
+    try:
+        if target is None:
+            # The first browser call mints the session inside run_op, so a client resolved
+            # before it still points at the disconnected default: resolve again.
+            target, _ = await _target()
+        raw = await asyncio.wait_for(target.evaluate(_CHALLENGE_JS), timeout=3.0)
+        value = raw.get("result") if isinstance(raw, dict) else raw
+        info = _json_mod.loads(value) if isinstance(value, str) else None
+    except Exception as exc:  # noqa: BLE001 — a page we cannot read is not reported as blocked
+        logger.debug("challenge check failed: %s", exc)
+    was_blocked = _MCP_SESSION.get("challenge")
+    if info and is_challenge_page(info.get("title", ""), info.get("text", "")):
+        url = redact_url(str(info.get("url", "")))
+        _MCP_SESSION["challenge"] = url
+        return tool_error(
+            op, "blocked_challenge",
+            f"The site is showing a bot check ({info.get('title') or 'interstitial'!r}) at {url}. "
+            "Do not retry. A person has to complete it in the browser; call await_user, "
+            "then call this tool again.",
+            data={"url": url, "title": info.get("title", "")},
+        ), False
+    _MCP_SESSION["challenge"] = None
+    return None, bool(was_blocked)
+
+
 async def _mcp_session():
     """Return (sess, run_op) for an MCP tool call, minting the session once.
 
@@ -107,6 +180,7 @@ async def _mcp_session():
         # with a stale tab id. The new id is reported by session_status.
         _MCP_SESSION["session"] = None
         _MCP_SESSION["replaced"] = _MCP_SESSION.get("replaced", 0) + 1
+        _SEEN_TABS.setdefault(sess.tab_id, {"title": "", "url": ""})["closed"] = True
         try:
             await session_registry.destroy(sess.session_id)
         except Exception as exc:  # noqa: BLE001 — the old tab may already be gone
@@ -120,9 +194,21 @@ async def _mcp_session():
             fresh = await session_registry.create(_local_cdp_http())
             _MCP_SESSION["session"] = fresh
             _set_current_session(fresh)
+            _NOTICES.append({
+                "code": "tab_replaced",
+                "message": f"The session tab {sess.tab_id} was closed. A new tab {fresh.tab_id} "
+                           "replaced it; the previous page, scroll position and form input are gone.",
+                "old_tab_id": sess.tab_id, "new_tab_id": fresh.tab_id,
+            })
             return fresh, (lambda op, method, *a, **kw: run_op(op, method, *a, sess_override=fresh, **kw))
         except Exception as exc:  # noqa: BLE001 — fall through to lazy minting on the next call
             logger.warning("could not mint a replacement MCP session: %s", exc)
+            _NOTICES.append({
+                "code": "tab_closed",
+                "message": f"The session tab {sess.tab_id} was closed and no replacement could be "
+                           "opened yet; the next browser call opens a new tab.",
+                "old_tab_id": sess.tab_id,
+            })
     # P0-1: MCP stdio has no HTTP middleware — force auto-mint so the first
     # browser tool never 400s with "Missing session". Mirrors BH_SESSION_AUTO=1.
     try:
@@ -159,11 +245,23 @@ async def _tab_pinned_client(tab_id: str):
     ok = await _assert_tab_exists(tab_id)
     if ok is not True:
         # ok is an api_error JSONResponse — surface its message as tool_error
+        code = "tab_not_found"
         try:
             body = _json.loads(bytes(ok.body).decode())
             detail = body.get("error", {}).get("message", "tab not found")
+            code = body.get("error", {}).get("code") or code
         except Exception:  # noqa: BLE001
             detail = f"Tab not found: {tab_id}"
+        if code != "tab_not_found":
+            # The tab list itself failed (browser unreachable): say that, never "closed".
+            return tool_error("tab_id", code, detail)
+        seen = _SEEN_TABS.get(tab_id)
+        if seen is not None:
+            last = redact_url(seen.get("url", "")) or seen.get("title") or "unknown page"
+            return tool_error("tab_id", "tab_closed",
+                              f"Tab {tab_id} was open earlier ({last}) and is now closed. "
+                              "It was closed by a person or by the page; this server did not close it. "
+                              "Call get_tabs for the open tabs.")
         return tool_error("tab_id", "tab_not_found", detail)
     try:
         sess = _MCP_SESSION.get("session")
@@ -202,6 +300,12 @@ async def navigate(url: str, wait_until: str = "domcontentloaded", timeout: floa
                           f"{url} is not in BH_ALLOWED_ORIGINS; allowed: {', '.join(allowlist)}")
     target, run_op = await _target()
     res = await run_op("navigate", target.navigate, url, wait_until=wait_until, timeout=timeout)
+    if isinstance(res, dict) and res.get("status") == "ok":
+        blocked, cleared = await _challenge_gate("navigate")
+        if blocked:
+            return blocked
+        if cleared:
+            res.setdefault("meta", {})["challenge_cleared"] = True
     if not wait_for or not isinstance(res, dict) or res.get("status") != "ok":
         return json_dumps(_redact_urls(res))
     if wait_for.startswith("text:"):
@@ -488,6 +592,17 @@ async def act(
                       err.get("message") or str(body.get("detail") or body))
 
 
+def _remember_tabs(res) -> None:
+    """Record the tab ids a get_tabs result reported, so a later disappearance is explained."""
+    data = res.get("data") if isinstance(res, dict) else None
+    tabs = data.get("tabs") if isinstance(data, dict) else data
+    if not isinstance(tabs, list):
+        return
+    for tab in tabs:
+        if isinstance(tab, dict) and tab.get("id"):
+            _SEEN_TABS[str(tab["id"])] = {"title": tab.get("title", ""), "url": tab.get("url", "")}
+
+
 async def get_tabs(ctx: Context | None = None) -> str:
     """List all open tabs ``{id, title, url, active}`` (capability ``browser.core``, READY).
 
@@ -496,7 +611,9 @@ async def get_tabs(ctx: Context | None = None) -> str:
     if ctx is not None:
         await ctx.info("listing tabs")
     target, run_op = await _target()
-    return json_dumps(_redact_urls(await run_op("get_tabs", target.get_tabs)))
+    res = await run_op("get_tabs", target.get_tabs)
+    _remember_tabs(res)
+    return json_dumps(_redact_urls(res))
 
 
 async def switch_tab(id: str, ctx: Context | None = None) -> str:
@@ -548,6 +665,8 @@ async def session_status(ctx: Context | None = None) -> str:
                 "browser_profile": _browser_profile_info(),
                 # A hand-off waiting for a person (await_user), or None.
                 "handoff_pending": _MCP_SESSION.get("handoff"),
+                # URL of a bot check last reported as blocked_challenge, or None once cleared.
+                "challenge_blocked": _MCP_SESSION.get("challenge"),
                 # Emulation that stays on the page until cleared: viewport, geolocation, offline.
                 "emulation": dict(_MCP_SESSION.get("emulation", {})),
             },
@@ -1145,6 +1264,11 @@ async def eval(js: str, timeout: int = 30, tab_id: str | None = None, ctx: Conte
         return tool_error("eval", code, str(exc))
 
 
+def _unwrap_text(result):
+    inner = result.get("data") if isinstance(result, dict) else None
+    return inner if isinstance(inner, dict) and "text" in inner else result
+
+
 async def get_page_text(
     wait_ready: bool = True,
     timeout: int = 20,
@@ -1184,7 +1308,12 @@ async def get_page_text(
         # 2026-09-02 heal fix: run via run_op so _ensure_browser reconnects the
         # session tab after a Chrome restart (direct target.get_page_text hit
         # "Not connected to Chrome CDP" when the MCP session held a dead WS).
+        blocked, cleared = await _challenge_gate("get_page_text")
+        if blocked:
+            return blocked
         result = await run_op_fn("get_page_text", target.get_page_text)
+        if cleared:
+            return tool_result("get_page_text", _unwrap_text(result), meta={"challenge_cleared": True})
         # run_op wraps as {status, data, ...}; unwrap on success
         if isinstance(result, dict) and result.get("data") is not None:
             inner = result["data"]
@@ -1628,6 +1757,12 @@ async def browser_navigate(
             failure = _engine_failure(idle)
             if failure:
                 return _wait_failure("browser_navigate", failure)
+        if isinstance(res, dict) and res.get("status") == "ok":
+            blocked, cleared = await _challenge_gate("browser_navigate")
+            if blocked:
+                return blocked
+            if cleared:
+                res.setdefault("meta", {})["challenge_cleared"] = True
         # P0 navigate-active: surface the resolved tab and honor make_active=false
         if isinstance(res, dict):
             _d = res.get("data")
