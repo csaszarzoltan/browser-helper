@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import time
@@ -217,6 +218,7 @@ class HeadlessManager:
 
         # Resolve profile data dir
         resolved_profile_name: str | None = profile
+        created_profile: str | None = None  # a temp dir this launch made; removed if the launch fails
         if profile:
             # Lazy import to avoid circular dependency at module level
             from profile_manager import ProfileManager
@@ -239,8 +241,8 @@ class HeadlessManager:
         else:
             # Use a temp profile dir for headless sessions
             import tempfile
-            tmpdir = tempfile.mkdtemp(prefix="bh-headless-")
-            cmd.append(f"--user-data-dir={tmpdir}")
+            created_profile = tempfile.mkdtemp(prefix="bh-headless-")
+            cmd.append(f"--user-data-dir={created_profile}")
 
         # Add explicit extensions
         if extensions and not profile:
@@ -286,6 +288,8 @@ class HeadlessManager:
                 stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
+            if created_profile:
+                shutil.rmtree(created_profile, ignore_errors=True)
             return {
                 "status": "error",
                 "error": f"Chrome executable not found: {self._chrome_path}",

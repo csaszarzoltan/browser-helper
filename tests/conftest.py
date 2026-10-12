@@ -153,6 +153,10 @@ def _no_real_chrome(monkeypatch, request):
     monkeypatch.setattr(main.client, "_ws", None, raising=False)
     monkeypatch.setattr(main.client, "_http_client", None, raising=False)
     monkeypatch.setattr(main.chrome_mgr, "launch", _noop_launch)
+    # /headless/launch starts its own browser, not through chrome_mgr. Point it at a binary
+    # that does not exist, so a test that reaches it fails at exec and starts nothing: the
+    # real launcher left one headless Chrome (1-2 GB) behind per suite run, until memory ran out.
+    monkeypatch.setattr(main.headless_mgr, "_chrome_path", "/nonexistent/bh-test-isolation/chrome")
     monkeypatch.setattr(main.session_registry, "create", _no_session)
     monkeypatch.setattr(main, "_ensure_browser", _noop_ensure_browser)
     monkeypatch.setattr(main, "_resolve_session_client", _resolve_no_session_client)
