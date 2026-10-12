@@ -656,15 +656,23 @@ class TestFallbackChainBehavior:
         assert result.session is None
 
     @pytest.mark.asyncio
-    async def test_execute_with_local_fallback_empty_chain(self, fallback_chain):
-        """FallbackChain.execute_with_local_fallback with empty providers may succeed if local Chrome is available."""
+    async def test_execute_with_local_fallback_empty_chain(self, fallback_chain, monkeypatch):
+        """With no providers the chain ends in the local headless fallback, and the failure is reported.
+
+        The real fallback starts Chrome with --remote-debugging-port=0 and nothing stops it: one
+        browser per run was left running (2026-10-12). The launcher is stubbed to fail here, so the
+        test checks the wiring without starting a browser.
+        """
+
+        async def no_local_chrome(profile=None):
+            raise RuntimeError("test isolation: no local Chrome is launched in tests")
+
+        monkeypatch.setattr(fallback_chain, "_launch_local_headless", no_local_chrome)
         result = await fallback_chain.execute_with_local_fallback()
         assert isinstance(result, FallbackResult)
         assert "local-headless" in result.chain
-        # If local Chrome is installed, result could be success
-        # If not, result.success is False with an error about Chrome not found
-        if not result.success:
-            assert any("Chrome" in e for e in result.errors)
+        assert result.success is False
+        assert any("Chrome" in e for e in result.errors)
 
 
 class TestProviderLifecycleBehavior:
