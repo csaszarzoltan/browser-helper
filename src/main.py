@@ -140,7 +140,7 @@ async def lifespan(application: FastAPI):
     # that no reaper can reach — they eat RAM until killed manually.
     # Kill any headless Chrome NOT owned by this process's live sessions.
     try:
-        reaped = _reap_orphan_headless()
+        reaped = await asyncio.wait_for(asyncio.to_thread(_reap_orphan_headless), timeout=60)
         if reaped:
             logger.warning("Reaped %d orphaned headless Chrome process(es) at startup", reaped)
     except Exception as exc:  # noqa: BLE001 — startup must never abort
@@ -1798,8 +1798,9 @@ async def _chrome_health_watchdog() -> None:
     while True:
         await asyncio.sleep(WATCHDOG_INTERVAL)
         try:
-            # 1. Reap orphan headless Chrome
-            reaped = _reap_orphan_headless()
+            # 1. Reap orphan headless Chrome. The scan runs in a thread with a bound: it
+            # reads /proc, and a process stuck in I/O must not stall the event loop.
+            reaped = await asyncio.wait_for(asyncio.to_thread(_reap_orphan_headless), timeout=60)
             if reaped:
                 logger.info("Watchdog: reaped %d orphan Chrome process(es)", reaped)
 

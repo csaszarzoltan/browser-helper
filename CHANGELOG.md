@@ -10,6 +10,10 @@ All notable changes to browser-helper will be documented in this file.
   closed every unowned page tab, including popups, sign-in windows and the person's own tabs; it now closes only
   `about:blank` orphans. MCP tool calls also never refreshed the session's idle timer, so the reaper closed its tab
   one TTL (30 min) after it was minted; a tool call now refreshes it.
+- **The service no longer stalls on a process scan.** The Chrome process scans (`ps`) ran on the event loop, and one
+  that waited on a process stuck in I/O froze every request: the service answered nothing for about 19 minutes
+  (2026-10-12). The scans now run in a thread with a bound (`_PROCESS_SCAN_TIMEOUT_S`); a scan that times out raises
+  instead of reporting "no browser", so the profile's singleton lock is not cleared on a guess.
 - **Bot-check, closed tabs, failed actions (feedback from a peer agent session).** `navigate`, `browser_navigate` and
   `get_page_text` return `blocked_challenge` (with the URL) on a Cloudflare-style interstitial and report
   `meta.challenge_cleared` once a person passed it. A replaced session tab is reported once in `meta.notices`;

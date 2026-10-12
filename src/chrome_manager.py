@@ -75,6 +75,24 @@ def _find_chrome_with_profile(profile_dir: str) -> int | None:
     return None
 
 
+#: Longest a process scan may take. ``ps`` reads /proc entries, and one of them can be
+#: stuck in I/O; the scan then waits, and the caller must not wait with it.
+_PROCESS_SCAN_TIMEOUT_S = 8.0
+
+
+async def _find_chrome_with_profile_async(profile_dir: str) -> int | None:
+    """Run :func:`_find_chrome_with_profile` in a thread, with a bound.
+
+    Raises ``TimeoutError`` when the scan does not finish in time. That is not
+    the same as "no Chrome holds the profile": the caller must not clear the
+    profile's singleton lock on that answer.
+    """
+    return await asyncio.wait_for(
+        asyncio.to_thread(_find_chrome_with_profile, profile_dir),
+        timeout=_PROCESS_SCAN_TIMEOUT_S,
+    )
+
+
 def _clear_stale_singleton(profile_dir: str) -> None:
     """Remove Chrome's SingletonLock/SingletonSocket/SingletonCookie.
 
@@ -407,7 +425,7 @@ class ChromeManager:
         # the profile, and exits immediately — the browser never comes up
         # and CDP never answers. Only remove it when no Chrome actually
         # holds the profile (checked via process scan).
-        if profile_dir and _find_chrome_with_profile(profile_dir) is None:
+        if profile_dir and await _find_chrome_with_profile_async(profile_dir) is None:
             _clear_stale_singleton(profile_dir)
 
         # ── Already running with the SAME profile on another port? ──
@@ -417,7 +435,7 @@ class ChromeManager:
         # auto-increment below spawns a NEW profile-less instance. Find
         # any Chrome that already holds this profile dir and reuse it.
         if profile_dir:
-            existing = _find_chrome_with_profile(profile_dir)
+            existing = await _find_chrome_with_profile_async(profile_dir)
             if existing is not None:
                 self._port = existing
                 self._pid = 0
