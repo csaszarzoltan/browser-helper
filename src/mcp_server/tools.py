@@ -242,7 +242,8 @@ async def _tab_pinned_client(tab_id: str):
         _tab_client_for,
     )
 
-    ok = await _assert_tab_exists(tab_id)
+    lister, _ = await _target()
+    ok = await _assert_tab_exists(tab_id, lister)
     if ok is not True:
         # ok is an api_error JSONResponse — surface its message as tool_error
         code = "tab_not_found"

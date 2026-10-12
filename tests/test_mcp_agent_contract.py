@@ -255,6 +255,10 @@ def test_a_replaced_tab_is_reported_once_in_meta_notices():
     assert "tab_closed" in str(err.value)
 
 
+async def _no_target():
+    return object(), None
+
+
 def test_a_tab_seen_earlier_and_now_gone_is_tab_closed_not_unknown(monkeypatch):
     import main
     from mcp_server import tools
@@ -262,10 +266,11 @@ def test_a_tab_seen_earlier_and_now_gone_is_tab_closed_not_unknown(monkeypatch):
     class _Resp:
         body = json.dumps({"error": {"code": "tab_not_found", "message": "Tab T1 is not open"}}).encode()
 
-    async def gone(tab_id):
+    async def gone(tab_id, source=None):
         return _Resp()
 
     monkeypatch.setattr(main, "_assert_tab_exists", gone)
+    monkeypatch.setattr(tools, "_target", _no_target)
     tools._SEEN_TABS["T1"] = {"title": "Jobs", "url": "https://a.test/jobs?token=SECRET"}
     out = json.loads(asyncio.run(tools._tab_pinned_client("T1")))
     assert out["error"]["code"] == "tab_closed" and "SECRET" not in json.dumps(out)
@@ -280,10 +285,35 @@ def test_an_unreachable_browser_is_not_reported_as_a_closed_tab(monkeypatch):
     class _Resp:
         body = json.dumps({"error": {"code": "browser_unreachable", "message": "Cannot list tabs: refused"}}).encode()
 
-    async def down(tab_id):
+    async def down(tab_id, source=None):
         return _Resp()
 
     monkeypatch.setattr(main, "_assert_tab_exists", down)
+    monkeypatch.setattr(tools, "_target", _no_target)
     tools._SEEN_TABS["T2"] = {"title": "x", "url": "https://a.test/"}
     out = json.loads(asyncio.run(tools._tab_pinned_client("T2")))
     assert out["error"]["code"] == "browser_unreachable"
+
+
+def test_tab_existence_is_checked_through_the_session_client(monkeypatch):
+    import main
+    from mcp_server import tools
+
+    seen = {}
+    marker = object()
+
+    async def fake_target():
+        return marker, None
+
+    async def check(tab_id, source=None):
+        seen["source"] = source
+
+        class _Resp:
+            body = json.dumps({"error": {"code": "tab_not_found", "message": "gone"}}).encode()
+
+        return _Resp()
+
+    monkeypatch.setattr(tools, "_target", fake_target)
+    monkeypatch.setattr(main, "_assert_tab_exists", check)
+    asyncio.run(tools._tab_pinned_client("X"))
+    assert seen["source"] is marker  # not the module-level default client (wrong port over stdio)

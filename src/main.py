@@ -1374,10 +1374,16 @@ _TAB_CLIENTS: dict[str, "CDPClient"] = {}
 _SENTINEL_SESSION: Any = object()
 
 
-async def _assert_tab_exists(tab_id: str):
-    """Return True when *tab_id* is a live page target, else a 404 error dict."""
+async def _assert_tab_exists(tab_id: str, source: "CDPClient | None" = None):
+    """Return True when *tab_id* is a live page target, else a 404 error dict.
+
+    *source* is the client that lists the tabs. The MCP layer passes its own session
+    client: the module-level default client only knows the Chrome port after the HTTP
+    service launched Chrome, so over stdio (or with BH_CHROME_DEBUG_PORT) it looks at
+    the wrong browser.
+    """
     try:
-        tabs = await client.discover_tabs()
+        tabs = await (source or client).discover_tabs()
     except Exception as exc:  # noqa: BLE001 — Chrome unreachable
         return api_error("tab", "browser_unreachable", f"Cannot list tabs: {exc}", 503)
     live = [(t.get("id"), t.get("title", ""), t.get("url", "")) for t in tabs if t.get("type") == "page"]
