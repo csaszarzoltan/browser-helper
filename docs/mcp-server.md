@@ -86,12 +86,34 @@ claude mcp add browser-helper -- bh mcp
 
 ### Codex CLI (stdio)
 
+To make this checkout available to **all projects**, register it in the user-level
+Codex configuration:
+
 ```bash
-# run from the repo root, or use --cwd / add cwd in config
-codex mcp add browser-helper -- python -m browser_helper.mcp
+cd /path/to/browser-helper
+bash scripts/install-global-mcp.sh --dry-run  # inspect the command
+bash scripts/install-global-mcp.sh
 ```
 
-Codex speaks stdio MCP over the child process; Browser Helper must be launchable from wherever Codex runs.
+The installer uses the checkout's `.venv/bin/python`, an absolute `PYTHONPATH`
+pointing to `src/`, and `-m mcp_server.cli mcp --stdio`. It requires an existing
+virtual environment with the project's MCP dependencies and the Codex CLI.
+It registers `browser-helper` through `codex mcp add`, retaining other server
+entries. If `CODEX_HOME` is set, Codex writes to that configuration directory
+instead of the default `~/.codex`.
+
+The Click entry point writes its startup banner to stderr, keeping stdout clean
+for JSON-RPC. The current `python -m browser_helper.mcp` shim writes its banner
+to stdout, so use the Click entry point for client registration.
+
+Restart the Codex session after registration. The server inherits the active
+project's working directory; file discovery tools can also take an explicit
+`root`. Keep this checkout and virtual environment in place because the global
+configuration refers to their absolute paths.
+
+User-level configuration is shared by the Codex CLI, IDE extension, and ChatGPT
+desktop app; see the [official MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+Project-level settings can override user defaults.
 
 ### Cursor / Windsurf (streamable HTTP)
 
