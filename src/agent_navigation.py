@@ -311,7 +311,9 @@ class AccessibilityTreeBuilder:
                 n for n in nodes if n.role == scope or (scope == "table" and n.role == "grid")
             ]
             if not matches:
-                return nodes
+                # Nothing of that kind on the page: return nothing, never the whole page
+                # (a caller asking for the dialog must not get page text back instead).
+                return []
             allowed = {m.ref for m in matches}
             changed = True
             while changed:
@@ -418,6 +420,68 @@ def available_actions(snapshot: AccessibilitySnapshot) -> dict:
     }
 
 
+def _dialog_key(node: SemanticNode) -> tuple:
+    return (node.backend_node_id, node.name)
+
+
+def _descendant_texts(snapshot: AccessibilitySnapshot, root_ref: str, limit: int = 30) -> list[str]:
+    by_ref = {n.ref: n for n in snapshot.nodes}
+    out: list[str] = []
+    stack = list(reversed(by_ref[root_ref].children)) if root_ref in by_ref else []
+    while stack and len(out) < limit:
+        node = by_ref.get(stack.pop())
+        if node is None:
+            continue
+        label = (node.name or str(node.value or "")).strip()
+        if label:
+            out.append(f"{node.role}: {label[:120]}")
+        stack.extend(reversed(node.children))
+    return out
+
+
+def verification_evidence(
+    before: AccessibilitySnapshot,
+    after: AccessibilitySnapshot,
+    target_backend_id: int | None = None,
+    *,
+    max_chars: int = 1500,
+) -> dict:
+    """What the page shows after an action whose expectation failed.
+
+    Lets the caller decide whether the action happened: the dialogs visible now
+    with their contents, the state of the element that was acted on, and what
+    changed between the two snapshots.
+    """
+    dialogs = []
+    for node in after.nodes:
+        if node.role == "dialog":
+            dialogs.append({"ref": node.ref, "name": node.name,
+                            "contents": _descendant_texts(after, node.ref)})
+    evidence: dict = {
+        "page_changed": before.fingerprint != after.fingerprint,
+        "url": after.page.get("url"),
+        "title": after.page.get("title"),
+        "dialogs_before": sum(1 for n in before.nodes if n.role == "dialog"),
+        "dialogs_after": dialogs,
+        "nodes_before": len(before.nodes),
+        "nodes_after": len(after.nodes),
+    }
+    if target_backend_id is not None:
+        node = next((n for n in after.nodes if n.backend_node_id == target_backend_id), None)
+        evidence["target"] = (
+            {"role": node.role, "name": node.name, "states": node.states, "value": node.value}
+            if node is not None else {"present": False}
+        )
+    # Keep the evidence small: it travels with every failed action.
+    while len(json.dumps(evidence, default=str)) > max_chars and evidence["dialogs_after"]:
+        biggest = max(evidence["dialogs_after"], key=lambda d: len(d["contents"]))
+        if not biggest["contents"]:
+            break
+        biggest["contents"] = biggest["contents"][: len(biggest["contents"]) // 2]
+        biggest["truncated"] = True
+    return evidence
+
+
 def validate_expectations(
     before: AccessibilitySnapshot, after: AccessibilitySnapshot, expect: dict | None
 ) -> dict:
@@ -439,9 +503,10 @@ def validate_expectations(
         if clause.get("url_changed"):
             ok = before.page.get("url") != after.page.get("url")
         elif clause.get("dialog_opened"):
-            ok = any(n.role == "dialog" for n in after.nodes) and not any(
-                n.role == "dialog" for n in before.nodes
-            )
+            # A dialog that was not open before; one that was already open and is still
+            # open does not count (the click changed nothing about dialogs).
+            before_keys = {_dialog_key(n) for n in before.nodes if n.role == "dialog"}
+            ok = any(_dialog_key(n) not in before_keys for n in after.nodes if n.role == "dialog")
         elif "text_visible" in clause:
             ok = str(clause["text_visible"]).lower() in after_text
         elif "element_visible" in clause:

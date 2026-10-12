@@ -301,6 +301,23 @@ class SessionManager:
         age = time.time() - state.last_active
         return age > self._session_timeout
 
+    def remove_expired(self) -> list[str]:
+        """Delete the saved state of expired sessions; return their ids.
+
+        Unlike :meth:`cleanup` this leaves cached WebSockets alone, so it is safe
+        while other clients are connected.
+        """
+        removed: list[str] = []
+        for info in self.list_sessions():
+            if not info.get("expired", False):
+                continue
+            try:
+                (self._storage_dir / f"{info['session_id']}.json").unlink(missing_ok=True)
+                removed.append(info["session_id"])
+            except OSError:
+                continue
+        return removed
+
     async def cleanup(self) -> int:
         """Remove expired sessions and close their WebSockets. Returns count removed."""
         removed = 0

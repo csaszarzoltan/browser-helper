@@ -4,6 +4,16 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **Bot-check, closed tabs, failed actions (feedback from a peer agent session).** `navigate`, `browser_navigate` and
+  `get_page_text` return `blocked_challenge` (with the URL) on a Cloudflare-style interstitial and report
+  `meta.challenge_cleared` once a person passed it. A replaced session tab is reported once in `meta.notices`;
+  a tab id listed earlier and gone now is `tab_closed`. A failed `expect` carries `verification.evidence` (visible
+  dialogs with their text, the acted-on element's state, what changed); `dialog_opened` no longer counts a dialog
+  that was already open. `observe` with `scope` dialog|main|form|table returns only that region (empty with
+  `scope_found: false` when the page has none, no longer the whole page) and takes `max_text`. `screenshot` and
+  `browser_take_screenshot` save the JPEG and return `data.path` (`inline=true` adds base64). `session_status`
+  hides expired sessions (`expired_sessions` counts them) and `tidy=sessions|tabs|all` previews, with `apply=true`
+  removes them and empty about:blank tabs.
 - **MCP `act` folyamaton belül fut, nem HTTP-önhívással.** Az `act` eddig a fix `127.0.0.1:8020` címre küldött kérést,
   így egy másik példány kapta meg, amely nem ismerte a `snapshot_id`-t. Most a REST-handler fut közvetlenül, a hibák
   pedig a motor kódjával és üzenetével érkeznek (`element_not_found` stb.), nem csupán `HTTP Error 400`.

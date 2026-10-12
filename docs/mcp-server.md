@@ -451,6 +451,20 @@ BH_CHROME_PROFILE_DIR=$HOME/.browser-helper/agent-profile BH_CHROME_DEBUG_PORT=9
 - If the session's own tab is closed, the next call opens a fresh tab; `session_status` reports the
   current tab (`mcp_tab_id`) and how often it was replaced (`mcp_tab_replaced`).
 
+- **A bot check is not content.** `blocked_challenge` means the page is an interstitial such as Cloudflare's
+  "Just a moment". Do not retry or reload in a loop. Call `await_user` so a person completes it, then repeat the
+  call; `meta.challenge_cleared: true` confirms it passed.
+- **Read `meta.notices`.** If the session tab was closed and replaced, the next result says so once (`tab_replaced`,
+  old and new id) and the page you were on is gone. `tab_closed` means a tab you saw in `get_tabs` no longer exists.
+- **A failed `expect` explains itself.** `data.verification.evidence` lists the dialogs visible now with their text,
+  the state of the element you acted on and whether the page changed; use it to tell whether the action happened.
+- **Look at a region, not the page.** `observe` with `scope="dialog"` (or main, form, table) returns only that
+  region; `scope_found: false` means the page has none. `max_text` caps the text.
+- **Screenshots are files.** `screenshot` and `browser_take_screenshot` return `data.path`; open that file to look
+  at the page. `inline=true` also returns base64.
+- **Tidy up.** `session_status` with `tidy=all` previews expired saved sessions and empty about:blank tabs;
+  `apply=true` removes them. It never closes this client's tab, the active tab, the last tab or a tab with a page.
+
 ## Safety defaults
 
 - Cookie values are `[redacted]` unless a caller asks with `include_values: true`.

@@ -50,6 +50,7 @@ from agent_navigation import (
     discover_forms,
     extract_by_schema,
     validate_expectations,
+    verification_evidence,
 )
 from agent_runtime import (
     ElementNotFoundError,
@@ -5857,6 +5858,8 @@ async def agent_act(request: Request, body: AgentActionRequest):
                 data["replanned"] = True
             if not data["verification"]["satisfied"]:
                 data["status"] = "needs_attention"
+                data["verification"]["evidence"] = verification_evidence(
+                    before_ax, after_ax, target.get("backend_node_id"))
                 strategies = body.strategy or []
                 if "element_screenshot" in strategies and target.get("selector"):
                     captured = await tc.element_screenshot(target["selector"], body.quality)

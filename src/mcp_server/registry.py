@@ -214,7 +214,9 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         },
         "required": ["selector", "text"],
     },
-    "screenshot": {"type": "object", "properties": {}},
+    "screenshot": {"type": "object", "properties": {
+        "inline": {"type": "boolean", "description": "Also return the image as base64 in the result (default false: the image is saved to a file and the result gives its path)"},
+    }},
     "snapshot": {"type": "object", "properties": {}},
     "get_tabs": {"type": "object", "properties": {}},
     "observe": {
@@ -222,7 +224,8 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "mode": {"type": "string", "description": "semantic|accessibility (default semantic)"},
             "since_snapshot_id": {"type": "string", "description": "Earlier observe snapshot_id; the result adds a diff of what changed since then"},
-            "scope": {"type": "string", "description": "page|dialog|viewport (default page)"},
+            "scope": {"type": "string", "description": "page (default)|viewport|dialog|main|form|table. A region scope returns only the nodes inside the first matching region, as an accessibility view; scope_found false means the page has none"},
+            "max_text": {"type": "integer", "description": "Cap on the characters of node text in the result (default 6000 for page, 4000 for a region scope)"},
             "max_nodes": {"type": "integer", "description": "Max nodes (default 250)"},
             "interactive_only": {"type": "boolean", "description": "Only interactive elements (default false)"},
             "include_hidden": {"type": "boolean", "description": "Include hidden nodes (default false)"},
@@ -264,7 +267,10 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {"id": {"type": "string", "description": "Tab id"}},
         "required": ["id"],
     },
-    "session_status": {"type": "object", "properties": {}},
+    "session_status": {"type": "object", "properties": {
+        "tidy": {"type": "string", "enum": ["sessions", "tabs", "all"], "description": "List expired saved sessions (sessions), empty about:blank tabs (tabs) or both (all). Nothing is removed unless apply is true"},
+        "apply": {"type": "boolean", "description": "With tidy: delete the expired sessions and close the empty about:blank tabs listed (default false = preview only)"},
+    }},
     "search": {
         "type": "object",
         "properties": {
@@ -643,6 +649,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "scope": { "type": "string", "description": "viewport|full|element (default viewport)" },
             "selector": { "type": "string", "description": "Required when scope=element — CSS selector of the component" },
             "quality": { "type": "integer", "description": "JPEG quality 1-100 (default 80)" },
+            "inline": { "type": "boolean", "description": "Also return the image as base64 in the result (default false: the image is saved to a file and the result gives its path)" },
         },
     },
     "browser_highlight_elements": {
@@ -826,12 +833,12 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     'close_tab': 'Close the tab with the given id. Get ids from get_tabs.',
     'browser_reset_session': 'Clear cookies and storage between tests. Default scope site clears only the current site. Scope profile clears every cookie and the cache of the whole Chrome profile, which can log you out of every site; use it only on a dedicated test profile.',
     'clone_session': "Create a new session holding a copy of this session's cookies.",
-    "session_status": "Status of this client's browser session: the tab it drives (mcp_tab_id), how often that tab was replaced (mcp_tab_replaced), the Chrome profile and port in use and whether it is your own profile (browser_profile, with a warning if the Chrome on the port differs), a pending hand-off waiting for a person (handoff_pending), emulation that stays on the page (emulation: viewport, geolocation, offline), and the other sessions.",
+    "session_status": "Status of this client's browser session: the tab it drives (mcp_tab_id), how often that tab was replaced (mcp_tab_replaced), the Chrome profile and port in use and whether it is your own profile (browser_profile, with a warning if the Chrome on the port differs), a pending hand-off waiting for a person (handoff_pending), emulation that stays on the page (emulation: viewport, geolocation, offline), and the live saved sessions (expired ones are only counted in expired_sessions). To clean up, call with tidy=sessions|tabs|all: it lists expired sessions and empty about:blank tabs and removes them only with apply=true; it never touches this client's tab, the active tab, the last tab or a tab with a page.",
     'export_cookies': 'Export the cookie names, domains, paths, expiry and flags of a session. Values are [redacted] unless include_values is true; a cookie value is a login, so ask for it only to re-import the cookie elsewhere.',
     "import_cookies": "Import cookies into a session, for example a login saved with export_cookies(include_values=true). Each cookie needs name, value, domain and path.",
     'browser_inject_storage_state': 'Inject cookies and localStorage (e.g. a saved login) so the page starts logged in. Use it to skip logins in tests.',
-    'screenshot': 'JPEG screenshot of the active tab (viewport). For full page or one element use browser_take_screenshot.',
-    'browser_take_screenshot': 'Screenshot of the viewport, the full page (scope), or one element (selector). Prefer it over screenshot when you need more than the viewport.',
+    'screenshot': 'JPEG screenshot of the active tab (viewport), saved to a file: the result gives data.path (open it to look at the page) and size_bytes; inline=true also returns base64. For full page or one element use browser_take_screenshot.',
+    'browser_take_screenshot': 'Screenshot of the viewport, the full page (scope), or one element (selector), saved to a file: the result gives data.path to open; inline=true also returns base64. Prefer it over screenshot when you need more than the viewport.',
     'browser_highlight_elements': 'Draw temporary highlight boxes around selectors, so a person can see what is targeted. For debugging.',
     "eval": "Run JavaScript in the page and return its value; the timeout is enforced (error code timeout). Use it for state no other tool exposes. For checks prefer assert, wait_js or element_state.",
     'assert': 'Assert a DOM condition on the page (value, kind, condition, expected) and return pass or fail. For tests.',

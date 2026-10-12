@@ -374,15 +374,45 @@ async def type(selector: str, text: str, ctx: Context | None = None) -> str:
     return json_dumps(result)
 
 
-async def screenshot(ctx: Context | None = None) -> str:
+def _screenshot_to_file(shot: dict, inline: bool = False) -> dict:
+    """Write a screenshot's base64 JPEG to the artifact store and return its path.
+
+    The caller can open a file (a vision-capable client reads the image from the path);
+    it cannot look inside a base64 string in JSON. ``inline`` keeps the base64 as well.
+    """
+    import base64 as _b64
+
+    from main import artifact_store
+
+    encoded = shot.get("data") or shot.get("screenshot")
+    if not encoded:
+        return shot
+    record = artifact_store.put(_b64.b64decode(encoded), "image/jpeg", ".jpg", {"source": "mcp_screenshot"})
+    out = {k: v for k, v in shot.items() if k not in {"data", "screenshot"}}
+    out.update({
+        "path": str(artifact_store.root / f"{record['artifact_id']}.jpg"),
+        "artifact_id": record["artifact_id"],
+        "size_bytes": record["size_bytes"],
+        "expires_at": record["expires_at"],
+    })
+    if inline:
+        out["data"] = encoded
+    return out
+
+
+async def screenshot(inline: bool = False, ctx: Context | None = None) -> str:
     """Capture a JPEG screenshot of the active tab (capability ``browser.core``, READY).
 
-    Backed by the same engine as ``POST /screenshot``.
+    The image is written to a file and the result carries its ``path``; pass
+    ``inline=true`` to also get the base64 data. Backed by the same engine as ``POST /screenshot``.
     """
     if ctx is not None:
         await ctx.info("capturing screenshot")
     target, run_op = await _target()
-    return json_dumps(await run_op("screenshot", target.screenshot))
+    res = await run_op("screenshot", target.screenshot)
+    if isinstance(res, dict) and res.get("status") == "ok" and isinstance(res.get("data"), dict):
+        res["data"] = _screenshot_to_file(res["data"], inline)
+    return json_dumps(res)
 
 
 async def snapshot(ctx: Context | None = None) -> str:
@@ -394,6 +424,26 @@ async def snapshot(ctx: Context | None = None) -> str:
         await ctx.info("analyzing page")
     target, run_op = await _target()
     return json_dumps(await run_op("page_analyze", target.analyze_page))
+
+
+def _cap_node_text(data: dict, limit: int) -> None:
+    """Shorten node text and drop trailing nodes so an accessibility view stays small."""
+    nodes = data.get("nodes")
+    if not limit or not isinstance(nodes, list):
+        return
+    used, kept = 0, []
+    for node in nodes:
+        for key in ("name", "description"):
+            if isinstance(node.get(key), str) and len(node[key]) > 200:
+                node[key] = node[key][:200] + "…"
+        used += len(str(node.get("name") or "")) + len(str(node.get("value") or ""))
+        if used > limit and kept:
+            break
+        kept.append(node)
+    if len(kept) < len(nodes):
+        data["omitted_nodes"] = data.get("omitted_nodes", 0) + len(nodes) - len(kept)
+        data["truncated"] = True
+        data["nodes"] = kept
 
 
 async def observe(
@@ -409,9 +459,14 @@ async def observe(
     store_screenshot: bool = False,
     exclude_urls: list[str] | None = None,
     since_snapshot_id: str | None = None,
+    max_text: int = 0,
     ctx: Context | None = None,
 ) -> str:
     """Observe the page as accessibility tree or semantic snapshot (capability ``agent.semantic``, READY).
+
+    ``scope`` ``dialog``, ``main``, ``form`` or ``table`` returns only the nodes inside the first
+    matching region (an accessibility view, whatever ``mode`` says); if the page has none, the
+    result is empty with ``scope_found: false``. ``max_text`` caps the characters of node text.
 
     Backed by the same engine as ``POST /agent/observe``.
 
@@ -450,17 +505,26 @@ async def observe(
             if isinstance(pinned, str):
                 return pinned  # tool_error envelope (unknown tab / unreachable)
             target = pinned
-        if mode.lower() in {"accessibility", "ax"}:
+        region = (scope or "page").lower().strip()
+        if region in {"viewport", "all"}:
+            region = "page"
+        if mode.lower() in {"accessibility", "ax"} or region != "page":
             snap = await _capture_accessibility_snapshot(
-                scope=scope,
+                scope=region,
                 include=None, interactive_only=interactive_only,
                 include_hidden=include_hidden,
                 target=target,
             )
             data = snap.as_dict(max_nodes=min(max(max_nodes, 1), 1000))
+            if region != "page":
+                data["scope"] = region
+                data["scope_found"] = bool(snap.nodes)
+                if not snap.nodes:
+                    data["note"] = f"the page has no {region} region right now"
+            _cap_node_text(data, max_text if max_text > 0 else (4000 if region != "page" else 0))
         else:
             snap = await _capture_agent_snapshot(condensed, target=target)
-            data = paginate_snapshot(snap, 6000, max_nodes, None)
+            data = paginate_snapshot(snap, max_text if max_text > 0 else 6000, max_nodes, None)
         if include_network and target is not None:
             try:
                 await target.start_network_monitoring()
@@ -638,8 +702,43 @@ async def close_tab(id: str, ctx: Context | None = None) -> str:
     return json_dumps(await run_op("close_tab", target.close_tab, id))
 
 
-async def session_status(ctx: Context | None = None) -> str:
+async def _tidy(kinds: set[str], apply: bool) -> dict:
+    """List (or, with ``apply``, remove) expired sessions and stray about:blank tabs."""
+    from main import _session_mgr
+
+    report: dict = {"applied": apply}
+    if "sessions" in kinds:
+        expired = [s["session_id"] for s in _session_mgr.list_sessions() if s.get("expired")]
+        removed = _session_mgr.remove_expired() if apply else []
+        report["sessions"] = {"expired": expired, "removed": removed}
+    if "tabs" in kinds:
+        target, _ = await _target()
+        own = _MCP_SESSION.get("session")
+        keep = {own.tab_id} if own is not None else set()
+        tabs = await target.get_tabs()
+        # Only empty about:blank tabs; never this client's tab, the active tab, or the last tab.
+        stray = [t["id"] for t in tabs
+                 if (t.get("url") or "about:blank") == "about:blank" and (t.get("title") or "about:blank") == "about:blank"
+                 and t["id"] not in keep and not t.get("active")]
+        stray = stray[: max(len(tabs) - 1, 0)]
+        closed = []
+        if apply:
+            for tab_id in stray:
+                try:
+                    await target.close_tab(tab_id)
+                    closed.append(tab_id)
+                except Exception as exc:  # noqa: BLE001 — a tab that is already gone is fine
+                    logger.debug("tidy: closing %s failed: %s", tab_id, exc)
+        report["tabs"] = {"blank": stray, "closed": closed}
+    return report
+
+
+async def session_status(tidy: str = "", apply: bool = False, ctx: Context | None = None) -> str:
     """Return session persistence status (capability ``diagnostics.privacy``, READY).
+
+    ``tidy`` (``sessions``, ``tabs`` or ``all``) lists expired saved sessions and empty
+    about:blank tabs; with ``apply=true`` it deletes the sessions and closes those tabs.
+    It never touches this client's tab, the active tab, the last tab, or a tab with a page.
 
     Reads ``_session_mgr.list_sessions()`` directly — no CDP dependency; does
     NOT route through ``run_op`` (spec §5.8). Built with the local envelope
@@ -650,13 +749,21 @@ async def session_status(ctx: Context | None = None) -> str:
     if ctx is not None:
         await ctx.info("reading session persistence status")
     try:
-        sessions = _session_mgr.list_sessions()
+        kinds = {"sessions", "tabs"} if tidy == "all" else ({tidy} if tidy in {"sessions", "tabs"} else set())
+        if tidy and not kinds:
+            return tool_error("session_status", "invalid_params", "tidy must be sessions|tabs|all")
+        tidied = await _tidy(kinds, apply) if kinds else None
+        every = _session_mgr.list_sessions()
+        sessions = [s for s in every if not s.get("expired")]
         own = _MCP_SESSION.get("session")
         return tool_result(
             "session_status",
             {
                 "sessions": sessions,
                 "total": len(sessions),
+                # Saved sessions past their timeout; hidden from the list. Remove them with tidy.
+                "expired_sessions": len(every) - len(sessions),
+                **({"tidy": tidied} if tidied is not None else {}),
                 # This MCP client's own tab; None until the first browser call.
                 "mcp_tab_id": own.tab_id if own is not None else None,
                 # How many times the own tab was lost and replaced by a fresh one.
@@ -2028,9 +2135,13 @@ async def browser_take_screenshot(
     scope: str = "viewport",
     selector: str | None = None,
     quality: int = 80,
+    inline: bool = False,
     ctx = None,
 ) -> str:
-    """Screenshots: viewport, full page, or a single component (capability ``browser.core``, READY)."""
+    """Screenshots: viewport, full page, or a single component (capability ``browser.core``, READY).
+
+    The image is written to a file and the result carries its ``path``; ``inline=true`` adds the base64.
+    """
     if ctx is not None:
         await ctx.info(f"browser_take_screenshot scope={scope}")
     try:
@@ -2049,6 +2160,8 @@ async def browser_take_screenshot(
         if not isinstance(out, dict):
             return tool_error("browser_take_screenshot", "failed", str(out))
         data = out.get("data", out) if isinstance(out, dict) else out
+        if isinstance(data, dict):
+            data = _screenshot_to_file(data, inline)
         return tool_result("browser_take_screenshot", data)
     except Exception as exc:  # noqa: BLE001
         return tool_error("browser_take_screenshot", "failed", str(exc))
