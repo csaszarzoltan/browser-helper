@@ -183,6 +183,9 @@ async def _mcp_session():
 
     sess = _MCP_SESSION["session"]
     if sess is not None and sess.session_id in session_registry._sessions and await _session_tab_alive(sess):
+        # A tool call is use: refresh last_seen, or the idle reaper destroys the session (and
+        # closes its tab) one TTL after it was minted, whatever the agent is doing.
+        sess.touch()
         _set_current_session(sess)
         return sess, (lambda op, method, *a, **kw: run_op(op, method, *a, sess_override=sess, **kw))
     if sess is not None:

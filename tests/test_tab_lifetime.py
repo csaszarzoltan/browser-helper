@@ -83,3 +83,24 @@ def test_the_orphan_sweep_closes_only_blank_tabs(monkeypatch):
     reg._sessions["s"] = SimpleNamespace(tab_id="owned")
     assert asyncio.run(reg._reap_orphan_tabs("http://127.0.0.1:9")) == 1
     assert closed == ["blank"]
+
+
+def test_an_mcp_session_in_use_is_refreshed_and_not_reaped_as_idle(monkeypatch):
+    # MCP calls reuse their session without SessionRegistry.get(), so last_seen stayed at
+    # creation time and the idle reaper closed the agent's tab 30 minutes later, mid-task.
+    import time
+
+    import main
+    from mcp_server import tools
+    from session_registry import Session, SessionRegistry
+
+    monkeypatch.delenv("BH_TEST_NO_CHROME", raising=False)
+    reg = SessionRegistry(ttl=1800.0, max_sessions=15)
+    sess = Session(session_id="mcp", client=_Client(listed=True, silent=False), tab_id="t1",
+                   last_seen=time.monotonic() - 3600)
+    reg._sessions["mcp"] = sess
+    monkeypatch.setattr(main, "session_registry", reg)
+    monkeypatch.setitem(tools._MCP_SESSION, "session", sess)
+    asyncio.run(tools._mcp_session())
+    assert time.monotonic() - sess.last_seen < 60
+    assert asyncio.run(reg.cleanup()) == 0 and "mcp" in reg._sessions
