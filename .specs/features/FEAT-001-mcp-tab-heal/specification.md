@@ -14,7 +14,6 @@ hívás újracsatlakozik és adatot ad, kézi beavatkozás nélkül.
 
 - User-report: "3 maradék bug" (2026-09-02) — Hiba 1
   (`get_page_text`/`browser_get_accessibility_tree` → `Not connected`).
-- VERITAS-pilot: `.specs/policy/project-policy.md`.
 
 ## 3. Scope / Non-scope
 

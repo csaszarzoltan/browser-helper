@@ -60,4 +60,4 @@
 
 ## 16. Definition of Done
 
-(lásd `.specs/policy/project-policy.md` — itt csak az eltérés, ha van)
+(itt csak az eltérés, ha van)

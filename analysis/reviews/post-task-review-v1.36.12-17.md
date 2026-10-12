@@ -68,7 +68,7 @@ wire-protocol defect. That is a `verification` failure, and it was mine.
 
 ## PART 1d — load-bearingness: PASS
 
-The opposite of the Veritas zero-caller class. The full production chain exists:
+The opposite of the zero-caller class. The full production chain exists:
 
 ```
 src/session_registry.py:282   client.enable_behavioral(HumanProfile.from_session(sid))
