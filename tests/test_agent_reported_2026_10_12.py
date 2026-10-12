@@ -165,3 +165,31 @@ def test_session_status_is_not_stale_when_the_checkout_has_not_moved(monkeypatch
     monkeypatch.setattr(tools, "_repo_head", lambda: (tools._CODE_COMMIT, 0))
     build = json.loads(asyncio.run(tools.session_status()))["data"]["build"]
     assert build["stale"] is False
+
+
+def test_screenshot_returns_a_file_path_and_no_copy_of_the_image(monkeypatch, tmp_path):
+    import main
+    from mcp_server import tools
+
+    class _Store:
+        root = tmp_path
+
+        def put(self, raw, mime, ext, meta):
+            return {"artifact_id": "art_test", "size_bytes": len(raw), "expires_at": 0}
+
+    class _Target:
+        async def screenshot(self, **_):
+            return {"status": "ok", "data": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="}
+
+    async def fake_target():
+        async def run_op(op, fn, *args, **kwargs):
+            return main.api_success(op, await fn(*args, **kwargs))
+
+        return _Target(), run_op
+
+    monkeypatch.setattr(main, "artifact_store", _Store())
+    monkeypatch.setattr(tools, "_target", fake_target)
+    raw = asyncio.run(tools.screenshot())
+    out = json.loads(raw)
+    assert out["data"]["path"].endswith("art_test.jpg")
+    assert "QUJD" not in raw  # neither data nor the deprecated result alias carries the image

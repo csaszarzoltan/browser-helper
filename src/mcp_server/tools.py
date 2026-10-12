@@ -496,6 +496,9 @@ async def screenshot(inline: bool = False, ctx: Context | None = None) -> str:
     res = await run_op("screenshot", target.screenshot)
     if isinstance(res, dict) and res.get("status") == "ok" and isinstance(res.get("data"), dict):
         res["data"] = _screenshot_to_file(res["data"], inline)
+        # api_success also sets the deprecated "result" alias to the same object; it must
+        # follow the file-only copy, or the base64 image is sent twice.
+        res["result"] = res["data"]
     return json_dumps(res)
 
 
