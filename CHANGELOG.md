@@ -4,6 +4,13 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **A button inside a disabled fieldset is refused (2026-10-13).** The disabled check read only the element's own
+  `disabled` attribute, so a button inside `<fieldset disabled>` was clicked, fired no event and reported `ok`. The
+  click (selector, text and backend node) and the page listing now use `:disabled`, which covers the fieldset.
+- **The local headless fallback can be stopped (2026-10-13).** `_launch_local_headless` kept no handle to the Chrome it
+  started and piped its stderr without reading it, so nothing could stop it and a full pipe would block it.
+  `FallbackChain.close_local_session` stops it now, and stderr goes to `DEVNULL`. No production path calls the
+  fallback yet; its session URL is still a placeholder (see the note in `session_pool.py`).
 - **`act` fill says whether the value stuck (2026-10-13).** Each field was read back, but the act result did not say
   whether every field kept its value, so a number field refusing `abc` came back as a plain success. The result now
   carries `verified` and `not_kept`.
