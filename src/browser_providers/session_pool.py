@@ -4,6 +4,7 @@ Manages warm cloud browser sessions with auto-scaling, TTL expiry,
 cost tracking, and fallback chain for provider failures.
 """
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 
@@ -223,6 +224,8 @@ class FallbackChain:
                        Last entry should be a local headless fallback.
         """
         self._providers = providers
+        # Local Chrome processes started by _launch_local_headless, by session id.
+        self._local_processes: dict[str, asyncio.subprocess.Process] = {}
 
     async def execute(self, profile: str | None = None) -> FallbackResult:
         """Execute the fallback chain.
@@ -316,8 +319,6 @@ class FallbackChain:
         Raises:
             RuntimeError: If Chrome/Chromium is not installed.
         """
-        import asyncio
-
         chrome_candidates = [
             "google-chrome",
             "google-chrome-stable",
@@ -353,18 +354,23 @@ class FallbackChain:
         if profile:
             cmd.extend([f"--user-data-dir=/tmp/chrome-{profile}"])
 
+        # stderr is not read, so a pipe would fill and block Chrome; it goes to DEVNULL.
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
+        session_id = f"local-{process.pid}"
+        self._local_processes[session_id] = process
 
         # Wait briefly for CDP port
         await asyncio.sleep(1.5)
 
         now = time.time()
+        # Placeholder: Chrome picks its own port (--remote-debugging-port=0) and stderr is not read,
+        # so this is not the URL of the started browser. Nothing in production uses this path yet.
         return ProviderSession(
-            session_id=f"local-{process.pid}",
+            session_id=session_id,
             provider="local-headless",
             cdp_url="ws://127.0.0.1:9222/devtools/browser",
             created_at=now,
@@ -372,6 +378,23 @@ class FallbackChain:
             warm=False,
             cost_estimate=0.0,
         )
+
+    async def close_local_session(self, session_id: str) -> bool:
+        """Stop the local Chrome that _launch_local_headless started for *session_id*.
+
+        Returns False when no such process is tracked (never started, or already closed).
+        """
+        process = self._local_processes.pop(session_id, None)
+        if process is None:
+            return False
+        if process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+        return True
 
 
 def _get_provider_name(provider: BaseProvider) -> str:
