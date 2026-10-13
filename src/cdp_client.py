@@ -1503,11 +1503,14 @@ class CDPClient:
         instead of the first. Useful for lists of identical buttons
         (e.g. "Edit", "Delete" in a table).
 
+        A disabled match returns ``code: "not_actionable"`` and is not clicked,
+        in either mode: a click on a disabled button fires no event, so reporting
+        it as done was a false success.
+
         With *exact* the text must equal the element's name (``aria-label``,
         then its text, then ``value`` or ``title``), not be a substring of it,
         and it must match one visible element: a second match returns
-        ``code: "ambiguous"`` and a disabled one ``code: "not_actionable"``,
-        and neither is clicked. ``act`` uses this for a target it resolved from
+        ``code: "ambiguous"``. ``act`` uses this for a target it resolved from
         an observe snapshot, so the click lands on the element that was listed.
         """
         await self._activate_current()
@@ -1587,7 +1590,7 @@ class CDPClient:
           error: matches.length + " visible elements are named " + JSON.stringify(target) + "; pass nth or a selector"}});
       }}
       const el = matches[nth];
-      if (exact && (el.disabled || el.getAttribute("aria-disabled") === "true")) {{
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") {{
         return JSON.stringify({{status: "error", code: "not_actionable",
           error: "element is disabled: " + JSON.stringify(target)}});
       }}
