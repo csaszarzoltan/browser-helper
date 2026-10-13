@@ -18,6 +18,7 @@ import logging
 import math
 import random
 import time
+from collections import deque
 from typing import Any, ClassVar
 
 import httpx
@@ -25,6 +26,10 @@ import websockets
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger("browser-helper.cdp")
+
+#: Newest Network.* events kept per tab. Monitoring stays on until the connection closes, and a
+#: request adds about four events, so an unbounded list grew by about 2 KB per request.
+NETWORK_LOG_MAX = 2000
 
 
 class CDPError(Exception):
@@ -164,7 +169,7 @@ class CDPClient:
         # _active_tab_id may temporarily drift (cross-origin targetCreated);
         # _ws_tab_id always reflects the real WS endpoint.
         self._ws_tab_id: str | None = None
-        self._network_entries: list[dict] = []
+        self._network_entries: deque[dict] = deque(maxlen=NETWORK_LOG_MAX)
         self._network_monitoring = False
         self._console_entries: list[dict] = []
         self._console_monitoring = False
@@ -342,7 +347,7 @@ class CDPClient:
         self._connected = True
         self._message_id = 0
         self._pending = {}
-        self._network_entries = []
+        self._network_entries = deque(maxlen=NETWORK_LOG_MAX)
 
         asyncio.create_task(self._listener())
 
@@ -3071,7 +3076,7 @@ class CDPClient:
         """Start tracking network requests."""
         if not self._network_monitoring:
             await self._send_command("Network.enable")
-            self._network_entries = []
+            self._network_entries = deque(maxlen=NETWORK_LOG_MAX)
             self._network_monitoring = True
         return {"status": "ok", "monitoring": True}
 
@@ -3089,7 +3094,7 @@ class CDPClient:
 
     async def clear_network_log(self) -> dict:
         """Clear network log."""
-        self._network_entries = []
+        self._network_entries = deque(maxlen=NETWORK_LOG_MAX)
         return {"status": "ok"}
 
     # ─── NEW: Request interception (mock API) ─────────────────────

@@ -4,6 +4,10 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **The network log of a tab is bounded (2026-10-13).** Once network monitoring was on, which
+  `get_network_requests` and `observe(include_network)` do and nothing turns off, every `Network.*` event of the tab
+  was kept until the connection closed: about 2 KB per request, so an MCP process on a busy tab grew for days. It now
+  keeps the newest 2000 events per tab (`NETWORK_LOG_MAX`, about 500 requests).
 - **Agent-reported defects on the MCP tool surface (2026-10-12).** Typing dropped or reordered characters: the
   default human-typing path sent punctuation with a virtual key code that Chrome reads as Delete or an arrow key
   (`https://github.com/a.b` came back as `ehfttps://githubcom/ab`); it no longer does, and `type` reads the field back
