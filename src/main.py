@@ -999,6 +999,7 @@ class AgentTarget(BaseModel):
     selector: str | None = None
     text: str | None = None
     label: str | None = None
+    nth: int | None = None  # 0-based index among the matches of a text target
 
 
 class AgentActionRequest(BaseModel):
@@ -5667,6 +5668,11 @@ async def agent_act(request: Request, body: AgentActionRequest):
                 )
             result = await tc.navigate(_nav_url)
         elif action == "click":
+            # within (a CSS container) and nth scope a text click. On a selector or backend target they
+            # would be ignored silently, so they are refused there.
+            scoped = target.get("within") is not None or target.get("nth") is not None
+            if scoped and (target.get("backend_node_id") or target.get("selector")):
+                raise ValueError("within and nth apply to a text target; they cannot scope a selector or backend_node_id click")
             if target.get("backend_node_id"):
                 result = await tc.click_backend_node(target["backend_node_id"])
                 if isinstance(result, dict) and result.get("code") == "not_actionable":
@@ -5725,6 +5731,8 @@ async def agent_act(request: Request, body: AgentActionRequest):
                     raise RuntimeError(f"click selector {sel!r} failed: {msg} — candidates: {cands}")
             else:
                 text = target.get("text") or target.get("name") or target.get("label")
+                if not text and scoped:
+                    raise ValueError("within and nth apply to a text target; this target has no text")
                 if not text:
                     # 2026-09-02 ref-parity fix: a ref that resolved to nothing
                     # (stale snapshot, GC'd ax cache) said "click requires an
@@ -5747,7 +5755,12 @@ async def agent_act(request: Request, body: AgentActionRequest):
                 else:
                     # A target resolved from an observe snapshot is clicked by its listed name,
                     # matched exactly, so "Add" never lands on "Address" and a duplicate is refused.
-                    result = await tc.click_by_text(text, body.timeout, exact=bool(target.get("element_id")))
+                    result = await tc.click_by_text(
+                        text, body.timeout,
+                        container_selector=target.get("within"),
+                        nth=int(target.get("nth") or 0),
+                        exact=bool(target.get("element_id")),
+                    )
                 if isinstance(result, dict) and result.get("code") == "ambiguous":
                     raise AmbiguousTargetError(str(result.get("error")))
                 if isinstance(result, dict) and result.get("code") == "not_actionable":

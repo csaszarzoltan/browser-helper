@@ -507,6 +507,9 @@ BH_CHROME_PROFILE_DIR=$HOME/.browser-helper/agent-profile BH_CHROME_DEBUG_PORT=9
   before it is listed in `data.verification.already_visible`.
 - `act` with an `element_id` from observe clicks the element by its listed name, matched exactly (its aria-label, then
   its text). A name that matches two visible elements returns `ambiguous_target` instead of clicking the first.
+- `act` click by `text` (or `element_id`) takes `within` (a CSS container selector) and `nth` (0-based index): `within`
+  looks only inside that container, and `nth` picks one of several identical buttons or suggestions. On a `selector`
+  or `backend_node_id` target they are refused with a 422, not ignored.
 - `act` with `fill` sets `data.result.verified` to `true` only when every field holds the value it was given. Fields
   that do not are listed in `data.result.not_kept` (a number field refusing `abc` is one example).
 

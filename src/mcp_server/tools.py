@@ -672,6 +672,8 @@ async def act(
     timeout: int = 10,
     expression: str | None = None,
     expect: dict | None = None,
+    within: str | None = None,
+    nth: int | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Act on the page: click, fill, select, wait, navigate (capability ``agent.semantic``, READY).
@@ -703,6 +705,7 @@ async def act(
         k: v for k, v in {
             "snapshot_id": snapshot_id, "ref": ref, "element_id": element_id,
             "selector": selector, "text": text, "label": label, "url": url, "value": value,
+            "within": within, "nth": nth,
         }.items() if v is not None
     }
     payload: dict = {"action": action}

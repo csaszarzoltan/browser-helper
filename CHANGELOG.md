@@ -4,6 +4,10 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **`act` click by text can be scoped and can pick a match (2026-10-13).** `click_by_text` took `container_selector`
+  and `nth`, but `act` dropped them, and its `within` field was read by nothing: an agent that set it got a click on
+  the first match on the page. `within` (a container selector) and `nth` (0-based index) now reach the click, and the
+  MCP `act` tool takes both. On a `selector` or `backend_node_id` target they are refused (422), not ignored.
 - **A button inside a disabled fieldset is refused (2026-10-13).** The disabled check read only the element's own
   `disabled` attribute, so a button inside `<fieldset disabled>` was clicked, fired no event and reported `ok`. The
   click (selector, text and backend node) and the page listing now use `:disabled`, which covers the fieldset.
