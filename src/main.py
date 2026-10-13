@@ -5775,6 +5775,14 @@ async def agent_act(request: Request, body: AgentActionRequest):
                 fields = [{"label": label, "value": body.value}]
             if fields:
                 result = await tc.smart_form_fill(fields, body.timeout)
+                # Each field carries its own read-back; say here whether every one kept its value,
+                # so a fill that did not stick is not reported as a plain success.
+                field_results = ((result.get("result") or {}).get("results") or []) if isinstance(result, dict) else []
+                not_kept = [r.get("field") for r in field_results if r.get("status") == "error" or r.get("verified") is not True]
+                if isinstance(result, dict):
+                    result["verified"] = bool(field_results) and not not_kept
+                    if not_kept:
+                        result["not_kept"] = not_kept
         elif action == "select":
             label = target.get("label") or target.get("name") or target.get("text")
             if not label or body.option is None:

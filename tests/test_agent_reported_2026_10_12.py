@@ -193,3 +193,34 @@ def test_screenshot_returns_a_file_path_and_no_copy_of_the_image(monkeypatch, tm
     out = json.loads(raw)
     assert out["data"]["path"].endswith("art_test.jpg")
     assert "QUJD" not in raw  # neither data nor the deprecated result alias carries the image
+
+
+# Fill: each field is read back, but the act result must also say whether every field kept its value.
+
+def _act_fill(monkeypatch, field_results):
+    from unittest.mock import AsyncMock
+
+    from fastapi.testclient import TestClient
+
+    import main
+
+    monkeypatch.setattr(type(main.client), "is_connected", property(lambda self: True))
+    fill = AsyncMock(return_value={"status": "ok", "fields": [{"selector": "#email", "value": "a@b.test"}],
+                                   "result": {"fields_filled": len(field_results), "results": field_results}})
+    monkeypatch.setattr(main.client, "smart_form_fill", fill, raising=False)
+    response = TestClient(main.app).post("/agent/act", json={
+        "action": "fill", "target": {"selector": "#email"}, "value": "a@b.test", "observe_after": False})
+    assert response.status_code == 200
+    return response.json()["data"]["result"]
+
+
+def test_act_fill_reports_a_field_that_did_not_keep_its_value(monkeypatch):
+    result = _act_fill(monkeypatch, [{"field": "#email", "status": "ok", "verified": False, "value_after": "a@b"}])
+    assert result["verified"] is False
+    assert result["not_kept"] == ["#email"]
+
+
+def test_act_fill_reports_all_fields_kept(monkeypatch):
+    result = _act_fill(monkeypatch, [{"field": "#email", "status": "ok", "verified": True, "value_after": "a@b.test"}])
+    assert result["verified"] is True
+    assert "not_kept" not in result

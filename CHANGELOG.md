@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **`act` fill says whether the value stuck (2026-10-13).** Each field was read back, but the act result did not say
+  whether every field kept its value, so a number field refusing `abc` came back as a plain success. The result now
+  carries `verified` and `not_kept`.
+- **`click_by_text` refuses a disabled match in both modes (2026-10-13).** Only the exact mode checked for a disabled
+  element, so `act` by text reported `ok` for a click on a disabled button that fired no event. Both modes return
+  `not_actionable` now.
 - **The network log of a tab is bounded (2026-10-13).** Once network monitoring was on, which
   `get_network_requests` and `observe(include_network)` do and nothing turns off, every `Network.*` event of the tab
   was kept until the connection closed: about 2 KB per request, so an MCP process on a busy tab grew for days. It now
