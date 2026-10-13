@@ -1590,7 +1590,7 @@ class CDPClient:
           error: matches.length + " visible elements are named " + JSON.stringify(target) + "; pass nth or a selector"}});
       }}
       const el = matches[nth];
-      if (el.disabled || el.getAttribute("aria-disabled") === "true") {{
+      if (el.matches(':disabled') || el.getAttribute("aria-disabled") === "true") {{
         return JSON.stringify({{status: "error", code: "not_actionable",
           error: "element is disabled: " + JSON.stringify(target)}});
       }}
@@ -2124,7 +2124,7 @@ class CDPClient:
             f"  el.scrollIntoView({{behavior: 'instant', block: 'center'}});"
             f"  const rect = bhTopRect(el);"
             f"  return {{'status': 'ok', 'x': rect.x + rect.width/2, 'y': rect.y + rect.height/2, 'tag': el.tagName,"
-            f" 'disabled': !!(el.disabled || el.getAttribute('aria-disabled') === 'true')}};"
+            f" 'disabled': !!(el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true')}};"
             f"}})()"
         )
         eval_result = await self.evaluate(js)
@@ -3883,7 +3883,7 @@ class CDPClient:
         result = await self._send_command("Runtime.callFunctionOn", {
             "objectId": object_id,
             "functionDeclaration": (
-                "function(){if(this.disabled||this.getAttribute('aria-disabled')==='true'){return 'disabled';}"
+                "function(){if(this.matches(':disabled')||this.getAttribute('aria-disabled')==='true'){return 'disabled';}"
                 "this.scrollIntoView({block:'center'});this.click();return true;}"
             ),
             "returnByValue": True,
@@ -3974,7 +3974,7 @@ class CDPClient:
       y: Math.round(r.y + r.height/2),
       w: Math.round(r.width),
       h: Math.round(r.height),
-      disabled: el.disabled === true,
+      disabled: el.matches(':disabled'),
       in_modal: inModal,
     });
   });
@@ -4441,7 +4441,7 @@ class CDPClient:
       y: Math.round(r.y + r.height / 2),
       w: Math.round(r.width),
       h: Math.round(r.height),
-      disabled: el.disabled === true,
+      disabled: el.matches(':disabled'),
     });
   });
 
