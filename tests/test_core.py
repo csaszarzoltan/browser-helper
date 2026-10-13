@@ -93,7 +93,7 @@ class TestInit:
         assert client.is_connected is False
         assert client.tabs_count == 0
         assert client._network_monitoring is False
-        assert client._network_entries == []
+        assert len(client._network_entries) == 0
 
 
 # ─── Connection tests (mock) ────────────────────────────────────────
@@ -216,7 +216,7 @@ class TestNewFeatures:
 
     def test_network_monitoring_initially_off(self, client):
         assert client._network_monitoring is False
-        assert client._network_entries == []
+        assert len(client._network_entries) == 0
 
     @pytest.mark.asyncio
     async def test_network_stop_when_not_started(self, client):
@@ -228,8 +228,8 @@ class TestNewFeatures:
     @pytest.mark.asyncio
     async def test_clear_network_log(self, client):
         """Should not crash even if empty."""
-        n = client._network_entries  # just ensure attribute exists
-        assert isinstance(n, list)
+        await client.clear_network_log()
+        assert len(client._network_entries) == 0
 
 
 # ─── Edge cases ─────────────────────────────────────────────────────
