@@ -13,8 +13,11 @@ All notable changes to browser-helper will be documented in this file.
   click (selector, text and backend node) and the page listing now use `:disabled`, which covers the fieldset.
 - **The local headless fallback can be stopped (2026-10-13).** `_launch_local_headless` kept no handle to the Chrome it
   started and piped its stderr without reading it, so nothing could stop it and a full pipe would block it.
-  `FallbackChain.close_local_session` stops it now, and stderr goes to `DEVNULL`. No production path calls the
-  fallback yet; its session URL is still a placeholder (see the note in `session_pool.py`).
+  `FallbackChain.close_local_session` stops it now, and stderr goes to `DEVNULL`. The session URL was a fixed
+  `ws://127.0.0.1:9222` placeholder, and a launch without a profile used the person's default Chrome profile. Chrome now
+  gets a port of its own and the session names the DevTools socket it answers on, and a launch without a profile gets a
+  temporary one that is removed on close. Closing stops the whole Chrome process group. No production path calls the
+  fallback yet.
 - **`act` fill says whether the value stuck (2026-10-13).** Each field was read back, but the act result did not say
   whether every field kept its value, so a number field refusing `abc` came back as a plain success. The result now
   carries `verified` and `not_kept`.

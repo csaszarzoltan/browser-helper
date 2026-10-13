@@ -5,10 +5,55 @@ cost tracking, and fallback chain for provider failures.
 """
 
 import asyncio
+import os
+import shutil
+import signal
+import socket
+import tempfile
 import time
 from dataclasses import dataclass, field
 
+import httpx
+
 from browser_providers.base import BaseProvider, ProviderHealth, ProviderSession
+
+
+def _signal_group(pgid: int, sig: int) -> None:
+    """Send *sig* to a process group, if any member is still alive."""
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass
+
+
+async def _remove_profile(path: str) -> None:
+    """Remove a profile directory. Chrome can write one more file into it while it shuts down, so retry briefly."""
+    for _ in range(20):
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(path):
+            return
+        await asyncio.sleep(0.1)
+
+
+def _free_local_port() -> int:
+    """A TCP port on 127.0.0.1 that nothing is listening on right now."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+async def _wait_for_devtools(port: int, timeout: float = 15.0) -> str:
+    """Return the browser's DevTools WebSocket URL once Chrome answers on *port*."""
+    deadline = time.monotonic() + timeout
+    async with httpx.AsyncClient(timeout=2.0) as client:
+        while True:
+            try:
+                resp = await client.get(f"http://127.0.0.1:{port}/json/version")
+                return resp.json()["webSocketDebuggerUrl"]
+            except (httpx.HTTPError, KeyError, ValueError):
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"Chrome did not open DevTools on port {port} within {timeout:.0f}s") from None
+                await asyncio.sleep(0.2)
 
 
 @dataclass
@@ -224,8 +269,9 @@ class FallbackChain:
                        Last entry should be a local headless fallback.
         """
         self._providers = providers
-        # Local Chrome processes started by _launch_local_headless, by session id.
-        self._local_processes: dict[str, asyncio.subprocess.Process] = {}
+        # Local Chrome started by _launch_local_headless, by session id: the process and the
+        # profile directory it owns (None when the profile belongs to the caller).
+        self._local_processes: dict[str, tuple[asyncio.subprocess.Process, str | None]] = {}
 
     async def execute(self, profile: str | None = None) -> FallbackResult:
         """Execute the fallback chain.
@@ -343,36 +389,48 @@ class FallbackChain:
         if not chrome_path:
             raise RuntimeError("Local headless Chrome not found. Install Chrome/Chromium.")
 
-        # Build command
+        # A profile of its own: without --user-data-dir Chrome opens the person's default profile,
+        # where it would hand off to the browser they already run.
+        owned_dir: str | None = None
+        if profile:
+            user_dir = f"/tmp/chrome-{profile}"
+        else:
+            owned_dir = tempfile.mkdtemp(prefix="bh-local-")
+            user_dir = owned_dir
+
+        # A port we choose, so the session can name the DevTools socket Chrome listens on.
+        port = _free_local_port()
         cmd = [
             chrome_path,
             "--headless",
             "--no-sandbox",
             "--disable-gpu",
-            "--remote-debugging-port=0",
+            "--no-first-run",
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_dir}",
         ]
-        if profile:
-            cmd.extend([f"--user-data-dir=/tmp/chrome-{profile}"])
 
-        # stderr is not read, so a pipe would fill and block Chrome; it goes to DEVNULL.
+        # stderr is not read, so a pipe would fill and block Chrome; it goes to DEVNULL. Chrome leads
+        # its own process group, so closing the session can stop its helper processes too.
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
         session_id = f"local-{process.pid}"
-        self._local_processes[session_id] = process
-
-        # Wait briefly for CDP port
-        await asyncio.sleep(1.5)
+        self._local_processes[session_id] = (process, owned_dir)
+        try:
+            cdp_url = await _wait_for_devtools(port)
+        except Exception:
+            await self.close_local_session(session_id)
+            raise
 
         now = time.time()
-        # Placeholder: Chrome picks its own port (--remote-debugging-port=0) and stderr is not read,
-        # so this is not the URL of the started browser. Nothing in production uses this path yet.
         return ProviderSession(
             session_id=session_id,
             provider="local-headless",
-            cdp_url="ws://127.0.0.1:9222/devtools/browser",
+            cdp_url=cdp_url,
             created_at=now,
             last_active=now,
             warm=False,
@@ -382,18 +440,25 @@ class FallbackChain:
     async def close_local_session(self, session_id: str) -> bool:
         """Stop the local Chrome that _launch_local_headless started for *session_id*.
 
-        Returns False when no such process is tracked (never started, or already closed).
+        Also removes the profile directory that launch created for it. Returns False when no
+        such process is tracked (never started, or already closed).
         """
-        process = self._local_processes.pop(session_id, None)
-        if process is None:
+        tracked = self._local_processes.pop(session_id, None)
+        if tracked is None:
             return False
+        process, owned_dir = tracked
+        group = process.pid
         if process.returncode is None:
-            process.terminate()
+            _signal_group(group, signal.SIGTERM)
             try:
                 await asyncio.wait_for(process.wait(), timeout=5)
             except TimeoutError:
-                process.kill()
+                _signal_group(group, signal.SIGKILL)
                 await process.wait()
+        # The browser has exited; whatever is left of its group is a helper that may still write.
+        _signal_group(group, signal.SIGKILL)
+        if owned_dir is not None:
+            await _remove_profile(owned_dir)
         return True
 
 
