@@ -7,6 +7,7 @@ share a single implementation.
 
 Usage::
 
+    bh doctor
     bh mcp --help
     bh memory --help
     python -m browser_helper mcp --help
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import click
 
+from browser_helper.doctor import doctor
 from mcp_server.cli import mcp
 from mcp_server.memory.cli import memory
 
@@ -25,6 +27,7 @@ def bh() -> None:
     """Browser Helper command-line interface."""
 
 
+bh.add_command(doctor)
 bh.add_command(mcp)
 bh.add_command(memory)
 

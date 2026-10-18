@@ -4,6 +4,10 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **`bh doctor` checks the Chrome connection (2026-10-18).** The service log showed about 50 "Not connected to Chrome
+  CDP" errors in 14 days, and `/ready` only said "CDP not connected". `bh doctor` checks the debug port, that Chrome
+  runs with its own `--user-data-dir` (Linux), the service's `/ready` and `API_TOKEN`, prints the fix for each, and
+  exits 1 on a FAIL. It sends two GET requests and opens no tab.
 - **Failures name themselves (2026-10-18).** In 14 days the service logged 33 x `429` on `/session/new` and 105 x `400`
   on `/agent/act` with nothing to say why. `tab_budget_exhausted` now lists who holds the slots in
   `error.details.holders` (8-character session id, idle seconds, age, URL without query). `api_error` sets an

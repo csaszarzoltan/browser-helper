@@ -62,6 +62,9 @@ curl -s http://127.0.0.1:8000/health
 
 Then open http://127.0.0.1:8000 in a browser for the dashboard.
 
+If something does not connect, run `bh doctor`. It checks the Chrome debug port, the Chrome
+profile flag, the service and `API_TOKEN`, and prints the fix for each problem. It only reads.
+
 ### 3. Docker (Linux)
 
 ```bash
