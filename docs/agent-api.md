@@ -185,6 +185,14 @@ Before execution the server observes the page again. If it changed, the action f
 
 By default a mutating action includes a fresh condensed observation in its response. Set `observe_after` to false when it is not needed.
 
+### Tabs and dialogs opened by a click
+
+A `click` result adds `opened_tabs` (a list of `{tab_id, url}`) when the click opened a new page tab. The
+session stays on its own tab; call `switch_tab` to continue in the new one. Tabs that belong to other sessions
+are not listed. It adds `dialog_open` (`{type, message}`) when a JavaScript dialog is showing, which blocks the
+page until `dialog_handle` answers it. `navigate` fails with "a JavaScript dialog is open" in that case instead
+of waiting out the timeout.
+
 ### Capture example
 
 ```json

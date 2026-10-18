@@ -5612,6 +5612,17 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
     return target.model_dump(exclude_none=True)
 
 
+async def _page_tabs(tc) -> dict[str, str] | None:
+    """Page tabs now open as {tab_id: url}, read fresh; None if Chrome cannot be asked."""
+    try:
+        http = await tc._get_http_client()
+        resp = await http.get(f"{tc.cdp_http_url}/json/list")
+        resp.raise_for_status()
+        return {t["id"]: t.get("url", "") for t in resp.json() if t.get("type") == "page"}
+    except Exception:  # noqa: BLE001 - tab reporting is best-effort
+        return None
+
+
 @app.post("/agent/act")
 async def agent_act(request: Request, body: AgentActionRequest):
     _t0 = time.monotonic()
@@ -5650,6 +5661,7 @@ async def agent_act(request: Request, body: AgentActionRequest):
                 raise StaleSnapshotError(f"Could not uniquely recover target {lookup!r}; found {len(matches)} candidates")
             target = matches[0].as_dict()
         before_ax = await _capture_accessibility_snapshot(target=tc) if body.expect else None
+        tabs_before = await _page_tabs(tc) if action == "click" else None
         if action == "navigate":
             # P1 determinism (v1.36): also accept target.url — the natural
             # guess agents kept sending ({"target": {"url": ...}}), which the
@@ -5909,6 +5921,20 @@ async def agent_act(request: Request, body: AgentActionRequest):
         else:
             return api_error("agent_act", "unknown_action", f"Unknown action: {action}", 422)
         data = {"action": action, "result": result}
+        if tabs_before is not None:
+            tabs_after = await _page_tabs(tc)
+            if tabs_after is not None:
+                skip = set(tabs_before) | session_registry.owned_tab_ids()
+                opened = [{"tab_id": i, "url": u} for i, u in tabs_after.items() if i not in skip]
+                if opened:
+                    data["opened_tabs"] = opened
+                    data["opened_tabs_hint"] = (
+                        "The click opened a new tab. This session is still on its own tab; "
+                        "switch_tab to the new one if you meant to continue there."
+                    )
+        if action == "click" and getattr(tc, "_open_dialog", None):
+            data["dialog_open"] = tc._open_dialog
+            data["dialog_hint"] = "A JavaScript dialog is open and blocks the page; answer it with dialog_handle."
         # P0-1: surface wait timing when wait_until_visible was used
         if body.wait_until_visible and target.get("selector"):
             data["wait_until_visible"] = {"selector": target["selector"], "waited_ms": round((time.monotonic() - _t0) * 1000)}

@@ -121,6 +121,13 @@ class SessionRegistry:
     def max_sessions(self) -> int:
         return self._max_sessions
 
+    def owned_tab_ids(self) -> set[str]:
+        """Tab ids that belong to a session or to the keep-warm anchor."""
+        ids = {sess.tab_id for sess in self._sessions.values()}
+        if self._anchor_tab_id:
+            ids.add(self._anchor_tab_id)
+        return ids
+
     def holders(self) -> list[dict]:
         """Who holds the open sessions, oldest idle first.
 

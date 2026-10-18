@@ -194,6 +194,8 @@ class CDPClient:
         self._tabs_cache: list[dict] = []
         self._tabs_cache_ts: float = 0
         self._tabs_cache_ttl: float = 5.0  # seconds
+        self._open_dialog: dict | None = None
+        """The JavaScript dialog the page is showing now ({type, message}), else None."""
 
     @property
     def is_connected(self) -> bool:
@@ -470,6 +472,12 @@ class CDPClient:
                             else:
                                 # External tab (another session/agent) — ignore for isolation
                                 logger.debug("CDP external targetCreated ignored: %s (ws_tab=%s)", new_id, self._ws_tab_id)
+
+                elif ev_method == "Page.javascriptDialogOpening":
+                    p = msg.get("params", {})
+                    self._open_dialog = {"type": p.get("type", ""), "message": str(p.get("message", ""))[:200]}
+                elif ev_method == "Page.javascriptDialogClosed":
+                    self._open_dialog = None
 
                 elif ev_method == "Target.targetDestroyed":
                     target_id = msg.get("params", {}).get("targetId")
@@ -812,6 +820,15 @@ class CDPClient:
         state, origin = json.loads(raw)
         return str(state), float(origin)
 
+    def _raise_if_dialog_open(self) -> None:
+        """A JavaScript dialog freezes the page, so waiting on it only times out."""
+        if self._open_dialog:
+            d = self._open_dialog
+            raise CDPError(
+                f"a JavaScript {d['type']} dialog is open ({d['message']!r}); "
+                "answer it with dialog_handle (accept or dismiss) and retry"
+            )
+
     async def _wait_for_document(self, wait_until: str, origin_before: float, timeout: float) -> dict:
         """Wait until the navigated document reaches *wait_until* or *timeout* seconds pass.
 
@@ -823,6 +840,7 @@ class CDPClient:
         started = time.monotonic()
         state: str | None = ""
         while True:
+            self._raise_if_dialog_open()
             try:
                 state, origin = await self._document_state()
             except CDPDisconnectedError:
@@ -831,6 +849,8 @@ class CDPClient:
                 state, origin = None, origin_before
             elapsed = time.monotonic() - started
             if state is None:
+                # A page blocked by a dialog cannot answer: say that, not "unreadable".
+                self._raise_if_dialog_open()
                 # Readiness cannot be read from this page. Report that instead of
                 # waiting out the timeout and calling the page slow.
                 return {"ready_state": None, "waited_ms": round(elapsed * 1000)}

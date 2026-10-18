@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **A click reports the tab or dialog it opened (2026-10-18).** `act` with `click` read the old page and reported `ok`
+  while the work moved to a popup tab, or a `confirm` froze the page. The result now carries `opened_tabs`
+  (`tab_id`, `url`; tabs of other sessions and the keep-warm anchor are left out) and `dialog_open` (`type`,
+  `message`), each with a hint (`switch_tab`, `dialog_handle`). `navigate` and the document wait raise "a JavaScript
+  dialog is open ... answer it with dialog_handle" instead of timing out as a slow page. The client tracks
+  `Page.javascriptDialogOpening` and `Page.javascriptDialogClosed`.
 - **`bh doctor` checks the Chrome connection (2026-10-18).** The service log showed about 50 "Not connected to Chrome
   CDP" errors in 14 days, and `/ready` only said "CDP not connected". `bh doctor` checks the debug port, that Chrome
   runs with its own `--user-data-dir` (Linux), the service's `/ready` and `API_TOKEN`, prints the fix for each, and
