@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **Dashboard passes a contrast and layout walk (2026-10-18).** A headless Chrome walk of the dashboard (1280 px and
+  390 px, a throwaway server on port 8890, no connection to the person's Chrome) found 15 text elements under WCAG 2.2
+  AA contrast (`#64748b` muted text), two 19 px refresh buttons, a missing favicon (a 404 in the console), and a
+  header that said "Connected" next to a page that said Chrome was disconnected. Muted text is `#94a3b8` now, small
+  buttons are 24 px high, the page has an inline favicon, and the header dot reads "Dashboard live" or "Dashboard
+  offline". After the change: 0 contrast failures, 0 console errors, 0 px horizontal overflow at 390 px.
 - **A click reports the tab or dialog it opened (2026-10-18).** `act` with `click` read the old page and reported `ok`
   while the work moved to a popup tab, or a `confirm` froze the page. The result now carries `opened_tabs`
   (`tab_id`, `url`; tabs of other sessions and the keep-warm anchor are left out) and `dialog_open` (`type`,

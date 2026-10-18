@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Browser Helper Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%277%27 fill=%27%2338bdf8%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <style>
 /* ── Reset & Base ─────────────────────────────────────────── */
@@ -33,7 +34,7 @@ body {
   color: #38bdf8; letter-spacing: -0.02em;
 }
 .dashboard-header h1 i { margin-right: 8px; color: #60a5fa; }
-.header-meta { font-size: .8rem; color: #64748b; display: flex; align-items: center; gap: 16px; }
+.header-meta { font-size: .8rem; color: #94a3b8; display: flex; align-items: center; gap: 16px; }
 .header-meta .ws-indicator { display: flex; align-items: center; gap: 6px; }
 
 .grid {
@@ -90,14 +91,14 @@ body {
 .stat .value { font-size: 1.6rem; font-weight: 700; line-height: 1.3; }
 .stat .value.green { color: #22c55e; }
 .stat .value.red { color: #ef4444; }
-.stat .label { font-size: .68rem; color: #64748b; text-transform: uppercase; letter-spacing: .05em; }
+.stat .label { font-size: .68rem; color: #94a3b8; text-transform: uppercase; letter-spacing: .05em; }
 
 /* ── Tables ────────────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: .8rem; }
 thead th {
   text-align: left; padding: 6px 8px;
-  color: #64748b; font-weight: 600; font-size: .7rem;
+  color: #94a3b8; font-weight: 600; font-size: .7rem;
   text-transform: uppercase; letter-spacing: .04em;
   border-bottom: 1px solid #2a3a4e;
   white-space: nowrap;
@@ -129,7 +130,7 @@ td .op-status { font-weight: 600; font-size: .7rem; padding: 1px 6px; border-rad
 .btn.danger:hover { background: #b91c1c; }
 .btn.warning { background: #92400e; border-color: #a16207; color: #fff; }
 .btn.warning:hover { background: #a16207; }
-.btn.sm { padding: 3px 8px; font-size: .7rem; }
+.btn.sm { padding: 3px 8px; font-size: .7rem; min-height: 24px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 
 .btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -177,7 +178,7 @@ input[type="text"] { width: 100%; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   flex: 1; min-width: 0; color: #94a3b8;
 }
-.tab-item .tab-id { color: #64748b; font-size: .68rem; margin-right: 8px; font-family: monospace; }
+.tab-item .tab-id { color: #94a3b8; font-size: .68rem; margin-right: 8px; font-family: monospace; }
 .tab-item .tab-actions { display: flex; gap: 3px; flex-shrink: 0; }
 
 /* ── Console ───────────────────────────────────────────────── */
@@ -210,7 +211,7 @@ input[type="text"] { width: 100%; }
 }
 .script-result .step { border-bottom: 1px solid #1e293b; padding: 4px 0; }
 .script-result .step:last-child { border-bottom: none; }
-.script-result .step-num { color: #64748b; margin-right: 6px; }
+.script-result .step-num { color: #94a3b8; margin-right: 6px; }
 .script-result .step-ok { color: #4ade80; }
 .script-result .step-err { color: #f87171; }
 
@@ -296,7 +297,7 @@ input[type="text"] { width: 100%; }
   <div class="header-meta">
     <span class="ws-indicator">
       <span class="dot red" id="ws-dot"></span>
-      <span id="ws-label">Disconnected</span>
+      <span id="ws-label">Dashboard offline</span>
     </span>
     <span id="uptime-label"></span>
   </div>
@@ -494,16 +495,16 @@ input[type="text"] { width: 100%; }
       </div>
 
       <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
-        <label style="font-size:.72rem;color:#64748b;font-weight:600">PROFILE DIRECTORY</label>
+        <label style="font-size:.72rem;color: #94a3b8;font-weight:600">PROFILE DIRECTORY</label>
         <input type="text" id="chrome-profile-dir" placeholder="C:\Users\...\AppData\Local\Google\Chrome\User Data\Default" />
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div>
-            <label style="font-size:.72rem;color:#64748b;font-weight:600">DEBUG PORT</label>
+            <label style="font-size:.72rem;color: #94a3b8;font-weight:600">DEBUG PORT</label>
             <input type="number" id="chrome-debug-port" placeholder="9555" />
           </div>
           <div>
-            <label style="font-size:.72rem;color:#64748b;font-weight:600">CHROME PATH (üres = auto-detect)</label>
+            <label style="font-size:.72rem;color: #94a3b8;font-weight:600">CHROME PATH (üres = auto-detect)</label>
             <input type="text" id="chrome-path" placeholder="Auto-detect" />
           </div>
         </div>
@@ -573,7 +574,7 @@ input[type="text"] { width: 100%; }
         <!-- Page Outline -->
         <div style="display:grid;grid-template-columns:1fr 0.5fr;gap:6px;align-items:end">
           <button class="btn" onclick="getPageOutline()"><i class="fas fa-list-tree"></i> Page Outline</button>
-          <span style="font-size:.65rem;color:#64748b" id="outline-count"></span>
+          <span style="font-size:.65rem;color: #94a3b8" id="outline-count"></span>
         </div>
         <div id="outline-result" style="font-size:.7rem;color:#94a3b8;max-height:120px;overflow-y:auto"></div>
       </div>
@@ -1143,11 +1144,11 @@ function renderLogTable() {
     const dur = e.duration_ms != null ? `${parseFloat(e.duration_ms).toFixed(0)}ms` : '—';
     return `<tr>
       <td style="color:#475569">${e._id || '—'}</td>
-      <td style="color:#64748b">${time}</td>
+      <td style="color: #94a3b8">${time}</td>
       <td style="color:#38bdf8;font-weight:600">${escHtml(String(e.operation || '—'))}</td>
       <td><span class="op-status ${status}">${status}</span></td>
       <td style="color:#94a3b8">${dur}</td>
-      <td style="color:#64748b;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escHtml(String(e.details || ''))}</td>
+      <td style="color: #94a3b8;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escHtml(String(e.details || ''))}</td>
     </tr>`;
   }).join('');
   document.getElementById('op-count').textContent = operationLog.length;
@@ -1320,9 +1321,9 @@ function renderCookies(cookies) {
     const secure = c.secure ? '<i class="fas fa-lock" style="color:#22c55e" title="Secure"></i>' : '—';
     return `<tr>
       <td style="font-weight:600;color:#e2e8f0">${escHtml(name)}</td>
-      <td style="color:#64748b" aria-label="Cookie value masked">••••••••</td>
-      <td style="color:#64748b">${escHtml(domain)}</td>
-      <td style="color:#64748b">${escHtml(path)}</td>
+      <td style="color: #94a3b8" aria-label="Cookie value masked">••••••••</td>
+      <td style="color: #94a3b8">${escHtml(domain)}</td>
+      <td style="color: #94a3b8">${escHtml(path)}</td>
       <td>${secure}</td>
     </tr>`;
   }).join('');
@@ -1367,7 +1368,7 @@ async function runScript() {
         return `<div class="step">
           <span class="step-num">#${i+1}</span>
           <span class="${ok ? 'step-ok' : 'step-err'}"><i class="fas fa-${ok ? 'check-circle' : 'times-circle'}"></i> ${r.operation || r.action || 'step'}</span>
-          <span style="color:#64748b">${ok ? '' : (r.error || r.details || '')}</span>
+          <span style="color: #94a3b8">${ok ? '' : (r.error || r.details || '')}</span>
         </div>`;
       }).join('');
     } else {
@@ -1486,7 +1487,7 @@ async function findElement() {
       resultEl.innerHTML = r.matches.map(m =>
         `<div style="padding:2px 0"><b>${m.tag}</b> "${m.text.substring(0, 40)}"` +
         (m.selector ? ` <code style="font-size:.65rem">${m.selector.substring(0, 60)}</code>` : '') +
-        ` <span style="color:#64748b">(${m.x},${m.y})</span></div>`
+        ` <span style="color: #94a3b8">(${m.x},${m.y})</span></div>`
       ).join('');
       toast(`<i class="fas fa-check"></i> ${r.matches.length} match(es)`, 'success');
     } else {
@@ -1582,7 +1583,7 @@ async function getPageOutline() {
           `onclick="eval('window.location.hash=\\\'${h.id||''}\\\'')" ` +
           `title="${(h.snippet||'').substring(0,100)}">` +
           `${h.text.substring(0,60)}</a>` +
-          ` <span style="color:#64748b;font-size:.6rem">(${h.x},${h.y})</span></div>`;
+          ` <span style="color: #94a3b8;font-size:.6rem">(${h.x},${h.y})</span></div>`;
       });
     });
     countEl.textContent = `${total} heading(s)`;
@@ -1707,10 +1708,10 @@ function setWSDot(connected) {
   const label = document.getElementById('ws-label');
   if (connected) {
     dot.className = 'dot green';
-    label.textContent = 'Connected';
+    label.textContent = 'Dashboard live';
   } else {
     dot.className = 'dot red';
-    label.textContent = 'Disconnected';
+    label.textContent = 'Dashboard offline';
   }
 }
 

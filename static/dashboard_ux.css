@@ -9,7 +9,7 @@
 .active-context { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid #2a3a4e; border-radius: 10px; background: #0f172a; }
 .context-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
 .context-value { font-weight: 650; }
-.context-separator { color: #475569; }
+.context-separator { color: #94a3b8; }
 .context-actions { margin-left: auto; }
 .workspace-description { color: var(--muted); margin: -4px 0 12px; font-size: .82rem; }
 .card[hidden] { display: none !important; }
@@ -101,7 +101,7 @@
 .cookie-field { display: grid; gap: 3px; }
 .cookie-field label { color: var(--muted); font-size: .7rem; font-weight: 650; }
 .cookie-summary { color: var(--muted); font-size: .72rem; padding: 7px 0; white-space: nowrap; }
-.cookie-value-mask { color: #64748b; letter-spacing: .12em; }
+.cookie-value-mask { color: #94a3b8; letter-spacing: .12em; }
 @media (max-width: 700px) { .cookie-toolbar { grid-template-columns: 1fr; } .cookie-summary { padding: 2px 0; } }
 
 /* v2.0 capability readiness and expanded execution context */
