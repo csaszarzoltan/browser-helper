@@ -63,3 +63,15 @@ async def test_wait_for_document_names_the_open_dialog_instead_of_timing_out():
     c._document_state = AsyncMock(side_effect=AssertionError("must not wait on a frozen page"))
     with pytest.raises(CDPError, match="alert dialog is open.*dialog_handle"):
         await asyncio.wait_for(c._wait_for_document("load", 0.0, 15.0), timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_navigate_refuses_at_once_while_a_dialog_is_open():
+    """Live 2026-10-18: Page.navigate itself hangs behind a confirm, so the check must come first."""
+    from cdp_client import CDPClient, CDPError
+
+    c = CDPClient()
+    c._open_dialog = {"type": "confirm", "message": "Delete?"}
+    c._send_command = AsyncMock(side_effect=AssertionError("must not send Page.navigate"))
+    with pytest.raises(CDPError, match="confirm dialog is open"):
+        await asyncio.wait_for(c.navigate("https://x.test/"), timeout=2)

@@ -875,6 +875,8 @@ class CDPClient:
         a new target (cross-origin navigation). If so, reconnect WS to the
         new target and update _ws_tab_id so the session follows the page.
         """
+        # A dialog freezes Page.navigate too: refuse at once instead of waiting out the command timeout.
+        self._raise_if_dialog_open()
         await self._activate_current()
         # Invalidate the tab cache BEFORE navigations that may change the URL
         # of an existing tab (data:/same-origin navigations keep the same tab
