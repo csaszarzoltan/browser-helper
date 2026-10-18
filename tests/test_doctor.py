@@ -111,3 +111,12 @@ def test_existing_subcommands_still_register():
     for cmd in ("mcp", "memory"):
         r = CliRunner().invoke(bh, [cmd, "--help"])
         assert r.exit_code == 0, (cmd, r.output)
+
+
+def test_cmdline_parser_reads_chromes_space_joined_argv():
+    """Found live 2026-10-18: Chrome's main process shows one space-separated string, not NUL-separated args."""
+    joined = b"/opt/google/chrome/chrome --headless=new --remote-debugging-port=9779 --user-data-dir=/p/prof about:blank"
+    nul = b"chrome\0--remote-debugging-port=9779\0--user-data-dir=/p\0"
+    assert "--remote-debugging-port=9779" in doctor_mod._parse_cmdline(joined)
+    assert "--user-data-dir=/p/prof" in doctor_mod._parse_cmdline(joined)
+    assert doctor_mod._parse_cmdline(nul) == ["chrome", "--remote-debugging-port=9779", "--user-data-dir=/p"]

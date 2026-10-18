@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -64,6 +65,15 @@ def check_chrome(host: str, port: int, timeout: float) -> tuple[Check, dict | No
     ), None
 
 
+def _parse_cmdline(raw: bytes) -> list[str]:
+    """Split a /proc cmdline into arguments.
+
+    Chrome's main process rewrites its argv into one space-separated string, so
+    splitting on NUL alone leaves a single argument and the flags are not found.
+    """
+    return [a for a in re.split(r"[\0 ]+", raw.decode("utf-8", "replace")) if a]
+
+
 def _chrome_args(port: int) -> list[str] | None:
     """Command line of the process started with this debugging port (Linux only)."""
     if not os.path.isdir("/proc"):
@@ -72,7 +82,7 @@ def _chrome_args(port: int) -> list[str] | None:
     for pid in filter(str.isdigit, os.listdir("/proc")):
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as fh:
-                args = fh.read().decode("utf-8", "replace").split("\0")
+                args = _parse_cmdline(fh.read())
         except OSError:
             continue
         if want in args:
