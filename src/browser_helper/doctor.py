@@ -45,7 +45,7 @@ def chrome_command(port: int) -> str:
 def _get_json(url: str, timeout: float) -> tuple[int, dict | None]:
     """GET *url*; return (status, body). Status 0 means nothing answered."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - fixed local URL
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8", "replace") or "null")
     except urllib.error.HTTPError as exc:
         return exc.code, None

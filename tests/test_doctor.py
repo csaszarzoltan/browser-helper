@@ -5,21 +5,22 @@ import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import ClassVar
 
 import pytest
 from click.testing import CliRunner
 
 sys.path.insert(0, "src")
 
-from browser_helper import doctor as doctor_mod  # noqa: E402
-from browser_helper.__main__ import bh  # noqa: E402
+from browser_helper import doctor as doctor_mod
+from browser_helper.__main__ import bh
 
 
 class _Handler(BaseHTTPRequestHandler):
-    seen: list = []
+    seen: ClassVar[list] = []
     ready_code = 200
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         type(self).seen.append(self.path)
         if self.path == "/json/version":
             body, code = {"Browser": "Chrome/999.0"}, 200
