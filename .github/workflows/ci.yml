@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # Some tests look for the repo's own .venv/bin/python, so build it there.
+      - name: Install into .venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev,mcp]"
+      - name: Lint
+        run: .venv/bin/ruff check src/
+      - name: Tests (Chrome is stubbed; none touch a live browser)
+        run: .venv/bin/python -m pytest

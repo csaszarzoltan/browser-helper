@@ -246,6 +246,8 @@ scripts/release-validate.sh            # version, tool count and docs consistenc
 
 The tests stub Chrome and do not touch the Chrome on port 9557.
 
+GitHub Actions runs `ruff check src/` and the full `pytest` on every pull request (`.github/workflows/ci.yml`).
+
 ## License
 
 No license has been chosen yet. Until one is added, the code is not licensed for reuse.

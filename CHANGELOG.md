@@ -4,6 +4,9 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **CI runs lint and the suite on pull requests (2026-10-18).** The repository had no `.github/workflows`. The new
+  workflow builds `.venv` (some tests need the repo's own interpreter), runs `ruff check src/` and `pytest` on
+  Python 3.11. It has not run on GitHub yet: the first pull request is its first run.
 - **Dashboard passes a contrast and layout walk (2026-10-18).** A headless Chrome walk of the dashboard (1280 px and
   390 px, a throwaway server on port 8890, no connection to the person's Chrome) found 15 text elements under WCAG 2.2
   AA contrast (`#64748b` muted text), two 19 px refresh buttons, a missing favicon (a 404 in the console), and a
