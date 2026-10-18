@@ -18,6 +18,8 @@ class _Stub:
     _document_state = CDPClient._document_state
     _wait_for_document = CDPClient._wait_for_document
     _WAIT_UNTIL_STATES = CDPClient._WAIT_UNTIL_STATES
+    _raise_if_dialog_open = CDPClient._raise_if_dialog_open
+    _open_dialog = None
 
     _connection_type = "remote"  # skips the tab-discovery sync after navigation
     _tabs_cache: list = []
