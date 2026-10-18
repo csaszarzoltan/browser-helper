@@ -4,6 +4,10 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **`run.py --debug-port` works without `--launch-chrome` (2026-10-18).** The flag was applied only together with
+  `--launch-chrome`, so a server started with just `--debug-port 9779` still used the saved port (9557) for every
+  session. A throwaway server meant for a private Chrome opened tabs in the person's own one. The flag now sets
+  `CHROME_AUTO_PORT` whenever it is given.
 - **CI runs lint and the suite on pull requests (2026-10-18).** The repository had no `.github/workflows`. The new
   workflow builds `.venv` (some tests need the repo's own interpreter), runs `ruff check src/` and `pytest` on
   Python 3.11. It has not run on GitHub yet: the first pull request is its first run.

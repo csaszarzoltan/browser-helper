@@ -51,8 +51,10 @@ def main():
         os.environ["CHROME_AUTO_LAUNCH"] = "1"
         if args.profile_dir:
             os.environ["CHROME_AUTO_PROFILE"] = args.profile_dir
-        if args.debug_port:
-            os.environ["CHROME_AUTO_PORT"] = str(args.debug_port)
+    # The port applies with or without --launch-chrome: without it the server still
+    # attaches to a Chrome on this port, and must not fall back to the saved one.
+    if args.debug_port:
+        os.environ["CHROME_AUTO_PORT"] = str(args.debug_port)
     if args.display:
         os.environ["CHROME_DISPLAY"] = args.display
     if args.headless is not None:
