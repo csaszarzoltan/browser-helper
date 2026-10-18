@@ -75,3 +75,20 @@ async def test_navigate_refuses_at_once_while_a_dialog_is_open():
     c._send_command = AsyncMock(side_effect=AssertionError("must not send Page.navigate"))
     with pytest.raises(CDPError, match="confirm dialog is open"):
         await asyncio.wait_for(c.navigate("https://x.test/"), timeout=2)
+
+
+def test_navigate_route_returns_a_run_op_error_without_polling_the_frozen_page(monkeypatch):
+    """Live 2026-10-18: the ready wait polled a page frozen by a dialog and held the 400 for 30 s."""
+    from fastapi.testclient import TestClient
+
+    import main
+
+    monkeypatch.setattr(type(main.client), "is_connected", property(lambda self: True))
+    err = main.api_error("navigate", "operation_failed", "a JavaScript confirm dialog is open", 400)
+    monkeypatch.setattr(main, "run_op", AsyncMock(return_value=err))
+    poll = AsyncMock(side_effect=AssertionError("must not poll readyState after an error"))
+    monkeypatch.setattr(main.client, "evaluate", poll, raising=False)
+    r = TestClient(main.app).post("/navigate?url=https://x.test/")
+    assert r.status_code == 400
+    assert "dialog is open" in r.text
+    poll.assert_not_awaited()

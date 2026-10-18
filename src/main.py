@@ -3115,6 +3115,10 @@ async def navigate(url: str | None = Query(default=None, description="Target URL
         old_tab = sess.client._ws_tab_id
 
     result = await run_op("navigate", client.navigate, url)
+    if isinstance(result, JSONResponse):
+        # run_op answered with an error. The ready wait below would only poll a page that
+        # cannot answer (a dialog freezes it) and hold the reply for the 30 s command timeout.
+        return result
 
     # Fix-1/3: tab-drift + 1-tab-per-session.
     # After navigation, if the session's WS moved to a NEW tab (cross-origin
@@ -5932,6 +5936,13 @@ async def agent_act(request: Request, body: AgentActionRequest):
                         "The click opened a new tab. This session is still on its own tab; "
                         "switch_tab to the new one if you meant to continue there."
                     )
+        if action == "click" and not getattr(tc, "_open_dialog", None):
+            # The dialog event can arrive after the click returns. A frozen page cannot answer a
+            # trivial evaluate, so wait for it briefly: when it does answer, nothing is open.
+            try:
+                await asyncio.wait_for(tc.evaluate("1"), 0.15)
+            except Exception:  # noqa: BLE001 - probe only; a timeout is the signal
+                await asyncio.sleep(0.05)
         if action == "click" and getattr(tc, "_open_dialog", None):
             data["dialog_open"] = tc._open_dialog
             data["dialog_hint"] = "A JavaScript dialog is open and blocks the page; answer it with dialog_handle."

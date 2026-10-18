@@ -23,6 +23,9 @@ All notable changes to browser-helper will be documented in this file.
   `message`), each with a hint (`switch_tab`, `dialog_handle`). `navigate` and the document wait raise "a JavaScript
   dialog is open ... answer it with dialog_handle" instead of timing out as a slow page. The client tracks
   `Page.javascriptDialogOpening` and `Page.javascriptDialogClosed`.
+  A live check on a private Chrome found two more faults, fixed: the dialog event can arrive after the click returns
+  (a 150 ms evaluate probe now waits for it; 3 of 3 live clicks report it), and `/navigate` held its error reply for
+  30 s because the ready wait polled the frozen page (it now returns in about 10 ms).
 - **`bh doctor` checks the Chrome connection (2026-10-18).** The service log showed about 50 "Not connected to Chrome
   CDP" errors in 14 days, and `/ready` only said "CDP not connected". `bh doctor` checks the debug port, that Chrome
   runs with its own `--user-data-dir` (Linux), the service's `/ready` and `API_TOKEN`, prints the fix for each, and
