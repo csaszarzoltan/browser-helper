@@ -153,7 +153,7 @@ If the agent runs on a different machine, replace `localhost` with the host runn
 
 ---
 
-## 3. Tool reference (75 tools)
+## 3. Tool reference (78 tools)
 
 All 78 tools are backed by READY capabilities from `src/capability_registry.py`. UNAVAILABLE capabilities (`cloud.camofox`) and EXPERIMENTAL ones (`anti_detection.compositor`, `behavioral.scroll`) never surface as tools — the tool set is derived from the registry, not hand-maintained.
 

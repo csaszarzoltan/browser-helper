@@ -393,6 +393,8 @@ class TestApiComposeV1RED:
         assert data["status"] == "ok"
         assert "results" in data
 
+    # Both tests use /tmp/bundle.json: keep them on one xdist worker, in file order.
+    @pytest.mark.xdist_group("compose_bundle")
     @pytest.mark.asyncio
     async def test_compose_export(self, api_client):
         """POST /api/v1/compose/export returns {status, path}."""
@@ -407,6 +409,7 @@ class TestApiComposeV1RED:
         assert data["status"] == "ok"
         assert "path" in data
 
+    @pytest.mark.xdist_group("compose_bundle")
     @pytest.mark.asyncio
     async def test_compose_import(self, api_client):
         """POST /api/v1/compose/import returns {status, bundle}."""
