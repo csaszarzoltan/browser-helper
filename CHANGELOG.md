@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **Failures name themselves (2026-10-18).** In 14 days the service logged 33 x `429` on `/session/new` and 105 x `400`
+  on `/agent/act` with nothing to say why. `tab_budget_exhausted` now lists who holds the slots in
+  `error.details.holders` (8-character session id, idle seconds, age, URL without query). `api_error` sets an
+  `X-Error-Code` header, and every response of 400 or more logs one line, `METHOD /path -> status code trace=id`,
+  never the body.
+
 - **`act` click by text can be scoped and can pick a match (2026-10-13).** `click_by_text` took `container_selector`
   and `nth`, but `act` dropped them, and its `within` field was read by nothing: an agent that set it got a click on
   the first match on the page. `within` (a container selector) and `nth` (0-based index) now reach the click, and the

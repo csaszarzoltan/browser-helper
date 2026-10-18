@@ -1502,6 +1502,12 @@ async def session_middleware(request: Request, call_next):
         _session_auto.set(False)
         _current_trace.set(None)
     response.headers["X-Trace-ID"] = trace_id
+    if response.status_code >= 400:
+        # Route, status and error code only: never the body, which can hold typed text.
+        logger.warning(
+            "%s %s -> %s %s trace=%s", request.method, request.url.path,
+            response.status_code, response.headers.get("X-Error-Code", "-"), trace_id,
+        )
     if active is not None:
         response.headers["X-Session-ID"] = active.session_id
         if active is not sess:
@@ -1524,10 +1530,11 @@ def api_success(operation: str, data: Any = None, status_code: int = 200, meta: 
 
 
 def api_error(operation: str, code: str, message: str, status_code: int = 400, details: Any = None):
+    # X-Error-Code lets the access log name the failure without reading the body.
     return JSONResponse(status_code=status_code, content={
         "status": "error", "operation": operation, "data": None,
         "error": {"code": code, "message": message, "details": details}, "meta": {},
-    })
+    }, headers={"X-Error-Code": code})
 
 
 def result_status(result: dict, default: int = 400) -> int:
@@ -2601,6 +2608,7 @@ async def session_new(request: Request,
             {
                 "tabs_in_use": exc.in_use,
                 "tab_budget": exc.budget,
+                "holders": session_registry.holders(),
                 "remedy": (
                     "You already hold the maximum number of browser tabs. "
                     "REUSE the session you have (send its X-Session-ID on every "

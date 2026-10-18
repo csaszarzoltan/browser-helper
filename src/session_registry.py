@@ -121,6 +121,25 @@ class SessionRegistry:
     def max_sessions(self) -> int:
         return self._max_sessions
 
+    def holders(self) -> list[dict]:
+        """Who holds the open sessions, oldest idle first.
+
+        Ids are cut to 8 characters (enough to match a caller's own id, not
+        enough to use it), and only the URL host and path are kept, so the
+        list is safe to put in an error body.
+        """
+        now = time.monotonic()
+        rows = []
+        for sess in self._sessions.values():
+            rows.append({
+                "session_id": sess.session_id[:8],
+                "idle_s": round(now - sess.last_seen),
+                "age_s": round(now - sess.created),
+                "url": sess.target_url.split("?", 1)[0].split("#", 1)[0][:120],
+            })
+        rows.sort(key=lambda r: -r["idle_s"])
+        return rows
+
     @property
     def tab_budget(self) -> int:
         """Hard cap on how many session tabs may exist at once (0 = off).
