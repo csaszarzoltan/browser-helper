@@ -314,7 +314,13 @@ class SessionRegistry:
             # session's WS binds to the tab we actually just created.
             client._tabs_cache = []
             client._tabs_cache_ts = 0
-            await client.connect_to_target(tab_id)
+            try:
+                await client.connect_to_target(tab_id)
+            except BaseException:
+                # The tab exists but no session owns it: close it now instead of leaving a stray
+                # tab until the next orphan sweep (chrome-devtools-mcp fixed the same leak, 2026-10-06).
+                await self._close_unowned_tab(client.cdp_http_url, tab_id)
+                raise
             sess = Session(session_id=sid, client=client, tab_id=tab_id, target_url=url)
             sess.profile_dir = profile_dir
             self._sessions[sid] = sess
@@ -329,6 +335,17 @@ class SessionRegistry:
                 logger.debug("behavioral engine init failed: %s", exc)
             logger.info("Session %s created (tab %s, total %d)", sid[:8], tab_id, len(self._sessions))
             return sess
+
+    @staticmethod
+    async def _close_unowned_tab(cdp_http_url: str, tab_id: str) -> None:
+        """Best-effort close of a tab this registry just opened, over plain HTTP (no WebSocket needed)."""
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as http:
+                await http.get(f"{cdp_http_url.rstrip('/')}/json/close/{tab_id}")
+        except Exception as exc:  # noqa: BLE001 - cleanup must never mask the original error
+            logger.debug("closing unowned tab %s failed: %s", tab_id, exc)
 
     async def _open_tab_http(self, client: CDPClient, url: str = "about:blank",
                              profile_dir: str | None = None) -> str:

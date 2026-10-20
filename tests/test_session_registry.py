@@ -217,3 +217,22 @@ async def test_cap_refuses_to_evict_an_active_session(monkeypatch):
         await reg.create("http://127.0.0.1:9557")
     assert reg.get(a.session_id) is not None and reg.get(b.session_id) is not None
     assert a.client.closed is False
+
+
+@pytest.mark.asyncio
+async def test_failed_connect_closes_the_tab_it_opened(registry, monkeypatch):
+    """A tab opened for a session whose connect fails must not stay open (2026-10-20)."""
+    closed = []
+
+    async def fail_connect(self, tab_id):
+        raise RuntimeError("websocket refused")
+
+    async def record_close(cdp_http_url, tab_id):
+        closed.append((cdp_http_url, tab_id))
+
+    monkeypatch.setattr(FakeClient, "connect_to_target", fail_connect)
+    monkeypatch.setattr(SessionRegistry, "_close_unowned_tab", staticmethod(record_close))
+    with pytest.raises(RuntimeError, match="websocket refused"):
+        await registry.create("http://127.0.0.1:9557")
+    assert len(closed) == 1 and closed[0][1].startswith("tab-")
+    assert registry.count == 0
