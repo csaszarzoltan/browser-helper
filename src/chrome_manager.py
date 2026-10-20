@@ -203,10 +203,11 @@ class ChromeManager:
     # (b) Nothing read proc.returncode / awaited proc.wait(), so an OOM
     #     SIGKILL (-9) and a clean exit (0) were indistinguishable and
     #     neither reached a log line. `_supervisor_task` awaits the child and
-    #     records the status. Chrome is NOT setsid'd, so it shares the service's
-    #     signal group — a group-wide SIGKILL takes BH down too, and in that
-    #     case the supervisor dies with it (no log), which is correct: the
-    #     systemd journal already holds the OOM record for that case.
+    #     records the status. Chrome runs in its own session (start_new_session),
+    #     so a restart of the service leaves it running; under systemd the unit
+    #     also needs KillMode=process (see README, "Run as a service"). If the
+    #     service is killed, the supervisor dies with it (no log); the systemd
+    #     journal holds the OOM record for that case.
     STDERR_KEEP = 3
     # Total bytes retained across the rotated stderr files.  /tmp is tmpfs
     # (RAM) on this host and a crash-loop can produce 100MB+ of stack traces
@@ -551,6 +552,11 @@ class ChromeManager:
                 stdout=subprocess.DEVNULL,
                 stderr=(self._stderr_fh if self._stderr_fh is not None else subprocess.DEVNULL),
                 env=child_env,
+                # Own session: a service restart (or a signal sent to the
+                # service's process group) must not take the person's signed-in
+                # Chrome with it. A restarted service finds this Chrome through
+                # the profile/port check in launch() and reuses it.
+                start_new_session=True,
             )
             # The child holds its own duplicate of this descriptor after
             # fork/exec, so the parent copy can go: without this close, every

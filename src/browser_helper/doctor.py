@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -74,8 +75,8 @@ def _parse_cmdline(raw: bytes) -> list[str]:
     return [a for a in re.split(r"[\0 ]+", raw.decode("utf-8", "replace")) if a]
 
 
-def _chrome_args(port: int) -> list[str] | None:
-    """Command line of the process started with this debugging port (Linux only)."""
+def _chrome_proc(port: int) -> tuple[str, list[str]] | None:
+    """(pid, command line) of the process started with this debugging port (Linux only)."""
     if not os.path.isdir("/proc"):
         return None
     want = f"--remote-debugging-port={port}"
@@ -86,8 +87,13 @@ def _chrome_args(port: int) -> list[str] | None:
         except OSError:
             continue
         if want in args:
-            return args
+            return pid, args
     return None
+
+
+def _chrome_args(port: int) -> list[str] | None:
+    found = _chrome_proc(port)
+    return found[1] if found else None
 
 
 def check_profile(port: int) -> Check:
@@ -99,6 +105,49 @@ def check_profile(port: int) -> Check:
     return Check(
         "Chrome profile", "WARN", "no --user-data-dir on the command line",
         f"Restart Chrome with:\n    {chrome_command(port)}",
+    )
+
+
+def _cgroup_unit(pid: str) -> str | None:
+    """Name of the systemd service whose control group holds *pid*, if any."""
+    try:
+        with open(f"/proc/{pid}/cgroup", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    m = re.search(r"/([^/\s]+\.service)(?:/|\s|$)", text)
+    return m.group(1) if m else None
+
+
+def _kill_mode(unit: str) -> str | None:
+    """The unit's KillMode, read with `systemctl show` (read-only); None when unreadable."""
+    try:
+        out = subprocess.run(
+            ["systemctl", "show", "-p", "KillMode", "--value", unit],
+            capture_output=True, text=True, timeout=3, check=False,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out or None
+
+
+def check_restart(port: int) -> Check:
+    """Would restarting the service that runs Chrome also close Chrome?"""
+    found = _chrome_proc(port)
+    if found is None:
+        return Check("Restart", "SKIP", "Chrome process not readable on this system")
+    unit = _cgroup_unit(found[0])
+    if unit is None:
+        return Check("Restart", "PASS", "Chrome is not inside a systemd service, so a service restart leaves it running")
+    mode = _kill_mode(unit)
+    if mode == "process":
+        return Check("Restart", "PASS", f"{unit} has KillMode=process, so a restart leaves Chrome running")
+    return Check(
+        "Restart", "WARN",
+        f"Chrome runs inside {unit} (KillMode={mode or 'unknown'}); restarting it closes Chrome and your sign-ins",
+        f"Add a drop-in, then reload:\n    sudo mkdir -p /etc/systemd/system/{unit}.d\n"
+        f"    printf '[Service]\\nKillMode=process\\n' | sudo tee /etc/systemd/system/{unit}.d/keep-chrome.conf\n"
+        "    sudo systemctl daemon-reload",
     )
 
 
@@ -133,6 +182,8 @@ def run_checks(host: str, debug_port: int, api_port: int, timeout: float = 2.0) 
     checks = [chrome]
     checks.append(check_profile(debug_port) if chrome.status == "PASS" else Check(
         "Chrome profile", "SKIP", "Chrome is not reachable"))
+    checks.append(check_restart(debug_port) if chrome.status == "PASS" else Check(
+        "Restart", "SKIP", "Chrome is not reachable"))
     checks.append(check_service(host, api_port, timeout))
     checks.append(check_token(os.environ.get("API_TOKEN")))
     return checks
