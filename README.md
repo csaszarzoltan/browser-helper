@@ -2,6 +2,7 @@
 
 ![Version](https://img.shields.io/badge/version-1.36.21-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 Browser Helper lets AI agents work in your everyday Chrome. It runs next to Chrome,
 talks to it over the Chrome DevTools Protocol, and gives agents compact JSON over REST
@@ -172,6 +173,22 @@ Set these environment variables before `python run.py`. The flags `--host`, `--p
 | `BH_KEEP_WARM` / `BH_KEEP_WARM_INTERVAL` | on / `300` s | Refreshes a warm session on that interval, so the first call after idle stays fast. `BH_KEEP_WARM=0` turns it off. |
 | `FLEET_DB_PATH` | see `src/fleet/storage.py` | Location of the fleet database |
 
+## Run as a service
+
+`python run.py --launch-chrome` starts Chrome itself, in its own session, so stopping the service does
+not close it. Under systemd that is not enough, because systemd kills every process in the unit's control
+group on a restart. Add a drop-in so a restart leaves your signed-in Chrome running:
+
+```bash
+sudo mkdir -p /etc/systemd/system/browser-helper.service.d
+printf '[Service]\nKillMode=process\n' | sudo tee /etc/systemd/system/browser-helper.service.d/keep-chrome.conf
+sudo systemctl daemon-reload
+```
+
+The restarted service finds the Chrome that still holds the profile and reuses it. `bh doctor` has a
+`Restart` line that says whether the drop-in is in place. To stop Chrome too, close it yourself or run
+`POST /browser/stop`.
+
 ## Security
 
 - The API listens on `127.0.0.1` by default. For an agent on another machine, keep that
@@ -250,4 +267,4 @@ GitHub Actions runs `ruff check src/` and the full `pytest` on every pull reques
 
 ## License
 
-No license has been chosen yet. Until one is added, the code is not licensed for reuse.
+MIT. See [LICENSE](LICENSE).

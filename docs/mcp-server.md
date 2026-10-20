@@ -186,7 +186,7 @@ Each maps 1:1 to the engine call behind a REST endpoint (same `main.run_op` + `c
 | `reload` | `ignore_cache` (bool, opt) | `browser.core` | `Page.reload` | `POST /reload` |
 | `wait_network_idle` | `timeout` (int, opt), `quiet_ms` (int, opt) | `browser.core` | `client.wait_for_network_idle` | `POST /wait/network-idle` |
 | `rate_limiter_status` | — | `browser.core` | `domain_throttle` state + interval | `GET /rate_limiter/status` |
-| `dialog_handle` | `action` (str, required), `prompt_text` (str, opt) | `browser.core` | `Page.handleJavaScriptDialog` | `POST /dialog/handle` |
+| `dialog_handle` | `action` (str, required: `accept`, `dismiss`, or `policy:manual`/`policy:dismiss`/`policy:accept` to answer every later dialog of the session), `prompt_text` (str, opt) | `browser.core` | `Page.handleJavaScriptDialog` | `POST /dialog/handle` |
 
 ### 6. E2E validation wrappers — `src/mcp_server/tools.py` + `src/mcp_server/discovery_tools.py` (v1.35 — 21 browser_/discovery_ tools)
 

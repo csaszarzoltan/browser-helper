@@ -3,6 +3,8 @@ name = "browser-helper"
 version = "1.36.21"
 description = "Remote Chrome control proxy with REST API + GUI dashboard"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "fastapi>=0.110.0",
     "uvicorn>=0.27.0",

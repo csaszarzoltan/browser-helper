@@ -4,6 +4,29 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **MIT licence, and the history lands on `main` (2026-10-20).** `LICENSE` (MIT) and the `license` field in
+  `pyproject.toml`; the README no longer says "no licence".
+- **A service restart keeps Chrome running (2026-10-20).** Chrome shared the service's process group, and under
+  systemd its control group, so `systemctl restart browser-helper` closed the signed-in window. `launch()` now
+  starts Chrome with `start_new_session=True`; a restarted service finds the Chrome that holds the profile and
+  reuses it (live check on a private port: the Chrome process survived the service's SIGTERM and the next service
+  adopted it). The unit also needs `KillMode=process`: README "Run as a service" has the drop-in, and
+  `bh doctor` has a `Restart` line that WARNs with the exact commands when it is missing.
+- **A click that changed nothing says so (2026-10-20).** `act` with `click` now fingerprints the page before and
+  after (URL, text hash, node count, focus, open/checked state, scroll). When all are equal, and no tab or dialog
+  appeared, the result carries `effect: "none"` and a hint. It is a hint, never an error: a download or a
+  clipboard copy also leaves the page unchanged. Prompted by chrome-devtools-mcp #2199 (2026-06-11) and a user's
+  own agent that could not tell whether a click had happened.
+- **A disabled control says why (2026-10-20).** The "is disabled; it was not clicked" error now adds what the
+  page shows: a disabled fieldset, `aria-disabled`, the title, invalid form fields with the browser's message,
+  or a loading indicator. `act` also has `pick_suggestion` (value = the suggestion text): it picks the visible
+  `role=option` (and similar) entry that matches, refuses two matches, and lists what is visible when none does.
+- **Dialog policy (2026-10-20).** `dialog_handle` accepts `policy:dismiss`, `policy:accept` and `policy:manual`
+  (default). With a policy set, every later dialog of the session is answered at once and the click result lists
+  it under `dialogs_auto_handled`. Accepting a `confirm` can submit or delete, so prefer dismiss.
+- **A failed session create closes its tab (2026-10-20).** If connecting to the freshly opened tab failed, the tab
+  stayed open until the next orphan sweep. It is closed over HTTP at once (chrome-devtools-mcp fixed the same
+  leak on 2026-10-06).
 - **`run.py --debug-port` works without `--launch-chrome` (2026-10-18).** The flag was applied only together with
   `--launch-chrome`, so a server started with just `--debug-port 9779` still used the saved port (9557) for every
   session. A throwaway server meant for a private Chrome opened tabs in the person's own one. The flag now sets
