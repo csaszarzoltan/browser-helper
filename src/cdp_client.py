@@ -195,6 +195,9 @@ class CDPClient:
         self._tabs_cache_ts: float = 0
         self._tabs_cache_ttl: float = 5.0  # seconds
         self._open_dialog: dict | None = None
+        # "manual" leaves a dialog open for dialog_handle; "dismiss" / "accept" answer it at once.
+        self.dialog_policy: str = "manual"
+        self.auto_handled_dialogs: list[dict] = []
         """The JavaScript dialog the page is showing now ({type, message}), else None."""
 
     @property
@@ -476,6 +479,10 @@ class CDPClient:
                 elif ev_method == "Page.javascriptDialogOpening":
                     p = msg.get("params", {})
                     self._open_dialog = {"type": p.get("type", ""), "message": str(p.get("message", ""))[:200]}
+                    if self.dialog_policy in ("dismiss", "accept"):
+                        # Answered from a task: awaiting a command reply inside the listener would
+                        # block the very loop that reads the reply.
+                        asyncio.create_task(self._auto_answer_dialog(dict(self._open_dialog), p.get("defaultPrompt")))
                 elif ev_method == "Page.javascriptDialogClosed":
                     self._open_dialog = None
 
@@ -3460,6 +3467,25 @@ class CDPClient:
         return {"status": "ok", "ignore_cache": ignore_cache}
 
     # ── C10: Dialog (alert/confirm/prompt/beforeunload) handling ───
+
+    async def set_dialog_policy(self, policy: str) -> dict:
+        """manual (default), dismiss or accept: what to do with the next JavaScript dialogs."""
+        if policy not in ("manual", "dismiss", "accept"):
+            raise ValueError("policy must be manual, dismiss or accept")
+        self.dialog_policy = policy
+        return {"status": "ok", "dialog_policy": policy}
+
+    async def _auto_answer_dialog(self, dialog: dict, default_prompt: str | None) -> None:
+        accept = self.dialog_policy == "accept"
+        args: dict = {"accept": accept}
+        if accept and dialog.get("type") == "prompt" and default_prompt is not None:
+            args["promptText"] = default_prompt
+        try:
+            await self._send_command("Page.handleJavaScriptDialog", **args)
+        except Exception as exc:  # noqa: BLE001 - the dialog may already be gone
+            logger.debug("auto dialog answer failed: %s", exc)
+            return
+        self.auto_handled_dialogs = (self.auto_handled_dialogs + [{**dialog, "answered": "accept" if accept else "dismiss"}])[-5:]
 
     async def dialog_accept(self, prompt_text: str | None = None) -> dict:
         """Accept the next JavaScript dialog (alert/confirm/prompt/beforeunload)."""

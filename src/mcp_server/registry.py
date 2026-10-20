@@ -240,7 +240,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     "act": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "description": "click|fill|select|wait|navigate|select_tab|wait_for_element|wait_for_text|eval|screenshot"},
+            "action": {"type": "string", "description": "click|fill|select|pick_suggestion (value = the suggestion text; picks it from an open autocomplete list)|wait|navigate|select_tab|wait_for_element|wait_for_text|eval|screenshot"},
             "snapshot_id": {"type": "string", "description": "Snapshot id from observe (pin target)"},
             "ref": {"type": "string", "description": "AX ref of the element (from observe accessibility)"},
             "element_id": {"type": "string", "description": "Element id from semantic snapshot"},
@@ -540,7 +540,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
     "dialog_handle": {
         "type": "object",
         "properties": {
-            "action": { "type": "string", "description": "accept|dismiss — dialog action" },
+            "action": { "type": "string", "description": "accept|dismiss — answer the open dialog; policy:dismiss|policy:accept|policy:manual — answer every later dialog of this session (default manual)" },
             "prompt_text": { "type": "string", "description": "Prompt text when accepting a prompt() dialog (optional)" },
         },
         "required": ["action"],
@@ -858,7 +858,7 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     "network_mock": "Install URL-pattern mocks that answer matching requests with fake responses, on this session's tab. The mocks stay until the tab is closed. Use them for tests that need no backend.",
     'notifications_start': 'Start capturing toast, alert and notification DOM changes. Call it before get_notifications.',
     "get_notifications": "Toast, alert and notification messages captured since a time. Monitoring starts on the first call, so a message shown before that call is not captured; call notifications_start first when a step triggers a notification.",
-    'dialog_handle': 'Accept or dismiss the next JavaScript dialog (alert, confirm, prompt), optionally with prompt text.',
+    'dialog_handle': 'Accept or dismiss the next JavaScript dialog (alert, confirm, prompt), optionally with prompt text. action policy:dismiss|policy:accept|policy:manual answers every later dialog of the session automatically.',
     'rate_limiter_status': 'Domain throttle and rate-limiter state. Use it when requests are being delayed.',
     "download": "Download a file through the browser into the artifact store and return where it was stored. Prefer this over clicking a download link. browser_download_file does the same from a URL.",
     "browser_download_file": "Download a URL into the artifact store through the sandboxed browser. Same result as download; use download when you have a page element to click.",

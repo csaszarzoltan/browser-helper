@@ -1755,7 +1755,10 @@ async def dialog_handle(
 ) -> str:
     """Accept or dismiss a JavaScript dialog (capability ``browser.core``, READY).
 
-    Handles alert/confirm/prompt/beforeunload.  Use ``prompt_text`` when
+    Handles alert/confirm/prompt/beforeunload.  ``action="policy:dismiss"`` (or ``policy:accept``)
+    answers every later dialog of this session at once (reported as ``dialogs_auto_handled`` in a click
+    result); ``policy:manual`` restores the default.  Accepting a confirm can submit or delete: prefer
+    dismiss.  Use ``prompt_text`` when
     accepting a ``prompt()`` dialog to provide the input value.
 
     Examples::
@@ -1764,9 +1767,15 @@ async def dialog_handle(
         dialog_handle("dismiss")
         dialog_handle("accept", prompt_text="my answer")
     """
-    if action not in ("accept", "dismiss"):
-        return tool_error("dialog_handle", "invalid_action", "action must be 'accept' or 'dismiss'")
+    policy = action.split(":", 1)[1] if action.startswith("policy:") else None
+    if policy is None and action not in ("accept", "dismiss"):
+        return tool_error("dialog_handle", "invalid_action",
+                          "action must be 'accept', 'dismiss' or 'policy:<manual|dismiss|accept>'")
+    if policy is not None and policy not in ("manual", "dismiss", "accept"):
+        return tool_error("dialog_handle", "invalid_action", "policy must be manual, dismiss or accept")
     target, _run_op = await _target()
+    if policy is not None:
+        return tool_result("dialog_handle", await target.set_dialog_policy(policy))
     if ctx is not None:
         await ctx.info(f"dialog_handle {action}")
     try:

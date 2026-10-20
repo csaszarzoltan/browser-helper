@@ -5316,7 +5316,7 @@ async def websocket_endpoint(ws: WebSocket):
 AGENT_CAPABILITIES = {
     "version": "1.5.0",
     "response_schema": "browser-helper-envelope-v1",
-    "actions": ["navigate", "click", "fill", "select", "wait", "evaluate", "capture", "workflow", "fill_form", "extract", "execute_task", "dismiss_overlay", "open_menu", "expand_section", "load_all_items", "extract_table", "switch_context"],
+    "actions": ["navigate", "click", "fill", "select", "wait", "evaluate", "capture", "workflow", "fill_form", "extract", "execute_task", "dismiss_overlay", "pick_suggestion", "open_menu", "expand_section", "load_all_items", "extract_table", "switch_context"],
     "observation": {"stable_element_refs": True, "pagination": True, "differential": True, "token_budget": True, "accessibility_tree": True, "semantic_graph": True, "scopes": ["page", "main", "dialog", "form", "table", "region", "ref"]},
     "navigation_engine": {"form_discovery": True, "schema_extraction": True, "post_action_expectations": True, "available_actions": True, "backend_node_actions": True, "snapshot_pinning": True, "stale_auto_recovery": True, "modal_aware": True, "workflow_record_replay": True, "verify_after": True, "autocomplete_resolver": True, "hidden_nodes": True, "select_tab": True, "wait_for_element": True, "page_history": True},
     "artifacts": {"screenshots": True, "ttl_seconds": 86400},
@@ -5616,6 +5616,37 @@ async def _resolve_agent_target(target: AgentTarget | None) -> dict:
     return target.model_dump(exclude_none=True)
 
 
+async def _disabled_message(tc, what: str, selector: str | None = None, text: str | None = None) -> str:
+    """'<what> is disabled; it was not clicked', plus the reason the page gives, when one is found."""
+    from page_hints import disabled_reason
+
+    reason = await disabled_reason(tc, selector=selector, text=text)
+    return f"{what} is disabled; it was not clicked" + (f" ({reason})" if reason else "")
+
+
+_FINGERPRINT_JS = """(() => {
+    const t = document.body ? document.body.innerText.slice(0, 20000) : '';
+    let h = 5381;
+    for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+    const a = document.activeElement;
+    return [location.href, a ? a.tagName + '#' + a.id + '.' + (a.value || '').length : '',
+            document.querySelectorAll('*').length, t.length, h,
+            document.querySelectorAll('[aria-expanded=true],[aria-checked=true],[aria-selected=true],:checked').length,
+            window.scrollX, window.scrollY].join('|');
+})()"""
+
+
+async def _page_fingerprint(tc) -> str | None:
+    """A cheap summary of what a click could change on the page, or None when unreadable."""
+    try:
+        value = await asyncio.wait_for(tc.evaluate(_FINGERPRINT_JS), 0.5)
+    except Exception:  # noqa: BLE001 - a frozen or navigating page has no fingerprint
+        return None
+    if isinstance(value, dict):  # evaluate() wraps the value as {"status", "result", "type"}
+        value = value.get("result") if value.get("status") == "ok" else None
+    return value if isinstance(value, str) else None
+
+
 async def _page_tabs(tc) -> dict[str, str] | None:
     """Page tabs now open as {tab_id: url}, read fresh; None if Chrome cannot be asked."""
     try:
@@ -5666,6 +5697,7 @@ async def agent_act(request: Request, body: AgentActionRequest):
             target = matches[0].as_dict()
         before_ax = await _capture_accessibility_snapshot(target=tc) if body.expect else None
         tabs_before = await _page_tabs(tc) if action == "click" else None
+        fingerprint_before = await _page_fingerprint(tc) if action == "click" else None
         if action == "navigate":
             # P1 determinism (v1.36): also accept target.url — the natural
             # guess agents kept sending ({"target": {"url": ...}}), which the
@@ -5700,7 +5732,7 @@ async def agent_act(request: Request, body: AgentActionRequest):
             if target.get("backend_node_id"):
                 result = await tc.click_backend_node(target["backend_node_id"])
                 if isinstance(result, dict) and result.get("code") == "not_actionable":
-                    raise NotActionableError(f"{target.get('name') or 'element'} is disabled; it was not clicked")
+                    raise NotActionableError(await _disabled_message(tc, target.get("name") or "element", text=target.get("name")))
                 if isinstance(result, dict) and result.get("status") == "error":
                     # S5: surface as proper 404 with candidates instead of Uncaught
                     try:
@@ -5734,7 +5766,7 @@ async def agent_act(request: Request, body: AgentActionRequest):
                     except Exception:  # noqa: BLE001 — recovery best-effort, never blocks the 404 path
                         logger.debug("auto_recover selector retry failed for %r", sel)
                 if isinstance(result, dict) and result.get("code") == "not_actionable":
-                    raise NotActionableError(f"selector {sel!r} is disabled; it was not clicked")
+                    raise NotActionableError(await _disabled_message(tc, f"selector {sel!r}", selector=sel))
                 if isinstance(result, dict) and result.get("status") == "error":
                     # S4: enrich with candidates for SPA selector debugging
                     try:
@@ -5788,7 +5820,7 @@ async def agent_act(request: Request, body: AgentActionRequest):
                 if isinstance(result, dict) and result.get("code") == "ambiguous":
                     raise AmbiguousTargetError(str(result.get("error")))
                 if isinstance(result, dict) and result.get("code") == "not_actionable":
-                    raise NotActionableError(f"{text!r} is disabled; it was not clicked")
+                    raise NotActionableError(await _disabled_message(tc, repr(text), text=text))
                 if isinstance(result, dict) and result.get("status") == "error":
                     try:
                         snap_e2 = await _capture_accessibility_snapshot(target=tc)
@@ -5796,6 +5828,19 @@ async def agent_act(request: Request, body: AgentActionRequest):
                     except Exception:  # noqa: BLE001 — candidates best-effort
                         cands2 = []
                     raise ElementNotFoundError(f"target not found: text {text!r} — candidates: {cands2}")
+        elif action == "pick_suggestion":
+            from page_hints import find_suggestion
+
+            wanted = body.value or target.get("text") or target.get("name") or body.parameters.get("text")
+            if not wanted:
+                raise ValueError("pick_suggestion requires value (the suggestion text)")
+            found = await find_suggestion(tc, str(wanted), target.get("within") or body.parameters.get("within"))
+            if found.get("status") != "ok":
+                if found.get("code") == "ambiguous":
+                    raise AmbiguousTargetError(str(found.get("error")))
+                raise ElementNotFoundError(str(found.get("error")))
+            await tc.click_coordinates(int(found["x"]), int(found["y"]))
+            result = {"status": "ok", "picked": found.get("text")}
         elif action == "fill":
             fields = body.fields
             if fields is None and target.get("backend_node_id") and body.value is not None:
@@ -5943,9 +5988,29 @@ async def agent_act(request: Request, body: AgentActionRequest):
                 await asyncio.wait_for(tc.evaluate("1"), 0.15)
             except Exception:  # noqa: BLE001 - probe only; a timeout is the signal
                 await asyncio.sleep(0.05)
+        if action == "click" and getattr(tc, "dialog_policy", "manual") != "manual":
+            # The session answers dialogs itself: give it a moment to do so before reporting one as open.
+            for _ in range(8):
+                if not getattr(tc, "_open_dialog", None):
+                    break
+                await asyncio.sleep(0.05)
+        auto = getattr(tc, "auto_handled_dialogs", None)
+        if action == "click" and auto:
+            data["dialogs_auto_handled"] = list(auto)
+            tc.auto_handled_dialogs = []
         if action == "click" and getattr(tc, "_open_dialog", None):
             data["dialog_open"] = tc._open_dialog
             data["dialog_hint"] = "A JavaScript dialog is open and blocks the page; answer it with dialog_handle."
+        if action == "click" and fingerprint_before is not None and not getattr(tc, "_open_dialog", None) \
+                and "opened_tabs" not in data and "dialogs_auto_handled" not in data:
+            fingerprint_after = await _page_fingerprint(tc)
+            if fingerprint_after is not None and fingerprint_after == fingerprint_before:
+                data["effect"] = "none"
+                data["effect_hint"] = (
+                    "Nothing on the page changed after the click (URL, text, focus, open/checked state, scroll). "
+                    "It may have worked outside the page (a download), or the click did not reach the element: "
+                    "observe again before assuming it happened."
+                )
         # P0-1: surface wait timing when wait_until_visible was used
         if body.wait_until_visible and target.get("selector"):
             data["wait_until_visible"] = {"selector": target["selector"], "waited_ms": round((time.monotonic() - _t0) * 1000)}
@@ -7687,15 +7752,20 @@ async def reload_page(body: ReloadRequest | None = None):
 
 
 class DialogRequest(BaseModel):
-    action: str = Field(..., description="accept|dismiss")
+    action: str = Field(..., description="accept|dismiss|policy:manual|policy:dismiss|policy:accept")
     prompt_text: str | None = Field(None, description="Prompt text when accepting a prompt() dialog")
 
 
 @app.post("/dialog/handle")
 async def dialog_handle(body: DialogRequest):
     """Accept or dismiss a JavaScript dialog (alert/confirm/prompt)."""
+    if body.action.startswith("policy:"):
+        policy = body.action.split(":", 1)[1]
+        if policy not in ("manual", "dismiss", "accept"):
+            raise HTTPException(status_code=422, detail="policy must be manual, dismiss or accept")
+        return await run_op("dialog_policy", client.set_dialog_policy, policy)
     if body.action not in ("accept", "dismiss"):
-        raise HTTPException(status_code=422, detail="action must be 'accept' or 'dismiss'")
+        raise HTTPException(status_code=422, detail="action must be 'accept', 'dismiss' or 'policy:<manual|dismiss|accept>'")
     if body.action == "accept":
         return await run_op("dialog_accept", client.dialog_accept, body.prompt_text)
     return await run_op("dialog_dismiss", client.dialog_dismiss)
