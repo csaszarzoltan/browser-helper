@@ -43,7 +43,10 @@ async def test_import_of_invalid_json_is_a_client_error_not_a_crash(client, tmp_
     resp = await client.post("/api/v1/fingerprints/import", json={"path": str(path)})
 
     assert resp.status_code == 422
-    assert "Invalid JSON" in resp.text
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "invalid_request"
+    assert "Invalid JSON" in body["error"]["message"]
 
 
 @pytest.mark.asyncio

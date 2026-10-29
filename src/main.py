@@ -8076,9 +8076,9 @@ async def api_fingerprints_import(body: dict):
     try:
         name = _fingerprint_db.import_template(path)
     except (FileNotFoundError, OSError):
-        return _api_error(404, f"Import file not found: {path}")
+        return api_error("fingerprint_import", "not_found", f"Import file not found: {path}", 404)
     except (ValueError, TypeError) as exc:
-        return _api_error(422, str(exc))
+        return api_error("fingerprint_import", "invalid_request", str(exc), 422)
     # Persist the imported template (review H1)
     _fingerprint_db.save()
     return {"status": "ok", "name": name}
