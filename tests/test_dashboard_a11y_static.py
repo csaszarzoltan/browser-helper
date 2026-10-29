@@ -39,3 +39,11 @@ def test_small_buttons_are_at_least_24px_high_and_page_has_a_favicon():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert re.search(r"\.btn\.sm\s*\{[^}]*min-height:\s*24px", html)
     assert 'rel="icon"' in html
+
+
+def test_every_image_in_the_dashboard_has_alt_text():
+    """A screen reader announces an <img> by its alt text; a missing one reads out the file name."""
+    for page in ("index.html", "fleet.html"):
+        html = (STATIC / page).read_text(encoding="utf-8")
+        for tag in re.findall(r"<img\b[^>]*>", html):
+            assert re.search(r"\balt=", tag), f"{page}: image without alt: {tag}"
