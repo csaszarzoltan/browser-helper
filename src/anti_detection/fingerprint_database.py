@@ -424,6 +424,8 @@ class FingerprintDatabase:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON in import file: {exc}") from exc
+        if not isinstance(data, dict):
+            raise TypeError("Import file must hold a JSON object")
         tpl = FingerprintTemplate(
             name=data.get("name", file_path.stem),
             browser=data.get("browser", "unknown"),
