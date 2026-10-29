@@ -24,6 +24,34 @@ HTTP from scripts and QA pipelines.
 In a project benchmark at v1.28.4, one end-to-end journey took about 1.6 s with Browser
 Helper and 3.2 s with Playwright. See [docs/perf-phase2.md](docs/perf-phase2.md).
 
+## Goals
+
+Each goal can be checked by the test or code reference named under it. Status is set by the
+celvezerelt review (see `docs/CELVEZERELT-REPORT.md`).
+
+1. **Small answers for agents.** Every REST reply uses one envelope (`status`, `operation`, `data`,
+   `error`, `meta`), and an MCP `act` returns a bounded observation (at most 60 nodes, 4000 characters) and
+   can omit it. Evidence: `src/main.py` (`api_success`, `api_error`, observation cap in `agent_act`);
+   `src/mcp_server/serialization.py:65`; `tests/test_api_v1.py`.
+2. **The user's real Chrome.** It drives the signed-in Chrome on port 9557, not a hidden headless one,
+   and a service restart leaves that Chrome running. Evidence: `src/chrome_manager.py:559`
+   (`start_new_session=True`); `tests/test_chrome_survives_restart.py`.
+3. **Isolated sessions.** Each client gets its own tab and cookie jar. The tab budget (`BH_MAX_TABS`)
+   and session cap (`BH_MAX_SESSIONS`) are enforced. Evidence: `src/session_registry.py:91`,
+   `src/main.py:451`; `tests/test_agent_isolation.py`, `tests/test_parallel_session_isolation.py`.
+4. **No silent success.** A click that changed nothing says so (`effect: "none"`), a click reports the
+   tabs and dialogs it opened, and `expect` verifies the outcome. Evidence: `src/main.py:6008`;
+   `tests/test_act_click_effect.py`, `tests/test_act_reports_opened_tabs_and_dialogs.py`,
+   `tests/test_dialog_policy.py`.
+5. **Safe by default.** The API and the MCP server bind to loopback. A non-loopback bind needs
+   `API_TOKEN` (placeholders are rejected) or `BH_MCP_TOKEN`, and the server refuses to start without
+   one. Evidence: `run.py:24,31`; `src/main.py:1279-1310`; `src/mcp_server/server.py:154-158`;
+   `tests/test_doctor.py`.
+6. **Failures explain themselves.** Errors carry a code and a hint, and `bh doctor` checks the
+   Chrome port, the service and the token, printing the fix for each failure. Evidence:
+   `src/browser_helper/doctor.py:197`; `src/main.py:2603-2607` (`tab_budget_exhausted` with holders);
+   `tests/test_doctor.py`.
+
 ## Quick start
 
 ### 1. Start Chrome with remote debugging
