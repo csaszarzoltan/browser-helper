@@ -674,6 +674,7 @@ async def act(
     expect: dict | None = None,
     within: str | None = None,
     nth: int | None = None,
+    include_observation: bool | None = None,
     ctx: Context | None = None,
 ) -> str:
     """Act on the page: click, fill, select, wait, navigate (capability ``agent.semantic``, READY).
@@ -716,6 +717,9 @@ async def act(
                  ("timeout", timeout), ("expression", expression), ("expect", expect)):
         if v is not None:
             payload[k] = v
+    # False drops the observation the engine would otherwise attach to the reply.
+    if include_observation is not None:
+        payload["include_observation"] = include_observation
     try:
         model = AgentActionRequest(**payload)
     except ValidationError as exc:

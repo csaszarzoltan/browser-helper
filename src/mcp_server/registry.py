@@ -253,6 +253,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "option": {"type": "string", "description": "Option for select"},
             "within": {"type": "string", "description": "CSS selector of a container: a text click (text or element_id) looks only inside it"},
             "nth": {"type": "integer", "description": "0-based index of the match a text click picks (default 0), e.g. the second Edit button or a suggestion in a list"},
+            "include_observation": {"type": "boolean", "description": "false returns only the action result, without the page snapshot that is otherwise attached (fewer tokens per action)"},
             "timeout": {"type": "integer", "description": "Timeout in seconds (default 10)"},
             "expression": {"type": "string", "description": "JS expression for eval action"},
             "expect": {"type": "object", "description": "Expected outcome, checked after the action. Clauses: {url_changed: true}, {dialog_opened: true}, {text_visible: \"...\"}, {element_visible: {role, name}}, or {any_of: [clause, ...]}. The result is in data.verification.satisfied."},
