@@ -241,14 +241,14 @@ class TestApiFingerprintV1RED:
         assert "path" in data
 
     @pytest.mark.asyncio
-    async def test_fingerprints_import(self, api_client):
+    async def test_fingerprints_import(self, api_client, tmp_path):
         """POST /api/v1/fingerprints/import returns {status, name}."""
+        path = tmp_path / "test.json"
+        path.write_text('{"name": "test", "browser": "chrome", "signals": {}, "config": {}}')
         resp = await api_client.post(
-            "/api/v1/fingerprints/import", json={"path": "/tmp/test.json"}
+            "/api/v1/fingerprints/import", json={"path": str(path)}
         )
-        assert resp.status_code == 200, (
-            f"Expected 200, got {resp.status_code}. Route not wired yet (RED phase)."
-        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}."
         data = resp.json()
         assert data["status"] == "ok"
         assert "name" in data
