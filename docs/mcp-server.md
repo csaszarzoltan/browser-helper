@@ -512,6 +512,8 @@ BH_CHROME_PROFILE_DIR=$HOME/.browser-helper/agent-profile BH_CHROME_DEBUG_PORT=9
   or `backend_node_id` target they are refused with a 422, not ignored.
 - `act` with `fill` sets `data.result.verified` to `true` only when every field holds the value it was given. Fields
   that do not are listed in `data.result.not_kept` (a number field refusing `abc` is one example).
+- `act` attaches a bounded page observation to every reply (at most 60 nodes, 4000 characters). Pass
+  `include_observation: false` to get only the action result; leave it unset to keep the attached observation.
 
 ## Errors and how an agent should react
 

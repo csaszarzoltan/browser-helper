@@ -4,6 +4,12 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **MCP `act` can leave out its observation (2026-10-29).** Every `act` reply carried a bounded page snapshot and the
+  MCP tool had no way to skip it. `include_observation: false` returns only the action result. Unset keeps the old
+  behaviour.
+- **Fingerprint import answers 422 for bad input (2026-10-29).** Invalid JSON, or a JSON list instead of an object,
+  returned 500. Both now return 422 with the reason. The import test reads a file it creates, not `/tmp/test.json`.
+- **The dashboard screenshot image has alt text (2026-10-29).** A static test requires alt on every dashboard image.
 - **MIT licence, and the history lands on `main` (2026-10-20).** `LICENSE` (MIT) and the `license` field in
   `pyproject.toml`; the README no longer says "no licence".
 - **A service restart keeps Chrome running (2026-10-20).** Chrome shared the service's process group, and under
