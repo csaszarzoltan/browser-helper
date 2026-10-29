@@ -46,7 +46,7 @@ Code review, round 1 (goals-driven, with the touched areas read in full):
 | Dashboard screenshot `<img>` had no `alt` (`static/index.html:598`) | fixed, `bf68038` | Static test added for all dashboard images. |
 | 19 call sites of legacy `_api_error` (`src/main.py:7884`) return `error` as a string, not the envelope | open | Changes the public error shape of many endpoints. Needs an owner decision and a migration note. Goal 1 stays partial. |
 | Fingerprint import takes any server-readable path from the request body (`src/main.py:8071`, `src/anti_detection/fingerprint_database.py:414`) and saves it into the template store | open | Only reachable with `API_TOKEN` (or on loopback without it). Restricting paths to a directory is a design choice. The 404 also echoes the path back. |
-| Dashboard screenshot image opens its viewer on `onclick` only (`static/index.html:598`), so it cannot be reached by keyboard | open | Needs a real button or `tabindex` plus key handling. Not done in this cycle. |
+| Dashboard screenshot image opens its viewer on `onclick` only (`static/index.html:598`), so it cannot be reached by keyboard | fixed, `81f1ed5` | `tabindex`, `role=button`, label, Enter/Space, focus outline. Static test in `tests/test_dashboard_a11y_static.py`. |
 | `scripts/release-validate.sh` tool-count check for README uses a loose pattern (`(15|19|78) tools?`) | open | It would pass on any "15 tools" text. Minor. |
 | `scripts/release-validate.sh` reports `main` 56 commits behind `origin/main` | open, environmental | Local `main` is at `0e25674`; `origin/main` is at `300f531`, which is the base of this branch. This branch does not depend on local `main`. The owner needs to sync `main`. |
 
@@ -67,6 +67,7 @@ Code review, round 1 (goals-driven, with the touched areas read in full):
   - `bf68038` fix(dashboard): screenshot image has alt text
   - `eb23736` docs: MCP act include_observation, and the changelog for this round
   - `d79db42` fix(api): fingerprint import errors use the standard error envelope
+  - `81f1ed5` fix(dashboard): screenshot opens from the keyboard
   - plus this report commit
 - Push: see the final chat message for the outcome. The push target is the current branch's upstream, `origin/mcp-token-efficiency`, as a fast-forward. The workflow names `main`, but local `main` is not in sync with `origin/main`, so `main` was not touched.
 - No force push, no reset, no history rewrite. `.serena/` (untracked, not mine to commit) was left out.
@@ -76,7 +77,7 @@ Code review, round 1 (goals-driven, with the touched areas read in full):
 Commands run on the final state:
 
 - `.venv/bin/ruff check src/`: exit 0, "All checks passed!"
-- `.venv/bin/python -m pytest -o addopts="" -q -n auto -p no:cacheprovider`: exit 0, **3011 passed, 6 skipped, 8 xfailed**, 49 warnings, 80.5 s.
+- `.venv/bin/python -m pytest -o addopts="" -q -n auto -p no:cacheprovider`: exit 0, **3012 passed, 6 skipped, 8 xfailed**, 49 warnings, 82.8 s (after the keyboard fix).
 - Baseline before the cycle, same command: 3004 passed, 6 skipped, 8 xfailed, exit 0. One earlier full run, without `-o addopts=""`, failed `test_fingerprints_import` (see review findings). That is the flake I fixed.
 - Targeted runs during the cycle: MCP test files 100 passed; fingerprint and API files 222 passed; import and API files 118 passed; dashboard static files 11 passed.
 - `scripts/release-validate.sh`: exit 1. Version, badge, changelog, Dockerfile and tool count (78) all pass. The one failure is the `main` vs `origin/main` divergence in the environment (see review findings).
@@ -86,10 +87,9 @@ Commands run on the final state:
 
 1. Decide on the 19 legacy `_api_error` sites (goal 1). Needs an API-change note.
 2. Restrict or document the fingerprint import path (security).
-3. Keyboard access for the dashboard screenshot.
-4. Live dashboard walk at 1280 px and 390 px, which this cycle did not run.
-5. Fewer than three features were implemented (minimum not met). The evidence did not support more without inventing gaps.
-6. Push: see the final chat message.
+3. Live dashboard walk at 1280 px and 390 px, which this cycle did not run (keyboard fix was checked statically only).
+4. Fewer than three features were implemented (minimum not met). The evidence did not support more without inventing gaps.
+5. Push: see the final chat message.
 
 ## Changes to goals
 
