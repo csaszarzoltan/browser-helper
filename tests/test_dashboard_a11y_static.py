@@ -47,3 +47,14 @@ def test_every_image_in_the_dashboard_has_alt_text():
         html = (STATIC / page).read_text(encoding="utf-8")
         for tag in re.findall(r"<img\b[^>]*>", html):
             assert re.search(r"\balt=", tag), f"{page}: image without alt: {tag}"
+
+
+def test_clickable_screenshot_is_reachable_and_operable_from_the_keyboard():
+    """An element with onclick must also take focus, name itself as a button and answer Enter or Space."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    tag = re.search(r'<img[^>]*id="screenshot-img"[^>]*>', html).group(0)
+    assert 'onclick="openScreenshot()"' in tag
+    assert 'tabindex="0"' in tag
+    assert 'role="button"' in tag
+    assert 'aria-label="Open screenshot in a new tab"' in tag
+    assert "onkeydown=" in tag

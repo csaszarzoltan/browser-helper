@@ -159,6 +159,7 @@ input[type="text"] { width: 100%; }
   transition: opacity .2s;
 }
 .screenshot-area img:hover { opacity: .9; }
+.screenshot-area img:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
 .screenshot-area .screenshot-placeholder {
   width: 100%; height: 140px;
   display: flex; align-items: center; justify-content: center;
@@ -595,7 +596,7 @@ input[type="text"] { width: 100%; }
         <div id="screenshot-placeholder" class="screenshot-placeholder">
           <span><i class="fas fa-camera" style="margin-right:6px"></i> No screenshot yet</span>
         </div>
-        <img id="screenshot-img" alt="Latest page screenshot" style="display:none" onclick="openScreenshot()" />
+        <img id="screenshot-img" alt="Latest page screenshot" role="button" tabindex="0" aria-label="Open screenshot in a new tab" style="display:none" onclick="openScreenshot()" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openScreenshot(); }" />
       </div>
     </div>
   </div>
