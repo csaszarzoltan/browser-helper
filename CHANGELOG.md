@@ -4,6 +4,11 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **MCP `compact` profile: two tools instead of 78 (2026-11-01).** `MCP_PROFILE=compact` exposes `bh(action, args)`
+  and `describe(action)`. Every action of the `full` profile stays callable through `bh`; `describe()` lists them and
+  `describe(action)` returns that action's description and argument schema. `tools/list` drops from about 57 000 to
+  about 2 500 bytes. `bh` rejects an unknown action (with close matches), an unknown argument and a wrongly typed
+  argument with `invalid_args`/`unknown_action` before the handler runs. The default stays `full`.
 - **MCP `act` can leave out its observation (2026-10-29).** Every `act` reply carried a bounded page snapshot and the
   MCP tool had no way to skip it. `include_observation: false` returns only the action result. Unset keeps the old
   behaviour.

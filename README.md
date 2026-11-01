@@ -129,6 +129,9 @@ claude mcp add browser-helper -- /absolute/path/to/browser-helper/.venv/bin/bh m
 }
 ```
 
+**Smaller tool list:** set `MCP_PROFILE=compact` in the client's `env` to expose two tools (`bh` and `describe`)
+instead of 78. Every action still works as `bh(action, args)`; see [MCP server](docs/mcp-server.md#tool-profiles-mcp_profile).
+
 **Remote or HTTP clients:** run `bh mcp --http --port 8765` and point the client at
 `http://localhost:8765/mcp`.
 

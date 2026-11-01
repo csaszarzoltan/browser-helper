@@ -453,6 +453,24 @@ BH_MCP_TOKEN="$(openssl rand -hex 32)" bh mcp --http --host 0.0.0.0 --port 8765
 - Client config for a remote agent: an HTTP MCP server at `http://127.0.0.1:8765/mcp` (through the tunnel)
   with the header `Authorization: Bearer <token>`.
 
+## Tool profiles (`MCP_PROFILE`)
+
+The tool list is sent to the model in every turn, so its size costs tokens.
+
+| Profile | Tools | `tools/list` size | Use |
+|---------|-------|-------------------|-----|
+| `full` (default) | 78 | about 57 KB | Clients that want one typed tool per action |
+| `core` | 12 | about 12 KB | The everyday subset: navigate, observe, act, screenshot, tabs, wait, assert |
+| `compact` | 2 | about 2.5 KB | Every action behind `bh` |
+
+`compact` exposes `bh(action, args)` and `describe(action)`. `bh` runs any `full` action:
+`bh(action="navigate", args={"url": "https://example.com"})`. `describe()` lists the actions with one line each;
+`describe(action="navigate")` returns the description and the argument schema, so call it once before the first
+use of an action. `bh` checks the action name and the arguments against that schema and answers `unknown_action`
+(with close matches) or `invalid_args` before anything runs. Results are the same envelopes the `full` tools return.
+
+Set the profile where the server starts, for example `"env": {"MCP_PROFILE": "compact"}` in the client config.
+
 ## Which browser profile the agent uses
 
 By default the server uses the profile in `settings.json`, your own Chrome profile. That is the point:
