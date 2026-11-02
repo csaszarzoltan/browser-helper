@@ -40,6 +40,9 @@ def _log_call(tool_name: str, kwargs: dict, status: str, code: str | None, start
     inner = kwargs
     if tool_name == "bh":
         op = str(kwargs.get("action"))
+        # An unknown action is caller-controlled text: log a fixed label, not the text.
+        if op not in {t.name for t in build_tool_defs(profile="full")}:
+            op = "unknown_action"
         inner = kwargs.get("args") or {}
     if op == "eval" and isinstance(inner.get("js"), str):
         js = inner["js"]

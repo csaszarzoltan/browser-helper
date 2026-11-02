@@ -72,3 +72,36 @@ def test_bh_usage_summarises(log):
     assert res.exit_code == 0, res.output
     assert "describe" in res.output and "eval" in res.output
     assert _lines(log)[1]["js_sha1_8"] in res.output
+
+
+def test_error_envelope_logs_its_code_and_still_raises(log):
+    from mcp_server.serialization import tool_error
+    from mcp_server.server import _as_tool_result
+
+    async def failing():
+        return tool_error("nav", "timeout", "slow")
+
+    with pytest.raises(ToolError):
+        asyncio.run(_as_tool_result(failing, "nav")())
+    (line,) = _lines(log)
+    assert (line["op"], line["status"], line["error_code"]) == ("nav", "error", "timeout")
+
+
+def test_unknown_action_is_not_logged_verbatim(log):
+    _call("bh", {"action": "SECRET123"})
+    (line,) = _lines(log)
+    assert line["op"] == "unknown_action" and "SECRET123" not in log.read_text()
+
+
+def test_handler_exception_logs_exception_and_reraises(log):
+    import asyncio
+
+    from mcp_server.server import _as_tool_result
+
+    async def boom():
+        raise RuntimeError("x")
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(_as_tool_result(boom, "boom")())
+    (line,) = _lines(log)
+    assert (line["op"], line["status"], line["error_code"]) == ("boom", "error", "exception")
