@@ -340,6 +340,14 @@ Settings resolve with precedence **CLI > env > settings.json > defaults** (`load
 | `--port` | int | settings `mcp_port` | sse, streamable-http | |
 | `--enabled` | bool | `False` | startup flag | Sets `enabled=True` in settings (mirrors `MCP_ENABLED`) |
 
+### Usage log
+
+Every MCP tool call appends one JSON line to `~/.browser-helper/usage.jsonl` (override: `BH_USAGE_LOG`):
+`ts`, `op`, `status`, `error_code`, `ms`; for `eval` also `js_len` and `js_sha1_8`. It holds no arguments, URLs,
+selectors or values. In the `compact` profile `op` is the `bh` action. The file rotates to `usage.jsonl.1` past 5 MB.
+A write failure never fails the call. `bh usage [--days N] [--log PATH]` prints calls, errors and average ms per op,
+error codes, and the most repeated eval hashes.
+
 `mcp_enabled` gates **auto-start** scenarios only (e.g. a future `run.py --with-mcp` / Docker sidecar); it deliberately does not block the documented on-demand entry points.
 
 ---

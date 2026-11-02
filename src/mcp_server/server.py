@@ -7,6 +7,7 @@ Owns: lazy FastMCP creation, ``register_tools()`` loop over the ToolDefRegistry,
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -31,7 +32,21 @@ def project_version() -> str:
     return match.group(1) if match else "unknown"
 
 
-def _as_tool_result(handler):
+def _log_call(tool_name: str, kwargs: dict, status: str, code: str | None, started: float) -> None:
+    """Append one usage-log line; in the compact profile the op is the ``bh`` action."""
+    from . import usage_log
+
+    op, js = tool_name, None
+    inner = kwargs
+    if tool_name == "bh":
+        op = str(kwargs.get("action"))
+        inner = kwargs.get("args") or {}
+    if op == "eval" and isinstance(inner.get("js"), str):
+        js = inner["js"]
+    usage_log.record(op, status, code, int((time.monotonic() - started) * 1000), js)
+
+
+def _as_tool_result(handler, tool_name: str = ""):
     """Wrap a handler so an error envelope becomes a tool error (isError true).
 
     The wrapper keeps the handler's signature (functools.wraps), so FastMCP still
@@ -44,11 +59,17 @@ def _as_tool_result(handler):
 
     @functools.wraps(handler)
     async def wrapper(*args, **kwargs):
-        out = await handler(*args, **kwargs)
+        started = time.monotonic()
+        try:
+            out = await handler(*args, **kwargs)
+        except BaseException:
+            _log_call(tool_name, kwargs, "error", "exception", started)
+            raise
         if isinstance(out, str):
             try:
                 env = json.loads(out)
             except ValueError:
+                _log_call(tool_name, kwargs, "ok", None, started)
                 return out
             from .tools import take_notices
 
@@ -57,8 +78,13 @@ def _as_tool_result(handler):
                 # A tab was replaced or closed behind the caller's back: say so, once.
                 env.setdefault("meta", {})["notices"] = notices
                 out = json.dumps(env, ensure_ascii=False)
-            if isinstance(env, dict) and env.get("status") == "error":
+            failed = isinstance(env, dict) and env.get("status") == "error"
+            code = ((env.get("error") or {}).get("code") if failed else None) or ("unknown" if failed else None)
+            _log_call(tool_name, kwargs, "error" if failed else "ok", code, started)
+            if failed:
                 raise ToolError(out)
+        else:
+            _log_call(tool_name, kwargs, "ok", None, started)
         return out
 
     return wrapper
@@ -99,7 +125,7 @@ class MCPServer:
         """
         for tool in build_tool_defs():
             mcp.add_tool(
-                _as_tool_result(tool.handler),
+                _as_tool_result(tool.handler, tool.name),
                 name=tool.name,
                 description=tool.description,
             )

@@ -4,6 +4,11 @@ All notable changes to browser-helper will be documented in this file.
 
 ## [Unreleased]
 
+- **MCP usage log and `bh usage` (2026-11-02).** Every MCP tool call appends one JSON line (`ts`, `op`, `status`,
+  `error_code`, `ms`; for `eval` also `js_len` and `js_sha1_8`) to `~/.browser-helper/usage.jsonl`, or `BH_USAGE_LOG`.
+  No arguments, URLs, selectors or values are written. Rotation to `.1` at 5 MB; a failed write never fails a call.
+  `bh usage [--days N] [--log PATH]` summarises per op, per error code and the top eval hashes, so repeated hand-written
+  evals can be counted.
 - **MCP `compact` profile: two tools instead of 78 (2026-11-01).** `MCP_PROFILE=compact` exposes `bh(action, args)`
   and `describe(action)`. Every action of the `full` profile stays callable through `bh`; `describe()` lists them and
   `describe(action)` returns that action's description and argument schema. `tools/list` drops from about 57 000 to

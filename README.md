@@ -132,6 +132,8 @@ claude mcp add browser-helper -- /absolute/path/to/browser-helper/.venv/bin/bh m
 **Smaller tool list:** set `MCP_PROFILE=compact` in the client's `env` to expose two tools (`bh` and `describe`)
 instead of 78. Every action still works as `bh(action, args)`; see [MCP server](docs/mcp-server.md#tool-profiles-mcp_profile).
 
+**Usage log:** every MCP call appends one line (op, status, error code, ms; for `eval` the script length and a short hash, never its text) to `~/.browser-helper/usage.jsonl`. `bh usage --days 7` summarises it.
+
 **Remote or HTTP clients:** run `bh mcp --http --port 8765` and point the client at
 `http://localhost:8765/mcp`.
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
 from typing import Literal
 
 import click
@@ -144,6 +145,30 @@ def mcp(
         err=True,
     )
     asyncio.run(MCPServer(settings=settings).run(settings.transport))
+
+
+@click.command(name="usage", help="Summarise the MCP usage log (per op, per error code, top eval hashes)")
+@click.option("--days", type=int, default=7, show_default=True, help="Only calls of the last N days")
+@click.option("--log", "log", type=click.Path(path_type=Path), default=None,
+              help="Log file (default: BH_USAGE_LOG or ~/.browser-helper/usage.jsonl)")
+def usage(days: int, log: Path | None) -> None:
+    """Print the usage summary; the log holds no arguments, URLs or values."""
+    from . import usage_log
+
+    path = log or usage_log.log_path()
+    s = usage_log.summarize(path, days)
+    click.echo(f"{s['total']} calls in the last {days} day(s) ({path})")
+    click.echo("op                           calls  errors  avg_ms")
+    for op, o in sorted(s["ops"].items(), key=lambda kv: -kv[1]["calls"]):
+        click.echo(f"{op:<28} {o['calls']:>5}  {o['errors']:>6}  {o['ms'] // o['calls']:>6}")
+    if s["error_codes"]:
+        click.echo("error codes:")
+        for code, n in sorted(s["error_codes"].items(), key=lambda kv: -kv[1]):
+            click.echo(f"  {code:<26} {n:>5}")
+    if s["evals"]:
+        click.echo("top eval hashes (js_sha1_8, count, js_len):")
+        for h, e in sorted(s["evals"].items(), key=lambda kv: -kv[1]["count"])[:10]:
+            click.echo(f"  {h}  {e['count']:>5}  {e['js_len']:>6}")
 
 
 # Export Click app for entry points

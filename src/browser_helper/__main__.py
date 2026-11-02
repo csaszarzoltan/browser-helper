@@ -10,6 +10,7 @@ Usage::
     bh doctor
     bh mcp --help
     bh memory --help
+    bh usage --days 7
     python -m browser_helper mcp --help
 """
 
@@ -18,7 +19,7 @@ from __future__ import annotations
 import click
 
 from browser_helper.doctor import doctor
-from mcp_server.cli import mcp
+from mcp_server.cli import mcp, usage
 from mcp_server.memory.cli import memory
 
 
@@ -30,6 +31,7 @@ def bh() -> None:
 bh.add_command(doctor)
 bh.add_command(mcp)
 bh.add_command(memory)
+bh.add_command(usage)
 
 
 if __name__ == "__main__":
