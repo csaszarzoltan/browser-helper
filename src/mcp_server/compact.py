@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import difflib
 import inspect
-from typing import Any
 
 from mcp.server.fastmcp import Context  # typing only — FastMCP injects it by annotation
 
@@ -74,7 +73,7 @@ def compact_tool_defs(full: ToolDefRegistry) -> ToolDefRegistry:
             )
         errors = sorted(Draft202012Validator(tool.parameters).iter_errors(args), key=lambda e: list(e.path))
         if errors:
-            where = lambda e: ".".join(str(p) for p in e.path) or "args"  # noqa: E731
+            where = lambda e: ".".join(str(p) for p in e.path) or "args"
             return tool_error(
                 action, "invalid_args",
                 "; ".join(f"{where(e)}: {e.message}" for e in errors[:5])

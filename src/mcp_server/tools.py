@@ -1461,7 +1461,7 @@ async def eval(js: str, timeout: int = 30, tab_id: str | None = None, ctx: Conte
         eval("document.querySelectorAll('a').length")
         eval("document.title", tab_id="4D0598DB...")
     """
-    target, _run_op = await _target()
+    target, run_op_fn = await _target()
     if ctx is not None:
         await ctx.info(f"eval js ({len(js)} chars, timeout={timeout}s, tab_id={tab_id or 'session'})")
     try:
@@ -1471,7 +1471,12 @@ async def eval(js: str, timeout: int = 30, tab_id: str | None = None, ctx: Conte
                 return pinned  # tool_error envelope (unknown tab / unreachable)
             result = await _with_timeout("eval", pinned.evaluate_js(js), timeout)
         else:
-            result = await _with_timeout("eval", target.evaluate_js(js), timeout)
+            # Via run_op: the first call mints the session tab and connects; the bare default
+            # client is not attached yet ("Not connected to Chrome CDP").
+            res = await _with_timeout("eval", run_op_fn("eval", target.evaluate_js, js), timeout)
+            if hasattr(res, "body"):
+                return json_dumps(res)  # run_op's error path returns a JSONResponse
+            result = res.get("data") if isinstance(res, dict) and "data" in res else res
         return tool_result("eval", result)
     except Exception as exc:  # noqa: BLE001
         code = "timeout" if isinstance(exc, TimeoutError) else "failed"

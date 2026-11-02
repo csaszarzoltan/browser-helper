@@ -1,7 +1,6 @@
 """MCP usage log: one JSON line per tool call, no arguments, `bh usage` summary."""
 import asyncio
 import json
-import os
 
 import pytest
 from click.testing import CliRunner
@@ -105,3 +104,26 @@ def test_handler_exception_logs_exception_and_reraises(log):
         asyncio.run(_as_tool_result(boom, "boom")())
     (line,) = _lines(log)
     assert (line["op"], line["status"], line["error_code"]) == ("boom", "error", "exception")
+
+
+def test_eval_runs_through_run_op_so_the_first_call_connects(monkeypatch):
+    """Regression: eval used the bare default client and failed with 'Not connected to Chrome CDP'."""
+    from mcp_server import tools
+
+    seen = {}
+
+    class Client:
+        async def evaluate_js(self, js):
+            raise AssertionError("must go through run_op")
+
+    async def run_op(op, method, *args, **kw):
+        seen["op"], seen["args"] = op, args
+        return {"status": "ok", "data": {"result": 2}}
+
+    async def fake_target():
+        return Client(), run_op
+
+    monkeypatch.setattr(tools, "_target", fake_target)
+    out = json.loads(asyncio.run(tools.eval("1+1")))
+    assert seen == {"op": "eval", "args": ("1+1",)}
+    assert out["status"] == "ok" and out["data"] == {"result": 2}
