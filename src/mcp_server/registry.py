@@ -109,6 +109,8 @@ _TOOL_CAPABILITY = {
     "browser_export_batch_spec": "agent.flow",
     "browser_visual_diff_locale": "agent.testing",
     "browser_rate_hybrid_idle": "browser.core",
+    # Urban VPN extension control
+    "vpn": "browser.core",
 }
 
 # Authored JSON Schemas per tool (spec §8.1): `type: "object"` + `properties`
@@ -738,6 +740,16 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "quiet_ms": { "type": "integer", "description": "Quiet window ms for network idle (default 500)" },
         },
     },
+    "vpn": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["connect", "disconnect", "status"],
+                       "description": "Default connect"},
+            "country": {"type": "string",
+                        "description": "ISO code or English name of the location (default HU = Hungary)"},
+            "timeout": {"type": "integer", "description": "Max seconds to wait for the connection (default 45)"},
+        },
+    },
 }
 
 
@@ -881,6 +893,7 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     'memory_recall': 'Search stored memories by keyword, ranked by relevance.',
     "memory_list": "List stored memories (keys and content), optionally filtered. Use memory_recall to search by keyword instead.",
     "memory_forget": "Delete one stored memory by its key or id. Use memory_list to find the key first.",
+    "vpn": "Urban VPN extension: connect to a country (default HU), disconnect, or status. Returns connection, country and exit IP; an unknown country lists the available ones.",
 }
 
 
@@ -936,6 +949,9 @@ def build_tool_defs(registry: CapabilityRegistry | None = None, profile: str | N
             return getattr(discovery_tools, name)
         if name.startswith("memory_"):
             return getattr(memory_tools, name)
+        if name == "vpn":
+            from . import vpn as vpn_mod  # lazy — raw CDP, no engine
+            return vpn_mod.vpn
         if name == "assert":
             return tools.assert_  # Python keyword — module uses assert_
         return getattr(tools, name)

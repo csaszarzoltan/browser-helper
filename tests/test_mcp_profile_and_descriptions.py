@@ -22,7 +22,7 @@ def _project_version():
 
 def test_default_profile_is_full_78(monkeypatch):
     monkeypatch.delenv("MCP_PROFILE", raising=False)
-    assert len(build_tool_defs()) == 78
+    assert len(build_tool_defs()) == 79
 
 
 def test_core_profile_is_small_subset_of_full(monkeypatch):

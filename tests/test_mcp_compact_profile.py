@@ -66,7 +66,7 @@ def test_bh_action_enum_is_exactly_the_full_tool_names(monkeypatch):
     monkeypatch.setenv("MCP_PROFILE", "compact")
     bh = build_tool_defs().by_name("bh")
     assert bh.parameters["properties"]["action"]["enum"] == sorted(_full())
-    assert len(_full()) == 78
+    assert len(_full()) == 79
 
 
 def test_wire_tools_list_is_two_tools(servers):
