@@ -164,11 +164,48 @@ class MCPServer:
             raise ValueError(f"invalid transport: {chosen!r}")
         t = MCPTransport(chosen)
         if t is MCPTransport.STDIO:
-            await self.mcp.run_stdio_async()
+            await self._run_stdio()
         elif t is MCPTransport.SSE:
             await self.mcp.run_sse_async()
         else:
             await self._run_streamable_http()
+
+    async def _run_stdio(self) -> None:
+        """Serve stdio; on exit (stdin closed, SIGTERM, SIGHUP) close this agent's own tab.
+
+        One stdio server serves one agent. Its session tab is released when the
+        agent goes away and after the idle limit, so finished agents leave no tabs.
+        """
+        import asyncio
+        import os
+        import signal
+
+        from . import tools
+
+        loop = asyncio.get_running_loop()
+
+        async def _release_and_exit() -> None:
+            # Cancelling the stdio loop would hang on its blocking stdin reader
+            # thread, so close the tab and leave at once, as SIGTERM did before.
+            try:
+                await asyncio.wait_for(tools.release_session("exit"), 5)
+            finally:
+                os._exit(0)
+
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            try:
+                loop.add_signal_handler(sig, lambda: loop.create_task(_release_and_exit()))
+            except (NotImplementedError, RuntimeError):  # pragma: no cover — non-POSIX
+                pass
+        watcher = asyncio.create_task(tools.idle_watch())
+        try:
+            await self.mcp.run_stdio_async()
+        finally:
+            watcher.cancel()
+            try:
+                await asyncio.shield(asyncio.wait_for(tools.release_session("exit"), 10))
+            except BaseException:  # noqa: BLE001,S110 — exiting either way
+                pass
 
     async def _run_streamable_http(self) -> None:
         """Serve the streamable-http transport behind a bearer-token check.

@@ -108,6 +108,11 @@ class SessionRegistry:
         # skipped entirely, so the sweep would close the very anchor that
         # exists to keep the browser alive.
         self._anchor_tab_id: str | None = None
+        # Tabs this registry opened itself. Several MCP servers (one per agent)
+        # share one Chrome, each with its own registry: a tab another process
+        # owns looks unowned here, so the orphan sweep may only close tabs from
+        # this set, never another agent's (or a person's) about:blank tab.
+        self._opened_tabs: set[str] = set()
         self._lock = asyncio.Lock()
         self._reaper_task: asyncio.Task | None = None
 
@@ -243,6 +248,7 @@ class SessionRegistry:
             for t in tabs
             if t.get("type") == "page"
             and t.get("url") == "about:blank"
+            and t.get("id") in self._opened_tabs
             and t.get("id") not in owned
             and t.get("id") != anchor
         ]
@@ -258,6 +264,7 @@ class SessionRegistry:
             try:
                 async with httpx.AsyncClient(timeout=3.0) as http:
                     await http.get(f"{cdp_http_url.rstrip('/')}/json/close/{tid}")
+                self._opened_tabs.discard(tid)
                 reaped += 1
             except Exception as exc:  # noqa: BLE001
                 logger.debug("close orphan tab %s failed: %s", tid, exc)
@@ -307,6 +314,7 @@ class SessionRegistry:
             # via the HTTP /json/new endpoint (needs no WebSocket yet).
             client.cdp_http_url = cdp_http_url.rstrip("/")
             tab_id = await self._open_tab_http(client, url, profile_dir=profile_dir)
+            self._opened_tabs.add(tab_id)
             # Fix-7 (2026-08-12): discover_tabs() caches up to 5s, so the
             # freshly opened tab may be missing from the cached list — then
             # connect_to_target would either fail ("Tab not found") or bind

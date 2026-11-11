@@ -115,6 +115,7 @@ EXPECTED_TOOLS = [
     "browser_export_batch_spec",
     "browser_visual_diff_locale",
     "browser_rate_hybrid_idle",
+    "vpn",
     "set_viewport",
     "print_pdf",
     "set_geolocation",
@@ -201,6 +202,7 @@ EXPECTED_REQUIRED_PARAMS = {
     "browser_export_batch_spec": [],
     "browser_visual_diff_locale": ["url"],
     "browser_rate_hybrid_idle": [],
+    "vpn": [],
     "set_viewport": ['width', 'height'],
     "set_geolocation": ['latitude', 'longitude'],
     "set_offline": ['offline'],
@@ -287,6 +289,7 @@ EXPECTED_CAPABILITY = {
     "browser_export_batch_spec": ("agent.flow", "ready"),
     "browser_visual_diff_locale": ("agent.testing", "ready"),
     "browser_rate_hybrid_idle": ("browser.core", "ready"),
+    "vpn": ("browser.core", "ready"),
     "set_viewport": ("browser.core", "ready"),
     "print_pdf": ("browser.core", "ready"),
     "set_geolocation": ("browser.core", "ready"),
@@ -380,6 +383,7 @@ TOOL_MODULES = {
     "browser_export_batch_spec": "discovery_tools",
     "browser_visual_diff_locale": "discovery_tools",
     "browser_rate_hybrid_idle": "discovery_tools",
+    "vpn": "vpn",
 }
 
 
@@ -425,6 +429,8 @@ def _load_tool_handlers() -> dict[str, object]:
             if TOOL_MODULES[name] == "discovery_tools"
         }
     )
+    import mcp_server.vpn
+    handlers.update({name: mcp_server.vpn.vpn for name in EXPECTED_TOOLS if TOOL_MODULES[name] == "vpn"})
     return handlers
 
 

@@ -2167,6 +2167,14 @@ async def run_op(operation: str, method, *args, sess_override: Session | None = 
                 _set_current_session(sess)
                 logger.info("Auto-minted session %s (tab %s) via X-Session-Auto/BH_SESSION_AUTO opt-in", sess.session_id[:8], sess.tab_id[:8])
             except Exception as exc:
+                if session_hook is not None:
+                    # MCP caller (one agent per server): the shared default client sits on
+                    # whatever tab came first, often another agent's. Fail instead of
+                    # running this agent's op in someone else's tab.
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Could not open this agent's own browser tab: {exc}",
+                    ) from exc
                 logger.warning("X-Session-Auto session creation failed, falling back to default client: %s", exc, exc_info=True)
                 sess = None
         else:

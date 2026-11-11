@@ -81,8 +81,40 @@ def test_the_orphan_sweep_closes_only_blank_tabs(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", client)
     reg = SessionRegistry(ttl=1800.0, max_sessions=15)
     reg._sessions["s"] = SimpleNamespace(tab_id="owned")
+    reg._opened_tabs.update({"owned", "user", "popup", "blank"})  # this registry opened them all
     assert asyncio.run(reg._reap_orphan_tabs("http://127.0.0.1:9")) == 1
     assert closed == ["blank"]
+
+
+def test_the_orphan_sweep_spares_blank_tabs_other_processes_opened(monkeypatch):
+    # One MCP server runs per agent, each with its own registry. Another agent's fresh
+    # tab is about:blank and unowned here; sweeping it closed that agent's tab.
+    import httpx
+
+    from session_registry import SessionRegistry
+
+    tabs = [
+        {"id": "mine", "type": "page", "url": "https://mine.test/"},
+        {"id": "other-agent", "type": "page", "url": "about:blank"},
+        {"id": "my-leak", "type": "page", "url": "about:blank"},
+    ]
+    closed: list[str] = []
+
+    def handler(request):
+        if request.url.path == "/json":
+            return httpx.Response(200, json=tabs)
+        if request.url.path.startswith("/json/close/"):
+            closed.append(request.url.path.rsplit("/", 1)[1])
+            return httpx.Response(200, text="Target is closing")
+        return httpx.Response(404)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_k: real_client(transport=httpx.MockTransport(handler)))
+    reg = SessionRegistry(ttl=1800.0, max_sessions=15)
+    reg._sessions["s"] = SimpleNamespace(tab_id="mine")
+    reg._opened_tabs.update({"mine", "my-leak"})
+    assert asyncio.run(reg._reap_orphan_tabs("http://127.0.0.1:9")) == 1
+    assert closed == ["my-leak"]
 
 
 def test_an_mcp_session_in_use_is_refreshed_and_not_reaped_as_idle(monkeypatch):

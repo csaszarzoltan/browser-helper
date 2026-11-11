@@ -36,6 +36,52 @@ from .serialization import json_dumps, tool_error, tool_result
 # Process-scoped session holder for MCP calls (no cookies over stdio).
 _MCP_SESSION = {"session": None}
 
+# A session tab idle this long is closed; the next call opens a fresh tab.
+_IDLE_CLOSE_ENV = "BH_MCP_IDLE_CLOSE_SEC"
+
+
+async def release_session(reason: str = "exit") -> bool:
+    """Close this MCP server's own session tab (server exit or idle timeout).
+
+    Each agent runs its own MCP server, so its tab must close when the agent is
+    done; otherwise the tabs of finished agents pile up in the shared Chrome.
+    ``keep_alive`` stays on: other agents and the person still use the browser,
+    so closing our tab must never take the last tab and with it Chrome.
+    """
+    sess = _MCP_SESSION.get("session")
+    if sess is None:
+        return False
+    _MCP_SESSION["session"] = None
+    try:
+        from main import session_registry
+
+        closed = await session_registry.destroy(sess.session_id, keep_alive=True)
+    except Exception as exc:  # noqa: BLE001 — best effort on the way out
+        logger.debug("releasing MCP session tab failed: %s", exc)
+        return False
+    if closed and reason == "idle":
+        _NOTICES.append({
+            "code": "idle_tab_closed",
+            "message": f"The session tab {sess.tab_id} was closed after the idle limit; "
+                       "this call runs in a new tab, the previous page is gone.",
+        })
+    return closed
+
+
+async def idle_watch(limit: float | None = None, every: float = 60.0) -> None:
+    """Close the session tab after *limit* idle seconds (env BH_MCP_IDLE_CLOSE_SEC, default 1800; 0 = never)."""
+    import time as _time
+
+    if limit is None:
+        limit = float(os.environ.get(_IDLE_CLOSE_ENV, "1800") or 0)
+    if limit <= 0:
+        return
+    while True:
+        await asyncio.sleep(min(every, limit))
+        sess = _MCP_SESSION.get("session")
+        if sess is not None and _time.monotonic() - sess.last_seen > limit:
+            await release_session("idle")
+
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +379,25 @@ async def _target():
     from main import client
 
     sess, run_op = await _mcp_session()
+    if sess is None and os.environ.get("BH_TEST_NO_CHROME") != "1":
+        # Many handlers call the returned client directly. The shared default client
+        # attaches to the first tab in the browser, which may be another agent's, so
+        # open this agent's own tab now instead of handing that client out.
+        from main import _local_cdp_http, _set_current_session, chrome_mgr, session_registry
+
+        try:
+            await chrome_mgr.launch()
+            sess = await session_registry.create(_local_cdp_http())
+        except Exception:
+            # Unit tests stub the browser and mock the shared client, as run_op does
+            # under PYTEST_CURRENT_TEST; a real agent must never fall back to it.
+            if os.environ.get("PYTEST_CURRENT_TEST") is None:
+                raise
+            sess = None
+        if sess is not None:
+            _MCP_SESSION["session"] = sess
+            _set_current_session(sess)
+            sess, run_op = await _mcp_session()
     return (sess.client if sess is not None else client), run_op
 
 

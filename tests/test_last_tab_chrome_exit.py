@@ -198,6 +198,7 @@ async def test_orphan_sweep_never_closes_the_anchor(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _CDP)
     # The sweep reads this as a plain attribute, so set it directly.
     reg._anchor_tab_id = anchor
+    reg._opened_tabs.update({owned_tab, anchor})  # opened by this registry
 
     reaped = await reg._reap_orphan_tabs("http://cdp")
 

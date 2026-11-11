@@ -199,7 +199,7 @@ def _public(state: dict | None) -> dict:
 
 
 async def vpn(action: str = "connect", country: str = "HU", timeout: int = 45, ctx=None) -> str:
-    """MCP handler: Urban VPN connect / disconnect / status."""
+    """MCP handler: Urban VPN connect / disconnect / status (capability ``browser.core``)."""
     if os.environ.get("BH_TEST_NO_CHROME") == "1":
         return tool_error("vpn", "not_connected", "browser disabled (BH_TEST_NO_CHROME=1)")
     if action not in ("connect", "disconnect", "status"):
