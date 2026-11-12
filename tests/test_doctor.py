@@ -120,3 +120,11 @@ def test_cmdline_parser_reads_chromes_space_joined_argv():
     assert "--remote-debugging-port=9779" in doctor_mod._parse_cmdline(joined)
     assert "--user-data-dir=/p/prof" in doctor_mod._parse_cmdline(joined)
     assert doctor_mod._parse_cmdline(nul) == ["chrome", "--remote-debugging-port=9779", "--user-data-dir=/p"]
+
+
+def test_service_port_is_read_from_the_run_py_command_line():
+    read = doctor_mod._port_from_args
+    assert read(["/venv/bin/python", "run.py", "--port", "8020", "--launch-chrome"]) == 8020
+    assert read(["python", "/srv/bh/run.py", "--port=8123"]) == 8123
+    assert read(["python", "run.py"]) is None
+    assert read(["python", "other.py", "--port", "8020"]) is None

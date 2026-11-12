@@ -151,6 +151,33 @@ def check_restart(port: int) -> Check:
     )
 
 
+def _port_from_args(args: list[str]) -> int | None:
+    """The value of `--port` on a `run.py` command line, if it is one."""
+    if not any(a.endswith("run.py") for a in args):
+        return None
+    for i, arg in enumerate(args):
+        value = arg.split("=", 1)[1] if arg.startswith("--port=") else (
+            args[i + 1] if arg == "--port" and i + 1 < len(args) else "")
+        if value.isdigit():
+            return int(value)
+    return None
+
+
+def _service_port() -> int | None:
+    """Port of a running service that was started with `run.py --port N` (Linux only)."""
+    if not os.path.isdir("/proc"):
+        return None
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                port = _port_from_args(_parse_cmdline(fh.read()))
+        except OSError:
+            continue
+        if port:
+            return port
+    return None
+
+
 def check_service(host: str, api_port: int, timeout: float) -> Check:
     status, _ = _get_json(f"http://{host}:{api_port}/ready", timeout)
     if status == 200:
@@ -192,11 +219,11 @@ def run_checks(host: str, debug_port: int, api_port: int, timeout: float = 2.0) 
 @click.command(name="doctor", help="Check the Chrome connection and print the fix for each problem")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--debug-port", type=int, default=None, help="Chrome debug port (default: CHROME_AUTO_PORT or 9557)")
-@click.option("--api-port", type=int, default=None, help="Service port (default: PORT or 8000)")
+@click.option("--api-port", type=int, default=None, help="Service port (default: PORT, the port of the running service, or 8000)")
 @click.option("--timeout", type=float, default=2.0, show_default=True)
 def doctor(host: str, debug_port: int | None, api_port: int | None, timeout: float) -> None:
     debug_port = debug_port or int(os.environ.get("CHROME_AUTO_PORT") or 9557)
-    api_port = api_port or int(os.environ.get("PORT") or 8000)
+    api_port = api_port or int(os.environ.get("PORT") or _service_port() or 8000)
     failed = False
     for c in run_checks(host, debug_port, api_port, timeout):
         click.echo(f"{c.status:<5} {c.name}: {c.detail}")
