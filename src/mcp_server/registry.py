@@ -893,7 +893,7 @@ _TOOL_DESCRIPTIONS: dict[str, str] = {
     'memory_recall': 'Search stored memories by keyword, ranked by relevance.',
     "memory_list": "List stored memories (keys and content), optionally filtered. Use memory_recall to search by keyword instead.",
     "memory_forget": "Delete one stored memory by its key or id. Use memory_list to find the key first.",
-    "vpn": "Urban VPN extension: connect to a country (default HU), disconnect, or status. Returns connection, country and exit IP; an unknown country lists the available ones.",
+    "vpn": "Urban VPN extension: connect to a country (default HU), disconnect, or status. Returns connection, country and exit IP; an unknown country lists the available ones. The exit is shared by all agents: the same country is shared, another country waits in a queue (up to 300 s, then vpn_busy); disconnect releases your hold and only turns the VPN off when no other agent uses it.",
 }
 
 

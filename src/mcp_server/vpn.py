@@ -204,7 +204,23 @@ async def vpn(action: str = "connect", country: str = "HU", timeout: int = 45, c
         return tool_error("vpn", "not_connected", "browser disabled (BH_TEST_NO_CHROME=1)")
     if action not in ("connect", "disconnect", "status"):
         return tool_error("vpn", "invalid_args", "action must be connect, disconnect or status")
-    res = await run(action, country, float(timeout))
+    if action == "connect":
+        from . import vpn_lease  # lazy — keeps the CLI path package-free
+        lease = await vpn_lease.acquire(country, wait=float(os.environ.get("BH_VPN_QUEUE_WAIT_SEC", "300")))
+        if not lease["ok"]:
+            return tool_error("vpn", lease.pop("code"), lease.pop("message"), lease or None)
+        res = await run(action, country, float(timeout))
+        if not res["ok"]:
+            vpn_lease.release()
+        else:
+            res["waited"] = lease["waited"]
+    elif action == "disconnect":
+        from . import vpn_lease
+        if vpn_lease.release() > 0:  # other agents still use the exit: keep it up
+            return tool_result("vpn", {"released": True, "kept_for_others": True})
+        res = await run(action, country, float(timeout))
+    else:
+        res = await run(action, country, float(timeout))
     if not res.pop("ok"):
         code, msg = res.pop("code", "failed"), res.pop("message", "failed")
         return tool_error("vpn", code, msg, res or None)
